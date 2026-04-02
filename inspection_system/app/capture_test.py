@@ -5,6 +5,7 @@ import sys
 import time
 from pathlib import Path
 
+from reference_region_utils import build_reference_regions
 from scoring_utils import evaluate_metrics, score_sample
 
 BASE_DIR = Path.home() / "inspection_system"
@@ -267,13 +268,7 @@ def dilate_mask(mask, iterations: int):
     return cv2.dilate(mask, kernel, iterations=iterations)
 
 
-def build_reference_regions(reference_mask, config: dict):
-    inspection_cfg = config.get("inspection", {})
-    allowed_iters = int(inspection_cfg.get("allowed_dilate_iterations", 2))
-    required_iters = int(inspection_cfg.get("required_erode_iterations", 1))
-    allowed_mask = dilate_mask(reference_mask, allowed_iters)
-    required_mask = erode_mask(reference_mask, required_iters)
-    return allowed_mask, required_mask
+
 
 
 def compute_section_masks(required_mask, config: dict):
@@ -465,7 +460,12 @@ def inspect_against_reference(config: dict, image_path: Path) -> tuple[bool, dic
         )
 
     aligned_sample_mask, best_angle_deg, best_shift_x, best_shift_y = align_sample_mask(sample_mask, reference_mask, config)
-    reference_allowed, reference_required = build_reference_regions(reference_mask, config)
+    reference_allowed, reference_required = build_reference_regions(
+        reference_mask,
+        inspection_cfg,
+        dilate_mask,
+        erode_mask,
+    )
     section_masks = compute_section_masks(reference_required, config)
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
     passed, threshold_summary = evaluate_metrics(metrics, inspection_cfg)
