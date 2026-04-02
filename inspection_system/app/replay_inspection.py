@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from capture_test import CONFIG_FILE, REFERENCE_MASK, inspect_against_reference, load_config
+from result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
 
 VALID_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -44,7 +45,7 @@ def inspect_file(config: dict, image_path: Path) -> dict:
     if invalid_reason is not None:
         return {
             "image": str(image_path),
-            "status": "INVALID_CAPTURE",
+            "status": INVALID_CAPTURE,
             "reason": invalid_reason,
         }
 
@@ -53,25 +54,25 @@ def inspect_file(config: dict, image_path: Path) -> dict:
     except FileNotFoundError as exc:
         return {
             "image": str(image_path),
-            "status": "CONFIG_ERROR",
+            "status": CONFIG_ERROR,
             "reason": str(exc),
         }
     except ValueError as exc:
         return {
             "image": str(image_path),
-            "status": "INVALID_CAPTURE",
+            "status": INVALID_CAPTURE,
             "reason": str(exc),
         }
     except Exception as exc:  # pragma: no cover - defensive CLI path
         return {
             "image": str(image_path),
-            "status": "CONFIG_ERROR",
+            "status": CONFIG_ERROR,
             "reason": str(exc),
         }
 
     return {
         "image": str(image_path),
-        "status": "PASS" if passed else "FAIL",
+        "status": PASS if passed else FAIL,
         "required_coverage": round(float(details.get("required_coverage", 0.0)), 6),
         "outside_allowed_ratio": round(float(details.get("outside_allowed_ratio", 0.0)), 6),
         "min_section_coverage": round(float(details.get("min_section_coverage", 0.0)), 6),
@@ -84,7 +85,7 @@ def inspect_file(config: dict, image_path: Path) -> dict:
 
 def inspect_folder(config: dict, folder: Path) -> int:
     if not folder.exists() or not folder.is_dir():
-        print(json.dumps({"status": "CONFIG_ERROR", "reason": f"Folder not found: {folder}"}))
+        print(json.dumps({"status": CONFIG_ERROR, "reason": f"Folder not found: {folder}"}))
         return 2
 
     image_paths = sorted(
@@ -92,14 +93,14 @@ def inspect_folder(config: dict, folder: Path) -> int:
     )
 
     if not image_paths:
-        print(json.dumps({"status": "CONFIG_ERROR", "reason": f"No images found in: {folder}"}))
+        print(json.dumps({"status": CONFIG_ERROR, "reason": f"No images found in: {folder}"}))
         return 2
 
     exit_code = 0
     for image_path in image_paths:
         result = inspect_file(config, image_path)
         print(json.dumps(result, sort_keys=True))
-        if result["status"] in {"FAIL", "INVALID_CAPTURE", "CONFIG_ERROR"}:
+        if result["status"] in {FAIL, INVALID_CAPTURE, CONFIG_ERROR}:
             exit_code = 1
 
     return exit_code
@@ -125,7 +126,7 @@ def main() -> int:
     if mode == "inspect-file":
         result = inspect_file(config, target)
         print(json.dumps(result, sort_keys=True))
-        return 0 if result["status"] == "PASS" else 1
+        return 0 if result["status"] == PASS else 1
 
     if mode == "inspect-folder":
         return inspect_folder(config, target)
