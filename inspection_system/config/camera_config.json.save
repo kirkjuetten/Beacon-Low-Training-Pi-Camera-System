@@ -1,0 +1,47 @@
+{
+  "capture": {
+    "timeout_ms": 200,
+    "awb": null,
+    "awb_gains": [1.8, 1.8],
+    "shutter_us": 40000,
+    "gain": 0.5,
+    "width": null,
+    "height": null,
+    "rotation": 0,
+    "hflip": false,
+    "vflip": false,
+    "output_prefix": "capture"
+  },
+  "inspection": {
+    "enabled": true,
+    "roi": {
+      "x": 440,
+      "y": 460,
+      "width": 700,
+      "height": 220
+    },
+    "threshold_mode": "otsu",
+    "threshold_value": 180,
+    "blur_kernel": 3,
+    "reference_erode_iterations": 0,
+    "reference_dilate_iterations": 0,
+    "sample_erode_iterations": 0,
+    "sample_dilate_iterations": 0,
+    "min_white_pixels": 100,
+    "save_debug_images": true,
+
+    "allowed_dilate_iterations": 3,
+    "required_erode_iterations": 1,
+    "max_outside_allowed_ratio": 0.02,
+    "min_required_coverage": 0.90,
+    "min_section_coverage": 0.80,
+    "section_columns": 12
+  },
+
+  "indicator_led": {
+    "enabled": false,
+    "pass_gpio": 23,
+    "fail_gpio": 24,
+    "pulse_ms": 750
+  }
+}
