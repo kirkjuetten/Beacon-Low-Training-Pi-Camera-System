@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def inspect_against_reference(
+    config: dict,
+    image_path: Path,
+    make_binary_mask,
+    reference_mask_path: Path,
+    align_sample_mask,
+    build_reference_regions,
+    compute_section_masks,
+    score_sample,
+    evaluate_metrics,
+    save_debug_outputs,
+    import_cv2_and_numpy,
+    dilate_mask,
+    erode_mask,
+) -> tuple[bool, dict]:
+    inspection_cfg = config.get("inspection", {})
+    _, _, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
+
+    sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
+    sample_dilate_iterations = int(inspection_cfg.get("sample_dilate_iterations", 1))
+    sample_mask = erode_mask(sample_mask, sample_erode_iterations, cv2, np)
+    sample_mask = dilate_mask(sample_mask, sample_dilate_iterations, cv2, np)
+
+    reference_mask = cv2.imread(str(reference_mask_path), cv2.IMREAD_GRAYSCALE)
+    if reference_mask is None:
+        raise FileNotFoundError(f"Reference mask not found: {reference_mask_path}")
+
+    if reference_mask.shape != sample_mask.shape:
+        raise ValueError(
+            f"Reference mask shape {reference_mask.shape} does not match sample mask shape {sample_mask.shape}."
+        )
+
+    aligned_sample_mask, best_angle_deg, best_shift_x, best_shift_y = align_sample_mask(
+        sample_mask,
+        reference_mask,
+        config.get("alignment", {}),
+        cv2,
+        np,
+    )
+
+    reference_allowed, reference_required = build_reference_regions(
+        reference_mask,
+        inspection_cfg,
+        lambda mask, iterations: dilate_mask(mask, iterations, cv2, np),
+        lambda mask, iterations: erode_mask(mask, iterations, cv2, np),
+    )
+
+    section_masks = compute_section_masks(
+        reference_required,
+        int(inspection_cfg.get("section_columns", 12)),
+        cv2,
+        np,
+    )
+
+    metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
+    passed, threshold_summary = evaluate_metrics(metrics, inspection_cfg)
+
+    required_coverage = float(threshold_summary["required_coverage"])
+    outside_allowed_ratio = float(threshold_summary["outside_allowed_ratio"])
+    min_section_coverage = float(threshold_summary["min_section_coverage"])
+
+    min_required_coverage = float(threshold_summary["min_required_coverage"])
+    max_outside_allowed_ratio = float(threshold_summary["max_outside_allowed_ratio"])
+    min_section_coverage_limit = float(threshold_summary["min_section_coverage_limit"])
+
+    required_white = reference_required > 0
+    allowed_white = reference_allowed > 0
+    diff = np.zeros((aligned_sample_mask.shape[0], aligned_sample_mask.shape[1], 3), dtype=np.uint8)
+    diff[allowed_white] = (0, 80, 0)
+    diff[required_white] = (0, 255, 0)
+    diff[metrics["missing_required_mask"]] = (0, 0, 255)
+    diff[metrics["outside_allowed_mask"]] = (255, 0, 0)
+
+    debug_paths = {}
+    if bool(inspection_cfg.get("save_debug_images", True)):
+        stem = image_path.stem
+        debug_paths = save_debug_outputs(stem, aligned_sample_mask, diff)
+
+    details = {
+        "roi": {
+            "x": roi[0],
+            "y": roi[1],
+            "width": roi[2],
+            "height": roi[3],
+        },
+        "best_angle_deg": best_angle_deg,
+        "best_shift_x": best_shift_x,
+        "best_shift_y": best_shift_y,
+        "required_coverage": required_coverage,
+        "outside_allowed_ratio": outside_allowed_ratio,
+        "min_section_coverage": min_section_coverage,
+        "section_coverages": metrics["section_coverages"],
+        "sample_white_pixels": metrics["sample_white_pixels"],
+        "min_required_coverage": min_required_coverage,
+        "max_outside_allowed_ratio": max_outside_allowed_ratio,
+        "min_section_coverage_limit": min_section_coverage_limit,
+        "debug_paths": debug_paths,
+    }
+    return passed, details
