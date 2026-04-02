@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from capture_test import get_roi, score_sample
+from capture_test import get_roi
+from scoring_utils import evaluate_metrics, score_sample
 
 
 def test_get_roi_returns_configured_crop_and_bounds() -> None:
@@ -75,3 +76,26 @@ def test_score_sample_computes_expected_metrics() -> None:
     assert metrics["outside_allowed_ratio"] == 0.0
     assert metrics["min_section_coverage"] == 0.5
     assert metrics["section_coverages"] == [1.0, 0.5]
+
+
+def test_evaluate_metrics_applies_thresholds() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["required_coverage"] == 0.95
+    assert summary["outside_allowed_ratio"] == 0.01
+    assert summary["min_section_coverage"] == 0.9
+    assert summary["min_required_coverage"] == 0.92
+    assert summary["max_outside_allowed_ratio"] == 0.02
+    assert summary["min_section_coverage_limit"] == 0.85
