@@ -7,6 +7,7 @@ from pathlib import Path
 
 from reference_region_utils import build_reference_regions
 from scoring_utils import evaluate_metrics, score_sample
+from section_mask_utils import compute_section_masks
 
 BASE_DIR = Path.home() / "inspection_system"
 APP_DIR = BASE_DIR / "app"
@@ -269,37 +270,6 @@ def dilate_mask(mask, iterations: int):
 
 
 
-
-
-def compute_section_masks(required_mask, config: dict):
-    cv2, np = import_cv2_and_numpy()
-    section_columns = int(config.get("inspection", {}).get("section_columns", 12))
-    white = (required_mask > 0).astype(np.uint8)
-    _, labels, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
-
-    sections = []
-    for label_id in range(1, stats.shape[0]):
-        x = int(stats[label_id, cv2.CC_STAT_LEFT])
-        y = int(stats[label_id, cv2.CC_STAT_TOP])
-        w = int(stats[label_id, cv2.CC_STAT_WIDTH])
-        h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
-        component = np.zeros_like(required_mask, dtype=np.uint8)
-        component[labels == label_id] = 255
-
-        splits = min(section_columns, max(1, w // 8))
-        step = max(1, w // splits)
-        sx = x
-        while sx < x + w:
-            ex = min(x + w, sx + step)
-            section = np.zeros_like(required_mask, dtype=np.uint8)
-            section[y:y + h, sx:ex] = component[y:y + h, sx:ex]
-            if (section > 0).sum() > 0:
-                sections.append(section)
-            sx = ex
-
-    return sections
-
-
 def get_mask_centroid_and_angle(mask):
     cv2, np = import_cv2_and_numpy()
     points = cv2.findNonZero(mask)
@@ -466,7 +436,12 @@ def inspect_against_reference(config: dict, image_path: Path) -> tuple[bool, dic
         dilate_mask,
         erode_mask,
     )
-    section_masks = compute_section_masks(reference_required, config)
+    section_masks = compute_section_masks(
+        reference_required,
+        int(inspection_cfg.get("section_columns", 12)),
+        cv2,
+        np,
+    )
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
     passed, threshold_summary = evaluate_metrics(metrics, inspection_cfg)
 
