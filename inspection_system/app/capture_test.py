@@ -5,6 +5,8 @@ import sys
 import time
 from pathlib import Path
 
+from scoring_utils import evaluate_metrics, score_sample
+
 BASE_DIR = Path.home() / "inspection_system"
 APP_DIR = BASE_DIR / "app"
 CONFIG_DIR = BASE_DIR / "config"
@@ -395,42 +397,7 @@ def align_sample_mask(sample_mask, reference_mask, config: dict):
     return aligned, float(angle_delta), int(shift_x), int(shift_y)
 
 
-def score_sample(reference_allowed, reference_required, sample_mask, section_masks):
-    sample_white = sample_mask > 0
-    allowed_white = reference_allowed > 0
-    required_white = reference_required > 0
 
-    sample_count = int(sample_white.sum())
-    required_count = int(required_white.sum())
-    covered_required = int((sample_white & required_white).sum())
-    outside_allowed = int((sample_white & (~allowed_white)).sum())
-
-    required_coverage = covered_required / required_count if required_count else 0.0
-    outside_allowed_ratio = outside_allowed / sample_count if sample_count else 1.0
-
-    section_coverages = []
-    for section in section_masks:
-        section_white = section > 0
-        denom = int(section_white.sum())
-        if denom == 0:
-            continue
-        covered = int((sample_white & section_white).sum())
-        section_coverages.append(covered / denom)
-
-    min_section_coverage = min(section_coverages) if section_coverages else 0.0
-
-    missing_required_mask = required_white & (~sample_white)
-    outside_allowed_mask = sample_white & (~allowed_white)
-
-    return {
-        "required_coverage": required_coverage,
-        "outside_allowed_ratio": outside_allowed_ratio,
-        "min_section_coverage": min_section_coverage,
-        "section_coverages": section_coverages,
-        "sample_white_pixels": sample_count,
-        "missing_required_mask": missing_required_mask,
-        "outside_allowed_mask": outside_allowed_mask,
-    }
 
 
 def save_debug_outputs(stem: str, aligned_sample_mask, diff_image) -> dict:
@@ -501,20 +468,15 @@ def inspect_against_reference(config: dict, image_path: Path) -> tuple[bool, dic
     reference_allowed, reference_required = build_reference_regions(reference_mask, config)
     section_masks = compute_section_masks(reference_required, config)
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
+    passed, threshold_summary = evaluate_metrics(metrics, inspection_cfg)
 
-    required_coverage = float(metrics["required_coverage"])
-    outside_allowed_ratio = float(metrics["outside_allowed_ratio"])
-    min_section_coverage = float(metrics["min_section_coverage"])
+    required_coverage = float(threshold_summary["required_coverage"])
+    outside_allowed_ratio = float(threshold_summary["outside_allowed_ratio"])
+    min_section_coverage = float(threshold_summary["min_section_coverage"])
 
-    min_required_coverage = float(inspection_cfg.get("min_required_coverage", 0.92))
-    max_outside_allowed_ratio = float(inspection_cfg.get("max_outside_allowed_ratio", 0.02))
-    min_section_coverage_limit = float(inspection_cfg.get("min_section_coverage", 0.85))
-
-    passed = (
-        required_coverage >= min_required_coverage
-        and outside_allowed_ratio <= max_outside_allowed_ratio
-        and min_section_coverage >= min_section_coverage_limit
-    )
+    min_required_coverage = float(threshold_summary["min_required_coverage"])
+    max_outside_allowed_ratio = float(threshold_summary["max_outside_allowed_ratio"])
+    min_section_coverage_limit = float(threshold_summary["min_section_coverage_limit"])
 
     required_white = reference_required > 0
     allowed_white = reference_allowed > 0
