@@ -1,0 +1,31 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Runtime captures and generated outputs
+inspection_system/logs/*.png
+inspection_system/logs/*.jpg
+inspection_system/logs/*.jpeg
+inspection_system/logs/*.json
+inspection_system/logs/*.csv
+inspection_system/temp_capture.jpg
+inspection_system/**/*.tmp
+
+# Local image datasets
+samples/**/.DS_Store
+samples/**/*.png
+samples/**/*.jpg
+samples/**/*.jpeg
+samples/**/*.bmp
+samples/**/*.tif
+samples/**/*.tiff
+samples/**/*.webp
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
