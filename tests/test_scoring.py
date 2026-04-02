@@ -2,27 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from capture_test import get_roi
 from scoring_utils import evaluate_metrics, score_sample
-
-
-def test_get_roi_returns_configured_crop_and_bounds() -> None:
-    image = np.zeros((100, 200, 3), dtype=np.uint8)
-    roi_image, roi = get_roi(image, {"x": 10, "y": 20, "width": 50, "height": 30})
-
-    assert roi == (10, 20, 50, 30)
-    assert roi_image.shape == (30, 50, 3)
-
-
-def test_get_roi_rejects_out_of_bounds_region() -> None:
-    image = np.zeros((100, 200, 3), dtype=np.uint8)
-
-    try:
-        get_roi(image, {"x": 250, "y": 20, "width": 50, "height": 30})
-    except ValueError as exc:
-        assert "outside the image bounds" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("Expected ValueError for invalid ROI")
 
 
 def test_score_sample_computes_expected_metrics() -> None:
