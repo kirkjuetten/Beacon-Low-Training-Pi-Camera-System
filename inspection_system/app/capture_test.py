@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from alignment_utils import get_mask_centroid_and_angle, rotate_mask, shift_mask
+from morphology_utils import dilate_mask, erode_mask
 from reference_region_utils import build_reference_regions
 from scoring_utils import evaluate_metrics, score_sample
 from section_mask_utils import compute_section_masks
@@ -254,22 +255,6 @@ def make_binary_mask(image_path: Path, config: dict):
     return roi_image, gray, mask, roi, cv2, np
 
 
-def erode_mask(mask, iterations: int):
-    cv2, np = import_cv2_and_numpy()
-    if iterations <= 0:
-        return mask.copy()
-    kernel = np.ones((3, 3), np.uint8)
-    return cv2.erode(mask, kernel, iterations=iterations)
-
-
-def dilate_mask(mask, iterations: int):
-    cv2, np = import_cv2_and_numpy()
-    if iterations <= 0:
-        return mask.copy()
-    kernel = np.ones((3, 3), np.uint8)
-    return cv2.dilate(mask, kernel, iterations=iterations)
-
-
 
 
 def align_sample_mask(sample_mask, reference_mask, config: dict):
@@ -335,8 +320,8 @@ def set_reference(config: dict) -> int:
         inspection_cfg = config.get("inspection", {})
         reference_erode_iterations = int(inspection_cfg.get("reference_erode_iterations", 1))
         reference_dilate_iterations = int(inspection_cfg.get("reference_dilate_iterations", 1))
-        mask = erode_mask(mask, reference_erode_iterations)
-        mask = dilate_mask(mask, reference_dilate_iterations)
+        mask = erode_mask(mask, reference_erode_iterations, cv2, np)
+        mask = dilate_mask(mask, reference_dilate_iterations, cv2, np)
 
         white_pixels = int((mask > 0).sum())
         min_white_pixels = int(inspection_cfg.get("min_white_pixels", 100))
@@ -361,8 +346,8 @@ def inspect_against_reference(config: dict, image_path: Path) -> tuple[bool, dic
 
     sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
     sample_dilate_iterations = int(inspection_cfg.get("sample_dilate_iterations", 1))
-    sample_mask = erode_mask(sample_mask, sample_erode_iterations)
-    sample_mask = dilate_mask(sample_mask, sample_dilate_iterations)
+    sample_mask = erode_mask(sample_mask, sample_erode_iterations, cv2, np)
+    sample_mask = dilate_mask(sample_mask, sample_dilate_iterations, cv2, np)
 
     reference_mask = cv2.imread(str(REFERENCE_MASK), cv2.IMREAD_GRAYSCALE)
     if reference_mask is None:
@@ -377,8 +362,8 @@ def inspect_against_reference(config: dict, image_path: Path) -> tuple[bool, dic
     reference_allowed, reference_required = build_reference_regions(
         reference_mask,
         inspection_cfg,
-        dilate_mask,
-        erode_mask,
+        lambda mask, iterations: dilate_mask(mask, iterations, cv2, np),
+        lambda mask, iterations: erode_mask(mask, iterations, cv2, np),
     )
     section_masks = compute_section_masks(
         reference_required,
