@@ -7,27 +7,13 @@ from pathlib import Path
 
 from capture_test import load_config
 from replay_inspection import VALID_SUFFIXES, inspect_file
-
-
-SUMMARY_ORDER = ["PASS", "FAIL", "INVALID_CAPTURE", "CONFIG_ERROR"]
-
-
-def summarize_results(results: list[dict]) -> dict:
-    counts = {key: 0 for key in SUMMARY_ORDER}
-    for result in results:
-        status = result.get("status", "CONFIG_ERROR")
-        counts[status] = counts.get(status, 0) + 1
-
-    return {
-        "status": "SUMMARY",
-        "total_images": len(results),
-        "counts": counts,
-    }
+from replay_summary_utils import summarize_results
+from result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE
 
 
 def inspect_folder_with_summary(config: dict, folder: Path) -> int:
     if not folder.exists() or not folder.is_dir():
-        print(json.dumps({"status": "CONFIG_ERROR", "reason": f"Folder not found: {folder}"}))
+        print(json.dumps({"status": CONFIG_ERROR, "reason": f"Folder not found: {folder}"}))
         return 2
 
     image_paths = sorted(
@@ -35,7 +21,7 @@ def inspect_folder_with_summary(config: dict, folder: Path) -> int:
     )
 
     if not image_paths:
-        print(json.dumps({"status": "CONFIG_ERROR", "reason": f"No images found in: {folder}"}))
+        print(json.dumps({"status": CONFIG_ERROR, "reason": f"No images found in: {folder}"}))
         return 2
 
     results: list[dict] = []
@@ -44,7 +30,7 @@ def inspect_folder_with_summary(config: dict, folder: Path) -> int:
         result = inspect_file(config, image_path)
         results.append(result)
         print(json.dumps(result, sort_keys=True))
-        if result["status"] in {"FAIL", "INVALID_CAPTURE", "CONFIG_ERROR"}:
+        if result["status"] in {FAIL, INVALID_CAPTURE, CONFIG_ERROR}:
             exit_code = 1
 
     print(json.dumps(summarize_results(results), sort_keys=True))
