@@ -20,7 +20,7 @@ LOG_DIR = BASE_DIR / "logs"
 REFERENCE_DIR = BASE_DIR / "reference"
 CONFIG_FILE = CONFIG_DIR / "camera_config.json"
 REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
-TEMP_IMAGE = BASE_DIR / "temp_capture.jpg"
+REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
 
 DEFAULT_CONFIG = {
     "capture": {
@@ -236,7 +236,7 @@ def set_reference(config: dict) -> int:
     try:
         cv2, np = import_cv2_and_numpy()
         inspection_cfg = config.get("inspection", {})
-        _, _, mask, _, _, _ = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
+        roi_image, _, mask, _, _, _ = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
         reference_erode_iterations = int(inspection_cfg.get("reference_erode_iterations", 1))
         reference_dilate_iterations = int(inspection_cfg.get("reference_dilate_iterations", 1))
         mask = erode_mask(mask, reference_erode_iterations, cv2, np)
@@ -251,7 +251,9 @@ def set_reference(config: dict) -> int:
             return 3
 
         cv2.imwrite(str(REFERENCE_MASK), mask)
+        cv2.imwrite(str(REFERENCE_IMAGE), roi_image)
         print(f"Saved reference mask: {REFERENCE_MASK}")
+        print(f"Saved reference image: {REFERENCE_IMAGE}")
         print(f"Reference white pixels: {white_pixels}")
         return 0
     finally:
@@ -269,6 +271,14 @@ def print_inspection_result(passed: bool, details: dict) -> None:
     print(f"Sample white pixels: {details['sample_white_pixels']}")
     if details.get("section_coverages"):
         print("Section coverages:", ", ".join(f"{v:.3f}" for v in details["section_coverages"]))
+    if "ssim" in details:
+        print(f"SSIM: {details['ssim']:.4f}")
+    if "histogram_similarity" in details:
+        print(f"Histogram similarity: {details['histogram_similarity']:.4f}")
+    if "mse" in details:
+        print(f"MSE: {details['mse']:.2f}")
+    if "anomaly_score" in details:
+        print(f"Anomaly score: {details['anomaly_score']:.4f}")
     if details.get("debug_paths"):
         for key, path in details["debug_paths"].items():
             print(f"Debug {key}: {path}")
@@ -304,6 +314,7 @@ def run_capture_and_inspect(config: dict, indicator: IndicatorLED) -> int:
             image_path,
             make_binary_mask,
             REFERENCE_MASK,
+            REFERENCE_IMAGE,
             align_sample_mask,
             build_reference_regions,
             compute_section_masks,
@@ -313,6 +324,7 @@ def run_capture_and_inspect(config: dict, indicator: IndicatorLED) -> int:
             import_cv2_and_numpy,
             dilate_mask,
             erode_mask,
+            anomaly_detector=None,
         )
         print_inspection_result(passed, details)
         if passed:

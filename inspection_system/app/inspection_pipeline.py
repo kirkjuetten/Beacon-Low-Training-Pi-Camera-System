@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from anomaly_detection_utils import detect_anomalies
 
 
 def inspect_against_reference(
@@ -8,6 +9,7 @@ def inspect_against_reference(
     image_path: Path,
     make_binary_mask,
     reference_mask_path: Path,
+    reference_image_path: Path,
     align_sample_mask,
     build_reference_regions,
     compute_section_masks,
@@ -17,9 +19,10 @@ def inspect_against_reference(
     import_cv2_and_numpy,
     dilate_mask,
     erode_mask,
+    anomaly_detector=None,
 ) -> tuple[bool, dict]:
     inspection_cfg = config.get("inspection", {})
-    _, _, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
+    roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
 
     sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
     sample_dilate_iterations = int(inspection_cfg.get("sample_dilate_iterations", 1))
@@ -30,10 +33,17 @@ def inspect_against_reference(
     if reference_mask is None:
         raise FileNotFoundError(f"Reference mask not found: {reference_mask_path}")
 
+    reference_image = cv2.imread(str(reference_image_path), cv2.IMREAD_COLOR)
+    if reference_image is None:
+        raise FileNotFoundError(f"Reference image not found: {reference_image_path}")
+
     if reference_mask.shape != sample_mask.shape:
         raise ValueError(
             f"Reference mask shape {reference_mask.shape} does not match sample mask shape {sample_mask.shape}."
         )
+
+    # Compute anomaly metrics before alignment
+    anomaly_metrics = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
 
     aligned_sample_mask, best_angle_deg, best_shift_x, best_shift_y = align_sample_mask(
         sample_mask,
@@ -100,5 +110,6 @@ def inspect_against_reference(
         "max_outside_allowed_ratio": max_outside_allowed_ratio,
         "min_section_coverage_limit": min_section_coverage_limit,
         "debug_paths": debug_paths,
+        **anomaly_metrics,
     }
     return passed, details

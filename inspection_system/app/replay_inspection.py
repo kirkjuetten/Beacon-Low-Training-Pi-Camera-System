@@ -5,7 +5,13 @@ import json
 import sys
 from pathlib import Path
 
-from capture_test import CONFIG_FILE, REFERENCE_MASK, inspect_against_reference, load_config
+from capture_test import CONFIG_FILE, REFERENCE_MASK, REFERENCE_IMAGE, inspect_against_reference, load_config, save_debug_outputs, import_cv2_and_numpy
+from alignment_utils import align_sample_mask
+from morphology_utils import dilate_mask, erode_mask
+from preprocessing_utils import make_binary_mask
+from reference_region_utils import build_reference_regions
+from scoring_utils import evaluate_metrics, score_sample
+from section_mask_utils import compute_section_masks
 from result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
 
 VALID_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -50,7 +56,23 @@ def inspect_file(config: dict, image_path: Path) -> dict:
         }
 
     try:
-        passed, details = inspect_against_reference(config, image_path)
+        passed, details = inspect_against_reference(
+            config,
+            image_path,
+            make_binary_mask,
+            REFERENCE_MASK,
+            REFERENCE_IMAGE,
+            align_sample_mask,
+            build_reference_regions,
+            compute_section_masks,
+            score_sample,
+            evaluate_metrics,
+            save_debug_outputs,
+            import_cv2_and_numpy,
+            dilate_mask,
+            erode_mask,
+            anomaly_detector=None,
+        )
     except FileNotFoundError as exc:
         return {
             "image": str(image_path),
