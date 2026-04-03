@@ -78,7 +78,7 @@ def detect_anomalies(
     sample_image: np.ndarray,
     reference_image: np.ndarray,
     sample_mask: np.ndarray,
-    detector: AnomalyDetector = None
+    detector = None
 ) -> dict:
     """Compute anomaly metrics."""
     metrics = {}
@@ -87,8 +87,14 @@ def detect_anomalies(
     metrics['ssim'] = compute_ssim(sample_image, reference_image)
 
     # Histogram similarity
-    hist_ref = cv2.calcHist([reference_image], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-    hist_sample = cv2.calcHist([sample_image], [0, 1, 2], sample_mask.astype(np.uint8), [8, 8, 8], [0, 256, 0, 256, 0, 256])
+    hist_ref = cv2.calcHist(
+        [reference_image], [0, 1, 2], None,
+        [8, 8, 8], [0, 256, 0, 256, 0, 256]
+    )
+    hist_sample = cv2.calcHist(
+        [sample_image], [0, 1, 2], sample_mask.astype(np.uint8),
+        [8, 8, 8], [0, 256, 0, 256, 0, 256]
+    )
     metrics['histogram_similarity'] = compute_histogram_similarity(hist_ref, hist_sample)
 
     # MSE
@@ -100,5 +106,4 @@ def detect_anomalies(
         features = extract_features(sample_image, sample_mask)
         metrics['anomaly_score'] = detector.predict(features)
 
-    return metrics</content>
-<parameter name="filePath">c:\Users\kjuetten\Documents\GitHub\beacon-ai-inspection-camera\inspection_system\app\anomaly_detection_utils.py
+    return metrics

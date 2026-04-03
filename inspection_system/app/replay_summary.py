@@ -5,10 +5,10 @@ import json
 import sys
 from pathlib import Path
 
-from capture_test import load_config
-from replay_inspection import VALID_SUFFIXES, inspect_file
-from replay_summary_utils import summarize_results
-from result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE
+from inspection_system.app.camera_interface import load_config
+from inspection_system.app.replay_inspection import VALID_SUFFIXES, inspect_file
+from inspection_system.app.replay_summary_utils import summarize_results
+from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE
 
 
 def inspect_folder_with_summary(config: dict, folder: Path) -> int:

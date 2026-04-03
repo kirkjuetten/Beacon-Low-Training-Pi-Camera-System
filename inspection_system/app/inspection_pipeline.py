@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from anomaly_detection_utils import detect_anomalies
+from inspection_system.app.anomaly_detection_utils import detect_anomalies
 
 
 def inspect_against_reference(
@@ -80,6 +80,13 @@ def inspect_against_reference(
 
     required_white = reference_required > 0
     allowed_white = reference_allowed > 0
+
+    # Check memory bounds before allocating large arrays
+    image_size = aligned_sample_mask.shape[0] * aligned_sample_mask.shape[1] * 3
+    max_reasonable_pixels = 50 * 1024 * 1024  # 50MP limit
+    if image_size > max_reasonable_pixels:
+        raise MemoryError(f"Image too large for processing: {image_size} pixels exceeds {max_reasonable_pixels} limit")
+
     diff = np.zeros((aligned_sample_mask.shape[0], aligned_sample_mask.shape[1], 3), dtype=np.uint8)
     diff[allowed_white] = (0, 80, 0)
     diff[required_white] = (0, 255, 0)

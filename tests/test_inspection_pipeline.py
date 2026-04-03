@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -6,31 +7,41 @@ from inspection_pipeline import inspect_against_reference
 
 
 class FakeCv2:
-    IMREAD_GRAYSCALE = 1
+    IMREAD_GRAYSCALE = 0  
+    IMREAD_COLOR = 1
 
-    def __init__(self, reference_mask):
-        self.reference_mask = reference_mask
+    def __init__(self, grayscale_image, color_image=None):
+        self.grayscale_image = grayscale_image
+        self.color_image = color_image if color_image is not None else grayscale_image
         self.calls = []
 
     def imread(self, path, mode):
         self.calls.append(("imread", path, mode))
-        return self.reference_mask
+        if mode == self.IMREAD_GRAYSCALE:
+            return self.grayscale_image
+        else:
+            return self.color_image
 
 
 def test_inspect_against_reference_returns_expected_details() -> None:
-    sample_mask = np.array([[255, 255], [255, 255]], dtype=np.uint8)
-    reference_mask = np.array([[255, 255], [255, 255]], dtype=np.uint8)
-    fake_cv2 = FakeCv2(reference_mask)
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[5:15, 5:15] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[5:15, 5:15] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
 
     def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
-        return None, None, sample_mask, (1, 2, 3, 4), fake_cv2, np
+        return roi_image, None, sample_mask, (1, 2, 3, 4), fake_cv2, np
 
     def fake_align_sample_mask(sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module):
         return sample_mask_arg, 1.25, 2, -1
 
     def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
-        allowed = np.array([[255, 255], [255, 255]], dtype=np.uint8)
-        required = np.array([[255, 255], [255, 255]], dtype=np.uint8)
+        allowed = np.zeros((20, 20), dtype=np.uint8)
+        allowed[5:15, 5:15] = 255
+        required = np.zeros((20, 20), dtype=np.uint8)
+        required[5:15, 5:15] = 255
         return allowed, required
 
     def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
@@ -43,8 +54,8 @@ def test_inspect_against_reference_returns_expected_details() -> None:
             "min_section_coverage": 0.90,
             "section_coverages": [0.90],
             "sample_white_pixels": 4,
-            "missing_required_mask": np.zeros((2, 2), dtype=bool),
-            "outside_allowed_mask": np.zeros((2, 2), dtype=bool),
+            "missing_required_mask": np.zeros((20, 20), dtype=bool),
+            "outside_allowed_mask": np.zeros((20, 20), dtype=bool),
         }
 
     def fake_evaluate_metrics(metrics, inspection_cfg):
@@ -69,21 +80,24 @@ def test_inspect_against_reference_returns_expected_details() -> None:
     def fake_erode_mask(mask, iterations, cv2, np_module):
         return mask
 
-    passed, details = inspect_against_reference(
-        {"inspection": {"save_debug_images": True}, "alignment": {}},
-        Path("sample.jpg"),
-        fake_make_binary_mask,
-        Path("reference.png"),
-        fake_align_sample_mask,
-        fake_build_reference_regions,
-        fake_compute_section_masks,
-        fake_score_sample,
-        fake_evaluate_metrics,
-        fake_save_debug_outputs,
-        fake_import_cv2_and_numpy,
-        fake_dilate_mask,
-        fake_erode_mask,
-    )
+    with mock.patch('inspection_system.app.anomaly_detection_utils.compute_ssim', return_value=0.95):
+        with mock.patch('inspection_system.app.anomaly_detection_utils.compute_histogram_similarity', return_value=0.92):
+            passed, details = inspect_against_reference(
+                {"inspection": {"save_debug_images": True}, "alignment": {}},
+                Path("sample.jpg"),
+                fake_make_binary_mask,
+                Path("reference.png"),
+                Path("reference_image.png"),
+                fake_align_sample_mask,
+                fake_build_reference_regions,
+                fake_compute_section_masks,
+                fake_score_sample,
+                fake_evaluate_metrics,
+                fake_save_debug_outputs,
+                fake_import_cv2_and_numpy,
+                fake_dilate_mask,
+                fake_erode_mask,
+            )
 
     assert passed is True
     assert details["roi"] == {"x": 1, "y": 2, "width": 3, "height": 4}
@@ -104,7 +118,8 @@ def test_inspect_against_reference_returns_expected_details() -> None:
 def test_inspect_against_reference_raises_for_shape_mismatch() -> None:
     sample_mask = np.zeros((2, 2), dtype=np.uint8)
     reference_mask = np.zeros((3, 3), dtype=np.uint8)
-    fake_cv2 = FakeCv2(reference_mask)
+    reference_image = np.zeros((3, 3, 3), dtype=np.uint8)
+    fake_cv2 = FakeCv2(reference_mask, reference_image)
 
     def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
         return None, None, sample_mask, (0, 0, 2, 2), fake_cv2, np
@@ -118,6 +133,7 @@ def test_inspect_against_reference_raises_for_shape_mismatch() -> None:
             Path("sample.jpg"),
             fake_make_binary_mask,
             Path("reference.png"),
+            Path("reference_image.png"),
             lambda *args: None,
             lambda *args: None,
             lambda *args: None,

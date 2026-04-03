@@ -5,14 +5,16 @@ import json
 import sys
 from pathlib import Path
 
-from capture_test import CONFIG_FILE, REFERENCE_MASK, REFERENCE_IMAGE, inspect_against_reference, load_config, save_debug_outputs, import_cv2_and_numpy
-from alignment_utils import align_sample_mask
-from morphology_utils import dilate_mask, erode_mask
-from preprocessing_utils import make_binary_mask
-from reference_region_utils import build_reference_regions
-from scoring_utils import evaluate_metrics, score_sample
-from section_mask_utils import compute_section_masks
-from result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
+from inspection_system.app.camera_interface import CONFIG_FILE, REFERENCE_MASK, REFERENCE_IMAGE, load_config, import_cv2_and_numpy
+from inspection_system.app.inspection_pipeline import inspect_against_reference
+from inspection_system.app.capture_test import save_debug_outputs
+from inspection_system.app.alignment_utils import align_sample_mask
+from inspection_system.app.morphology_utils import dilate_mask, erode_mask
+from inspection_system.app.preprocessing_utils import make_binary_mask
+from inspection_system.app.reference_region_utils import build_reference_regions
+from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
+from inspection_system.app.section_mask_utils import compute_section_masks
+from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
 
 VALID_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
