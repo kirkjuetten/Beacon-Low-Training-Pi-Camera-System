@@ -2,7 +2,7 @@
   "capture": {
     "timeout_ms": 200,
     "awb": null,
-    "awb_gains": [1.8, 1.8],
+    "awb_gains": [1.5,3.0],
     "shutter_us": 10000,
     "gain": 0,
     "width": null,

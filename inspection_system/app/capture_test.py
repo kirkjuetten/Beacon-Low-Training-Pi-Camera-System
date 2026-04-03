@@ -234,6 +234,7 @@ def set_reference(config: dict) -> int:
         return result_code
 
     try:
+        cv2, np = import_cv2_and_numpy()
         inspection_cfg = config.get("inspection", {})
         _, _, mask, _, _, _ = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
         reference_erode_iterations = int(inspection_cfg.get("reference_erode_iterations", 1))
@@ -249,14 +250,12 @@ def set_reference(config: dict) -> int:
             print("Adjust ROI / threshold before using this reference.")
             return 3
 
-        cv2, _ = import_cv2_and_numpy()
         cv2.imwrite(str(REFERENCE_MASK), mask)
         print(f"Saved reference mask: {REFERENCE_MASK}")
         print(f"Reference white pixels: {white_pixels}")
         return 0
     finally:
         cleanup_temp_image()
-
 
 
 def print_inspection_result(passed: bool, details: dict) -> None:
