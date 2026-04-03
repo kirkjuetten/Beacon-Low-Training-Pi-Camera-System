@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+import json
+import time
+from pathlib import Path
+from typing import Optional, Dict, List
+
+BASE_DIR = Path.home() / "inspection_system"
+APP_DIR = BASE_DIR / "app"
+CONFIG_DIR = BASE_DIR / "config"
+LOG_DIR = BASE_DIR / "logs"
+REFERENCE_DIR = BASE_DIR / "reference"
+PROJECTS_DIR = BASE_DIR / "projects"
+CONFIG_FILE = CONFIG_DIR / "camera_config.json"
+PROJECT_REGISTRY_FILE = CONFIG_DIR / "projects.json"
+REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+TEMP_IMAGE = BASE_DIR / "temp_capture.png"
+
+DEFAULT_CONFIG = {
+    "capture": {
+        "timeout_ms": 200,
+        "awb": None,
+        "awb_gains": [1.8, 1.8],
+        "shutter_us": 40000,
+        "gain": 0.5,
+        "width": None,
+        "height": None,
+        "rotation": 0,
+        "hflip": False,
+        "vflip": False,
+    },
+    "inspection": {
+        "enabled": True,
+        "roi": {
+            "x": 460,
+            "y": 360,
+            "width": 680,
+            "height": 220,
+        },
+        "threshold_mode": "otsu",
+        "threshold_value": 180,
+        "blur_kernel": 3,
+        "reference_erode_iterations": 1,
+        "reference_dilate_iterations": 1,
+        "sample_erode_iterations": 1,
+        "sample_dilate_iterations": 1,
+        "min_white_pixels": 100,
+        "save_debug_images": True,
+        "allowed_dilate_iterations": 2,
+        "required_erode_iterations": 1,
+        "max_outside_allowed_ratio": 0.02,
+        "min_required_coverage": 0.92,
+        "min_section_coverage": 0.85,
+        "section_columns": 12,
+    },
+    "alignment": {
+        "enabled": True,
+        "mode": "moments",
+        "max_angle_deg": 1.0,
+        "max_shift_x": 4,
+        "max_shift_y": 3,
+    },
+    "indicator_led": {
+        "enabled": False,
+        "pass_gpio": 23,
+        "fail_gpio": 24,
+        "pulse_ms": 750,
+    },
+}
+
+
+def ensure_directories() -> None:
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def write_default_config() -> None:
+    CONFIG_FILE.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
+
+
+def load_config() -> dict:
+    ensure_directories()
+
+    # If we have a current project, use its config
+    current_project = get_current_project()
+    if current_project:
+        registry = get_project_registry()
+        project_info = registry["projects"].get(current_project)
+        if project_info:
+            project_config_file = Path(project_info["config_file"])
+            if project_config_file.exists():
+                with project_config_file.open("r", encoding="utf-8") as f:
+                    return json.load(f)
+
+    # Fall back to global config
+    if not CONFIG_FILE.exists():
+        write_default_config()
+        print(f"Created default config: {CONFIG_FILE}")
+
+    with CONFIG_FILE.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def import_cv2_and_numpy():
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+        return cv2, np
+    except ImportError as exc:
+        print("OpenCV and NumPy are required for inspection mode.")
+        print("Install them with:")
+        print("sudo apt install -y python3-opencv python3-numpy")
+        raise SystemExit(2) from exc
+
+
+# Project Management Functions
+
+def get_project_registry_path() -> Path:
+    return CONFIG_DIR / "projects.json"
+
+
+def get_project_registry() -> Dict:
+    """Load the project registry."""
+    ensure_directories()
+    project_registry_file = get_project_registry_path()
+
+    if not project_registry_file.exists():
+        # Create default registry
+        registry = {
+            "current_project": None,
+            "projects": {}
+        }
+        project_registry_file.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+        return registry
+
+    with project_registry_file.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_project_registry(registry: Dict) -> None:
+    """Save the project registry."""
+    project_registry_file = get_project_registry_path()
+    project_registry_file.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+
+
+def create_project(project_name: str, description: str = "") -> bool:
+    """Create a new project with its own config and reference files."""
+    registry = get_project_registry()
+
+    if project_name in registry["projects"]:
+        print(f"Project '{project_name}' already exists.")
+        return False
+
+    # Create project directory structure
+    project_dir = PROJECTS_DIR / project_name
+    project_config_dir = project_dir / "config"
+    project_reference_dir = project_dir / "reference"
+    project_log_dir = project_dir / "logs"
+
+    project_config_dir.mkdir(parents=True, exist_ok=True)
+    project_reference_dir.mkdir(parents=True, exist_ok=True)
+    project_log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy default config to project
+    project_config_file = project_config_dir / "camera_config.json"
+    if not project_config_file.exists():
+        project_config_file.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
+
+    # Add to registry
+    registry["projects"][project_name] = {
+        "description": description,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "config_file": str(project_config_file),
+        "reference_dir": str(project_reference_dir),
+        "log_dir": str(project_log_dir)
+    }
+
+    save_project_registry(registry)
+    print(f"Created project '{project_name}'")
+    return True
+
+
+def switch_project(project_name: str) -> bool:
+    """Switch to a different project."""
+    registry = get_project_registry()
+
+    if project_name not in registry["projects"]:
+        print(f"Project '{project_name}' does not exist.")
+        return False
+
+    registry["current_project"] = project_name
+    save_project_registry(registry)
+
+    # Update global paths to point to current project
+    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
+    project_info = registry["projects"][project_name]
+
+    CONFIG_FILE = Path(project_info["config_file"])
+    REFERENCE_DIR = Path(project_info["reference_dir"])
+    LOG_DIR = Path(project_info["log_dir"])
+    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+
+    print(f"Switched to project '{project_name}'")
+    return True
+
+
+def get_current_project() -> Optional[str]:
+    """Get the name of the currently active project."""
+    registry = get_project_registry()
+    return registry.get("current_project")
+
+
+def list_projects() -> List[Dict]:
+    """List all available projects."""
+    registry = get_project_registry()
+    projects = []
+    for name, info in registry["projects"].items():
+        projects.append({
+            "name": name,
+            "description": info.get("description", ""),
+            "created": info.get("created", ""),
+            "is_current": name == registry.get("current_project")
+        })
+    return projects
+
+
+def delete_project(project_name: str) -> bool:
+    """Delete a project and all its files."""
+    registry = get_project_registry()
+
+    if project_name not in registry["projects"]:
+        print(f"Project '{project_name}' does not exist.")
+        return False
+
+    if registry.get("current_project") == project_name:
+        print("Cannot delete the currently active project. Switch to another project first.")
+        return False
+
+    # Remove project directory
+    project_dir = PROJECTS_DIR / project_name
+    if project_dir.exists():
+        import shutil
+        shutil.rmtree(project_dir)
+
+    # Remove from registry
+    del registry["projects"][project_name]
+    save_project_registry(registry)
+
+    print(f"Deleted project '{project_name}'")
+    return True
+
+
+def export_project(project_name: str, export_path: Path) -> bool:
+    """Export a project to a zip file."""
+    registry = get_project_registry()
+
+    if project_name not in registry["projects"]:
+        print(f"Project '{project_name}' does not exist.")
+        return False
+
+    project_dir = PROJECTS_DIR / project_name
+    if not project_dir.exists():
+        print(f"Project directory does not exist: {project_dir}")
+        return False
+
+    try:
+        import shutil
+        shutil.make_archive(str(export_path), 'zip', project_dir)
+        print(f"Exported project '{project_name}' to {export_path}.zip")
+        return True
+    except Exception as e:
+        print(f"Failed to export project: {e}")
+        return False
+
+
+def import_project(zip_path: Path, project_name: Optional[str] = None) -> bool:
+    """Import a project from a zip file."""
+    if not zip_path.exists():
+        print(f"Zip file does not exist: {zip_path}")
+        return False
+
+    if project_name is None:
+        project_name = zip_path.stem
+
+    registry = get_project_registry()
+    if project_name in registry["projects"]:
+        print(f"Project '{project_name}' already exists.")
+        return False
+
+    try:
+        import shutil
+        project_dir = PROJECTS_DIR / project_name
+
+        # Extract zip
+        shutil.unpack_archive(str(zip_path), str(project_dir))
+
+        # Validate project structure
+        config_dir = project_dir / "config"
+        reference_dir = project_dir / "reference"
+        log_dir = project_dir / "logs"
+
+        if not config_dir.exists() or not reference_dir.exists():
+            print("Invalid project structure in zip file.")
+            shutil.rmtree(project_dir)
+            return False
+
+        # Add to registry
+        registry["projects"][project_name] = {
+            "description": f"Imported from {zip_path.name}",
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "config_file": str(config_dir / "camera_config.json"),
+            "reference_dir": str(reference_dir),
+            "log_dir": str(log_dir)
+        }
+
+        save_project_registry(registry)
+        print(f"Imported project '{project_name}'")
+        return True
+
+    except Exception as e:
+        print(f"Failed to import project: {e}")
+        return False
+
+
+def build_capture_command(config: dict, output_file: Path) -> list[str]:
+    capture = config.get("capture", {})
+    cmd = [
+        "rpicam-still",
+        "-o",
+        str(output_file),
+        "--timeout",
+        str(capture.get("timeout_ms", 200)),
+    ]
+
+    awb = capture.get("awb")
+    if awb:
+        cmd.extend(["--awb", str(awb)])
+
+    awb_gains = capture.get("awb_gains")
+    if isinstance(awb_gains, (list, tuple)) and len(awb_gains) == 2:
+        cmd.extend(["--awbgains", f"{awb_gains[0]},{awb_gains[1]}"])
+
+    shutter_us = capture.get("shutter_us")
+    if shutter_us is not None:
+        cmd.extend(["--shutter", str(shutter_us)])
+
+    gain = capture.get("gain")
+    if gain is not None:
+        cmd.extend(["--gain", str(gain)])
+
+    width = capture.get("width")
+    height = capture.get("height")
+    if width and height:
+        cmd.extend(["--width", str(width), "--height", str(height)])
+
+    rotation = capture.get("rotation", 0)
+    if rotation in (0, 180):
+        cmd.extend(["--rotation", str(rotation)])
+
+    if capture.get("hflip", False):
+        cmd.append("--hflip")
+
+    if capture.get("vflip", False):
+        cmd.append("--vflip")
+
+    return cmd
+
+
+class IndicatorLED:
+    def __init__(self, enabled: bool, pass_gpio: int, fail_gpio: int, pulse_ms: int) -> None:
+        self.enabled = enabled
+        self.pass_gpio = pass_gpio
+        self.fail_gpio = fail_gpio
+        self.pulse_ms = pulse_ms
+        self.gpio = None
+
+        if not self.enabled:
+            return
+
+        try:
+            import RPi.GPIO as GPIO  # type: ignore
+        except ImportError:
+            print("RPi.GPIO is not installed. LED output disabled.")
+            self.enabled = False
+            return
+
+        self.gpio = GPIO
+        self.gpio.setwarnings(False)
+        self.gpio.setmode(GPIO.BCM)
+        try:
+            self.gpio.setup(self.pass_gpio, GPIO.OUT, initial=GPIO.LOW)
+            self.gpio.setup(self.fail_gpio, GPIO.OUT, initial=GPIO.LOW)
+        except RuntimeError as e:
+            print(f"GPIO setup failed: {e}. LED output disabled.")
+            self.enabled = False
+            return
+
+    def pulse_pass(self) -> None:
+        self._pulse(self.pass_gpio)
+
+    def pulse_fail(self) -> None:
+        self._pulse(self.fail_gpio)
+
+    def _pulse(self, pin: int) -> None:
+        if not self.enabled or self.gpio is None:
+            return
+
+        self.gpio.output(self.pass_gpio, self.gpio.LOW)
+        self.gpio.output(self.fail_gpio, self.gpio.LOW)
+        self.gpio.output(pin, self.gpio.HIGH)
+        time.sleep(self.pulse_ms / 1000.0)
+        self.gpio.output(pin, self.gpio.LOW)
+
+    def cleanup(self) -> None:
+        if self.enabled and self.gpio is not None:
+            self.gpio.cleanup((self.pass_gpio, self.fail_gpio))

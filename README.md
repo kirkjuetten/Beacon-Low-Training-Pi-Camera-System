@@ -24,25 +24,88 @@ The current implementation is strongest as **localized print / marking inspectio
 
 ## Recommended workflow
 
-### 1. Capture-only test
+### 1. Set up Projects (New!)
+
+For managing multiple products or inspection setups:
+
+```bash
+# Create a new project
+python3 inspection_system/app/capture_test.py create-project "Widget_A" "Widget A inspection setup"
+
+# Switch between projects
+python3 inspection_system/app/capture_test.py switch-project "Widget_A"
+
+# List all projects
+python3 inspection_system/app/capture_test.py list-projects
+
+# Launch GUI project manager (requires tkinter)
+python3 inspection_system/app/capture_test.py project-manager
+```
+
+Each project maintains its own:
+- Configuration settings (`camera_config.json`)
+- Reference images (`golden_reference_mask.png`, `golden_reference_image.png`)
+- Training logs and session data
+
+### 2. Capture-only test
 
 ```bash
 python3 inspection_system/app/capture_test.py capture
 ```
 
-### 2. Set the golden reference
+### 3. Set the golden reference
 
 ```bash
 python3 inspection_system/app/capture_test.py set-reference
 ```
 
-### 3. Live inspection
+### 4. Interactive Training Mode
 
 ```bash
-python3 inspection_system/app/capture_test.py inspect
+pip install pygame  # Required for GUI
+python3 inspection_system/app/capture_test.py train
 ```
 
-### 4. Replay a saved image
+This mode provides a graphical interface for human-in-the-loop training:
+
+- **Real-time Display**: Shows captured images with color-coded borders
+  - 🟢 **Green border**: Automatic pass
+  - 🔴 **Red border**: Automatic fail  
+  - 🟡 **Yellow border**: Flagged for human review (close to thresholds)
+
+- **Detailed Descriptions**: Human-readable explanations of inspection results:
+  - **Pass**: "✓ APPROVED: Sample meets all quality requirements"
+  - **Coverage Issues**: "✗ REQUIRED COVERAGE: Missing 15.2% of required features"
+  - **Contamination**: "✗ OUTSIDE ALLOWED: 3.1% excess material in restricted areas"
+  - **Anomalies**: "✗ ANOMALY DETECTED: High anomaly score (0.723) suggests defects"
+
+- **Interactive Feedback**: Click buttons to provide feedback:
+  - **APPROVE**: Accept borderline samples to expand acceptable range
+  - **REJECT**: Reject samples to tighten quality standards
+  - **REVIEW**: Flag samples for later manual review
+
+- **Training Logs**: Comprehensive session logging in `inspection_system/logs/`:
+  - Timestamped decisions and feedback
+  - Full metric details for each sample
+  - Session summaries and threshold suggestions
+  - Training data for analysis and improvement
+
+- **Adaptive Learning**: System analyzes feedback to suggest threshold adjustments
+- **Session Tracking**: Real-time progress updates and final summaries
+
+### 5. View Training Logs
+
+```bash
+python3 inspection_system/app/log_viewer.py --recent 20
+```
+
+Review your training sessions and analyze decision patterns:
+
+- **Summary Statistics**: Overall approval rates and session counts
+- **Recent Decisions**: Last N training decisions with full details
+- **Session Analysis**: Performance tracking across multiple training sessions
+
+### 6. Replay a saved image
 
 ```bash
 python3 inspection_system/app/replay_inspection.py inspect-file samples/good/example.jpg
@@ -53,6 +116,76 @@ python3 inspection_system/app/replay_inspection.py inspect-file samples/good/exa
 ```bash
 python3 inspection_system/app/replay_inspection.py inspect-folder samples/good
 ```
+
+## Project Management
+
+The system supports multiple inspection projects, allowing you to maintain separate configurations and reference images for different products or inspection setups.
+
+### Directory Structure
+
+```
+~/inspection_system/
+├── config/
+│   ├── camera_config.json          # Global fallback config
+│   └── projects.json               # Project registry
+├── projects/                       # Project-specific data
+│   ├── project_a/
+│   │   ├── config/
+│   │   │   └── camera_config.json  # Project A config
+│   │   ├── reference/
+│   │   │   ├── golden_reference_mask.png
+│   │   │   └── golden_reference_image.png
+│   │   └── logs/                   # Project A training logs
+│   └── project_b/
+│       ├── config/
+│       ├── reference/
+│       └── logs/
+└── reference/                      # Legacy global references
+```
+
+### GUI Project Manager
+
+Launch the graphical project manager:
+
+```bash
+python3 inspection_system/app/capture_test.py project-manager
+```
+
+Features:
+- **Create new projects** with descriptions
+- **Switch between projects** instantly
+- **Export/import projects** as ZIP files for backup/sharing
+- **Delete projects** with confirmation
+- **View project details** (creation date, description)
+
+### Command-Line Project Management
+
+```bash
+# Create project
+python3 inspection_system/app/capture_test.py create-project "MyProject" "Description"
+
+# Switch to project
+python3 inspection_system/app/capture_test.py switch-project "MyProject"
+
+# List projects
+python3 inspection_system/app/capture_test.py list-projects
+
+# All other commands (capture, inspect, train) work within the current project
+```
+
+### Project Isolation
+
+Each project maintains completely separate:
+- **Configuration**: Camera settings, thresholds, ROI definitions
+- **Reference Images**: Golden reference mask and image
+- **Training Data**: Logs, session data, and learned parameters
+- **Debug Images**: Saved inspection results and analysis images
+
+This allows you to:
+- Quickly switch between different product lines
+- Maintain different inspection standards for various components
+- Share project configurations between systems
+- Archive completed projects for future reference
 
 ## Result states
 
