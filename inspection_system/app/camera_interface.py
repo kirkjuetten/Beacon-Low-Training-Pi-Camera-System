@@ -214,6 +214,31 @@ def get_current_project() -> Optional[str]:
     return registry.get("current_project")
 
 
+def get_active_runtime_paths() -> Dict[str, Path]:
+    """Resolve config, log, and reference paths for the active project context."""
+    current_project = get_current_project()
+    if current_project:
+        registry = get_project_registry()
+        project_info = registry["projects"].get(current_project)
+        if project_info:
+            reference_dir = Path(project_info["reference_dir"])
+            return {
+                "config_file": Path(project_info["config_file"]),
+                "log_dir": Path(project_info["log_dir"]),
+                "reference_dir": reference_dir,
+                "reference_mask": reference_dir / "golden_reference_mask.png",
+                "reference_image": reference_dir / "golden_reference_image.png",
+            }
+
+    return {
+        "config_file": CONFIG_FILE,
+        "log_dir": LOG_DIR,
+        "reference_dir": REFERENCE_DIR,
+        "reference_mask": REFERENCE_MASK,
+        "reference_image": REFERENCE_IMAGE,
+    }
+
+
 def list_projects() -> List[Dict]:
     """List all available projects."""
     registry = get_project_registry()

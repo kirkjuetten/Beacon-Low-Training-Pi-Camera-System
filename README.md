@@ -29,6 +29,9 @@ The current implementation is strongest as **localized print / marking inspectio
 For managing multiple products or inspection setups:
 
 ```bash
+# Launch unified operator dashboard
+python3 inspection_system/app/capture_test.py dashboard
+
 # Create a new project
 python3 inspection_system/app/capture_test.py create-project "Widget_A" "Widget A inspection setup"
 
@@ -41,6 +44,14 @@ python3 inspection_system/app/capture_test.py list-projects
 # Launch GUI project manager (requires tkinter)
 python3 inspection_system/app/capture_test.py project-manager
 ```
+
+The operator dashboard provides a single window for:
+- capture-only runs
+- reference creation
+- live inspect runs
+- launching interactive training
+- quick project switching and project creation
+- recent training-log summaries for the active project
 
 Each project maintains its own:
 - Configuration settings (`camera_config.json`)

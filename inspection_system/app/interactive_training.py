@@ -21,12 +21,10 @@ except ImportError:
     PYGAME_AVAILABLE = False
 
 from inspection_system.app.camera_interface import (
-    CONFIG_FILE,
-    REFERENCE_MASK,
-    REFERENCE_IMAGE,
     load_config,
     import_cv2_and_numpy,
     IndicatorLED,
+    get_active_runtime_paths,
 )
 from inspection_system.app.frame_acquisition import cleanup_temp_image, capture_to_temp
 from inspection_system.app.inspection_pipeline import inspect_against_reference
@@ -379,7 +377,7 @@ class ThresholdTrainer:
     def save_training_data(self):
         """Save training data."""
         training_file = self.config_path.parent / "training_data.json"
-        with open(training_file, 'w') as f:
+        with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(self.training_data, f, indent=2)
 
     def record_feedback(self, details: dict, feedback: str):
@@ -436,69 +434,36 @@ class ThresholdTrainer:
 
         return suggestions
 
-    def load_training_data(self):
-        """Load existing training data."""
-        training_file = self.config_path.parent / "training_data.json"
-        if training_file.exists():
-            with open(training_file, 'r') as f:
-                self.training_data = json.load(f)
-
-    def save_training_data(self):
-        """Save training data."""
-        training_file = self.config_path.parent / "training_data.json"
-        with open(training_file, 'w') as f:
-            json.dump(self.training_data, f, indent=2)
-
-    def record_feedback(self, details: dict, feedback: str):
-        """Record human feedback for threshold adjustment."""
-        record = {
-            'timestamp': time.time(),
-            'feedback': feedback,
-            'metrics': {
-                'required_coverage': details.get('required_coverage', 0),
-                'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
-                'min_section_coverage': details.get('min_section_coverage', 0),
-                'ssim': details.get('ssim'),
-                'anomaly_score': details.get('anomaly_score'),
-            }
-        }
-        self.training_data.append(record)
-        self.save_training_data()
-
-    def suggest_thresholds(self) -> dict:
-        """Analyze training data and suggest new thresholds."""
-        if len(self.training_data) < 10:
-            return {}  # Need more data
-
-        approved = [r for r in self.training_data if r['feedback'] == 'approve']
-        rejected = [r for r in self.training_data if r['feedback'] == 'reject']
-
-        if not approved or not rejected:
+    def apply_suggestions(self, config: dict, suggestions: dict) -> dict:
+        """Persist suggested threshold changes and update the in-memory config."""
+        if not suggestions:
             return {}
 
-        suggestions = {}
+        inspection_cfg = config.setdefault('inspection', {})
 
-        # Adjust required coverage threshold
-        approved_cov = [r['metrics']['required_coverage'] for r in approved]
-        rejected_cov = [r['metrics']['required_coverage'] for r in rejected]
+        if self.config_path.exists():
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+        else:
+            file_config = config.copy()
 
-        if approved_cov and rejected_cov:
-            min_approved = min(approved_cov)
-            max_rejected = max(rejected_cov)
-            if min_approved > max_rejected:
-                suggestions['min_required_coverage'] = (min_approved + max_rejected) / 2
+        file_inspection_cfg = file_config.setdefault('inspection', {})
+        applied = {}
 
-        # Adjust outside allowed ratio threshold
-        approved_ratio = [r['metrics']['outside_allowed_ratio'] for r in approved]
-        rejected_ratio = [r['metrics']['outside_allowed_ratio'] for r in rejected]
+        for key, value in suggestions.items():
+            normalized_value = round(float(value), 4)
+            if float(inspection_cfg.get(key, normalized_value)) == normalized_value:
+                continue
+            inspection_cfg[key] = normalized_value
+            file_inspection_cfg[key] = normalized_value
+            applied[key] = normalized_value
 
-        if approved_ratio and rejected_ratio:
-            max_approved = max(approved_ratio)
-            min_rejected = min(rejected_ratio)
-            if max_approved < min_rejected:
-                suggestions['max_outside_allowed_ratio'] = (max_approved + min_rejected) / 2
+        if applied:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(file_config, f, indent=2)
+                f.write('\n')
 
-        return suggestions
+        return applied
 
 
 def run_interactive_training(config: dict) -> int:
@@ -507,13 +472,15 @@ def run_interactive_training(config: dict) -> int:
         print("pygame is required for interactive training. Install with: pip install pygame")
         return 1
 
+    active_paths = get_active_runtime_paths()
+
     # Initialize logger
-    log_dir = Path("inspection_system/logs")
+    log_dir = active_paths["log_dir"]
     logger = TrainingLogger(log_dir)
     logger.start_session()
 
     display = InspectionDisplay()
-    trainer = ThresholdTrainer(CONFIG_FILE, logger)
+    trainer = ThresholdTrainer(active_paths["config_file"], logger)
 
     led_cfg = config.get("indicator_led", {})
     indicator = IndicatorLED(
@@ -548,8 +515,8 @@ def run_interactive_training(config: dict) -> int:
                     config,
                     image_path,
                     make_binary_mask,
-                    REFERENCE_MASK,
-                    REFERENCE_IMAGE,
+                    active_paths["reference_mask"],
+                    active_paths["reference_image"],
                     align_sample_mask,
                     build_reference_regions,
                     compute_section_masks,
@@ -586,12 +553,14 @@ def run_interactive_training(config: dict) -> int:
                         print(f"  Rejected: {summary.get('reject', 0)}")
                         print(f"  Flagged for review: {summary.get('review', 0)}")
 
-                    # Check for threshold suggestions
-                    suggestions = trainer.suggest_thresholds()
-                    if suggestions:
-                        print("\nThreshold suggestions based on training data:")
-                        for key, value in suggestions.items():
-                            print(f"  {key}: {value:.4f}")
+                    # Apply threshold suggestions periodically to avoid noisy rewrites.
+                    if session_count % 10 == 0:
+                        suggestions = trainer.suggest_thresholds()
+                        applied = trainer.apply_suggestions(config, suggestions)
+                        if applied:
+                            print("\nApplied threshold updates based on training data:")
+                            for key, value in applied.items():
+                                print(f"  {key}: {value:.4f}")
 
             finally:
                 cleanup_temp_image()

@@ -221,11 +221,22 @@ def main() -> int:
                 print("Install tkinter and pygame for GUI support")
                 return 1
 
+        if mode == "dashboard":
+            try:
+                from inspection_system.app.operator_dashboard import main as dashboard_main
+                dashboard_main()
+                return 0
+            except ImportError as e:
+                print(f"Dashboard not available: {e}")
+                print("Install tkinter for dashboard support")
+                return 1
+
         print("Usage:")
         print("  python3 capture_test.py capture")
         print("  python3 capture_test.py set-reference")
         print("  python3 capture_test.py inspect")
         print("  python3 capture_test.py train")
+        print("  python3 capture_test.py dashboard")
         print("  python3 capture_test.py create-project <name> [description]")
         print("  python3 capture_test.py switch-project <name>")
         print("  python3 capture_test.py list-projects")
