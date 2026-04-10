@@ -123,8 +123,9 @@ class InspectionDisplay:
         pad = self._clamp(int(controls_rect.height * 0.14), 6, 16)
         gap = self._clamp(int(controls_rect.width * 0.02), 8, 24)
         button_h = self._clamp(int(controls_rect.height * 0.58), 36, 56)
-        button_w = self._clamp(int(controls_rect.width * 0.26), 88, 220)
-        needed_width = button_w * 3 + gap * 2
+        # 4 buttons: REVIEW | APPROVE | REJECT | SET REF
+        button_w = self._clamp(int(controls_rect.width * 0.20), 70, 180)
+        needed_width = button_w * 4 + gap * 3
 
         if needed_width <= controls_rect.width - pad * 2:
             x_start = controls_rect.x + (controls_rect.width - needed_width) // 2
@@ -133,19 +134,21 @@ class InspectionDisplay:
                 "review": pygame.Rect(x_start, y, button_w, button_h),
                 "approve": pygame.Rect(x_start + button_w + gap, y, button_w, button_h),
                 "reject": pygame.Rect(x_start + (button_w + gap) * 2, y, button_w, button_h),
+                "set_ref": pygame.Rect(x_start + (button_w + gap) * 3, y, button_w, button_h),
             }
             return
 
         # Fall back to vertical layout for very narrow displays.
         stack_w = self._clamp(controls_rect.width - pad * 2, 80, 200)
-        stack_gap = self._clamp(int(controls_rect.height * 0.08), 4, 12)
-        stack_h = self._clamp((controls_rect.height - stack_gap * 2) // 3, 28, 44)
+        stack_gap = self._clamp(int(controls_rect.height * 0.06), 3, 10)
+        stack_h = self._clamp((controls_rect.height - stack_gap * 3) // 4, 22, 40)
         x = controls_rect.x + (controls_rect.width - stack_w) // 2
-        y0 = controls_rect.y + (controls_rect.height - (stack_h * 3 + stack_gap * 2)) // 2
+        y0 = controls_rect.y + (controls_rect.height - (stack_h * 4 + stack_gap * 3)) // 2
         self.buttons = {
             "review": pygame.Rect(x, y0, stack_w, stack_h),
             "approve": pygame.Rect(x, y0 + stack_h + stack_gap, stack_w, stack_h),
             "reject": pygame.Rect(x, y0 + (stack_h + stack_gap) * 2, stack_w, stack_h),
+            "set_ref": pygame.Rect(x, y0 + (stack_h + stack_gap) * 3, stack_w, stack_h),
         }
 
     def draw_image_with_border(self, surface: pygame.Surface, border_color: tuple, image_rect: pygame.Rect, border_width: int = 4):
@@ -169,21 +172,25 @@ class InspectionDisplay:
 
     def draw_buttons(self):
         """Draw interactive buttons."""
+        BLUE = (70, 130, 220)
         button_colors = {
             "approve": self.GREEN,
             "reject": self.RED,
             "review": self.YELLOW,
+            "set_ref": BLUE,
         }
         button_labels = {
             "approve": "APPROVE",
             "reject": "REJECT",
             "review": "REVIEW",
+            "set_ref": "SET REF",
         }
 
-        for key in ["review", "approve", "reject"]:
+        for key in ["review", "approve", "reject", "set_ref"]:
             button_rect = self.buttons[key]
             pygame.draw.rect(self.screen, button_colors[key], button_rect, border_radius=6)
-            text = self.small_font.render(button_labels[key], True, self.BLACK)
+            label_color = self.WHITE if key == "set_ref" else self.BLACK
+            text = self.small_font.render(button_labels[key], True, label_color)
             text_rect = text.get_rect(center=button_rect.center)
             self.screen.blit(text, text_rect)
 
@@ -287,6 +294,76 @@ class InspectionDisplay:
             text = self.small_font.render(line, True, self.WHITE)
             self.screen.blit(text, (area.x, area.y + i * line_height))
 
+    def show_message(self, message: str, color: Optional[tuple] = None) -> None:
+        """Fill screen with a centred status message (used for brief feedback)."""
+        self._reflow_layout()
+        self.screen.fill(self.BLACK)
+        col = color or self.WHITE
+        text = self.font.render(message, True, col)
+        text_rect = text.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2))
+        self.screen.blit(text, text_rect)
+        pygame.display.flip()
+
+    def prompt_set_reference(self) -> str:
+        """Show a full-screen prompt asking the operator to capture a reference.
+
+        Returns 'capture' when the operator presses the capture button, or
+        'quit' if they close the window or press Escape.
+        """
+        self._reflow_layout()
+        width, height = self.screen.get_size()
+        pad = self._clamp(int(height * 0.04), 12, 40)
+        btn_w = self._clamp(int(width * 0.35), 160, 360)
+        btn_h = self._clamp(int(height * 0.13), 44, 80)
+        capture_btn = pygame.Rect(
+            (width - btn_w) // 2,
+            height // 2 + pad,
+            btn_w,
+            btn_h,
+        )
+
+        def render() -> None:
+            self.screen.fill(self.BLACK)
+            lines = [
+                "No reference found for this project.",
+                "Point the camera at the golden reference sample,",
+                "then press CAPTURE REFERENCE.",
+            ]
+            line_h = self.font.get_linesize() + 4
+            y_start = height // 2 - (len(lines) * line_h) - pad
+            for i, line in enumerate(lines):
+                surf = self.font.render(line, True, self.YELLOW)
+                rect = surf.get_rect(centerx=width // 2, top=y_start + i * line_h)
+                self.screen.blit(surf, rect)
+            BLUE = (70, 130, 220)
+            pygame.draw.rect(self.screen, BLUE, capture_btn, border_radius=8)
+            label = self.font.render("CAPTURE REFERENCE", True, self.WHITE)
+            self.screen.blit(label, label.get_rect(center=capture_btn.center))
+            pygame.display.flip()
+
+        render()
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return 'quit'
+                elif event.type == pygame.VIDEORESIZE:
+                    new_w = max(event.w, self.MIN_WIDTH)
+                    new_h = max(event.h, self.MIN_HEIGHT)
+                    self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
+                    width, height = self.screen.get_size()
+                    pad = self._clamp(int(height * 0.04), 12, 40)
+                    btn_w = self._clamp(int(width * 0.35), 160, 360)
+                    btn_h = self._clamp(int(height * 0.13), 44, 80)
+                    capture_btn = pygame.Rect((width - btn_w) // 2, height // 2 + pad, btn_w, btn_h)
+                    render()
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if capture_btn.collidepoint(event.pos):
+                        return 'capture'
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return 'quit'
+            self.clock.tick(30)
+
     def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional["TrainingLogger"] = None) -> Optional[str]:
         """Display inspection result and wait for user input."""
         cv2, _ = import_cv2_and_numpy()
@@ -370,6 +447,8 @@ class InspectionDisplay:
                         if logger:
                             logger.log_inspection(image_path, passed, details, 'review', description)
                         return 'review'
+                    elif self.buttons['set_ref'].collidepoint(mouse_pos):
+                        return 'set_ref'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     return 'quit'
 
@@ -570,6 +649,44 @@ class ThresholdTrainer:
         return applied
 
 
+def capture_reference(config: dict) -> tuple[bool, str]:
+    """Capture a new golden reference for the active project.
+
+    Returns (success, message).
+    """
+    result_code, image_path, stderr_text = capture_to_temp(config)
+    if result_code != 0:
+        msg = f"Reference capture failed: {stderr_text}"
+        cleanup_temp_image()
+        return False, msg
+
+    try:
+        cv2, np = import_cv2_and_numpy()
+        inspection_cfg = config.get("inspection", {})
+        roi_image, _, mask, _, _, _ = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
+        ref_erode = int(inspection_cfg.get("reference_erode_iterations", 1))
+        ref_dilate = int(inspection_cfg.get("reference_dilate_iterations", 1))
+        mask = erode_mask(mask, ref_erode, cv2, np)
+        mask = dilate_mask(mask, ref_dilate, cv2, np)
+
+        white_pixels = int((mask > 0).sum())
+        min_white = int(inspection_cfg.get("min_white_pixels", 100))
+        if white_pixels < min_white:
+            return False, f"Too few white pixels ({white_pixels}). Adjust ROI or threshold."
+
+        active_paths = get_active_runtime_paths()
+        ref_mask_path = active_paths["reference_mask"]
+        ref_image_path = active_paths["reference_image"]
+        ref_mask_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(ref_mask_path), mask)
+        cv2.imwrite(str(ref_image_path), roi_image)
+        return True, f"Reference saved ({white_pixels} white pixels)"
+    except Exception as exc:
+        return False, f"Reference capture error: {exc}"
+    finally:
+        cleanup_temp_image()
+
+
 def run_interactive_training(config: dict) -> int:
     """Run interactive training mode."""
     if not PYGAME_AVAILABLE:
@@ -600,10 +717,28 @@ def run_interactive_training(config: dict) -> int:
         print("- Green APPROVE button: Accept the sample")
         print("- Red REJECT button: Reject the sample")
         print("- Yellow REVIEW button: Flag for human review")
-        print("- Close window to exit")
+        print("- Blue SET REF button: Capture a new golden reference")
+        print("- Close window or Esc to exit")
         print("\nDetailed descriptions will appear on screen for each inspection.")
 
         session_count = 0
+
+        # If no reference exists yet, prompt operator to capture one first.
+        if not active_paths["reference_mask"].exists():
+            print("No reference mask found. Prompting operator to capture reference.")
+            action = display.prompt_set_reference()
+            if action == 'quit':
+                return 0
+            display.show_message("Capturing reference...", display.YELLOW)
+            success, msg = capture_reference(config)
+            print(msg)
+            active_paths = get_active_runtime_paths()
+            if not success:
+                display.show_message(f"Failed: {msg}", display.RED)
+                time.sleep(3)
+                return 1
+            display.show_message(f"Reference saved. Starting training...", display.GREEN)
+            time.sleep(1)
 
         while True:
             # Capture image
@@ -638,6 +773,15 @@ def run_interactive_training(config: dict) -> int:
 
                 if feedback == 'quit':
                     break
+                elif feedback == 'set_ref':
+                    display.show_message("Capturing reference...", display.YELLOW)
+                    success, msg = capture_reference(config)
+                    print(msg)
+                    active_paths = get_active_runtime_paths()
+                    color = display.GREEN if success else display.RED
+                    display.show_message(msg, color)
+                    time.sleep(1.5)
+                    continue
                 elif feedback in ['approve', 'reject', 'review']:
                     trainer.record_feedback(details, feedback)
                     session_count += 1
