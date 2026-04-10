@@ -201,7 +201,9 @@ class ProjectManagerGUI:
             return
 
         item = self.tree.item(selection[0])
-        project_name = item['values'][0]
+        project_name = str(item["values"][0]).strip()
+
+        print(f"DEBUG switch_to_project: value={project_name!r}, type={type(project_name)}")
 
         if switch_project(project_name):
             self.refresh_projects()

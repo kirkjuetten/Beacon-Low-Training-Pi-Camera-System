@@ -42,6 +42,13 @@ from inspection_system.app.capture_test import save_debug_outputs
 class InspectionDisplay:
     """GUI display for inspection results with interactive feedback."""
 
+    def cleanup(self) -> None:
+        """Clean up display resources."""
+        try:
+            pygame.quit()
+        except Exception:
+            pass
+
     def __init__(self, width: int = 1024, height: int = 768):
         if not PYGAME_AVAILABLE:
             raise ImportError("pygame is required for interactive display. Install with: pip install pygame")
@@ -184,7 +191,7 @@ class InspectionDisplay:
             text = self.small_font.render(line, True, self.WHITE)
             self.screen.blit(text, (10, y_offset + i * 22))
 
-    def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional[TrainingLogger] = None) -> Optional[str]:
+    def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional["TrainingLogger"] = None) -> Optional[str]:
         """Display inspection result and wait for user input."""
         cv2, _ = import_cv2_and_numpy()
 

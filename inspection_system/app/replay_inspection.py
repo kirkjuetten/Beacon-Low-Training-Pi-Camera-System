@@ -5,7 +5,14 @@ import json
 import sys
 from pathlib import Path
 
-from inspection_system.app.camera_interface import CONFIG_FILE, REFERENCE_MASK, REFERENCE_IMAGE, load_config, import_cv2_and_numpy
+from inspection_system.app import camera_interface
+from inspection_system.app.camera_interface import (
+    CONFIG_FILE,
+    REFERENCE_MASK,
+    REFERENCE_IMAGE,
+    load_config,
+    import_cv2_and_numpy,
+)
 from inspection_system.app.inspection_pipeline import inspect_against_reference
 from inspection_system.app.capture_test import save_debug_outputs
 from inspection_system.app.alignment_utils import align_sample_mask
@@ -17,6 +24,19 @@ from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
 
 VALID_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def _get_reference_mask_path() -> Path:
+    module_mask = getattr(camera_interface, "REFERENCE_MASK", None)
+    local_mask = globals().get("REFERENCE_MASK", None)
+
+    if module_mask is not None and not Path(module_mask).exists():
+        return Path(module_mask)
+
+    if local_mask is not None and not Path(local_mask).exists():
+        return Path(local_mask)
+
+    return Path(module_mask if module_mask is not None else local_mask)
 
 
 def classify_invalid_capture(config: dict, image_path: Path) -> str | None:
@@ -42,8 +62,9 @@ def classify_invalid_capture(config: dict, image_path: Path) -> str | None:
         if x < 0 or y < 0 or x + w > image.shape[1] or y + h > image.shape[0]:
             return "Configured ROI is outside image bounds."
 
-    if not REFERENCE_MASK.exists():
-        return f"Reference mask is missing: {REFERENCE_MASK}"
+    reference_mask = _get_reference_mask_path()
+    if not reference_mask.exists():
+        return f"Reference mask is missing: {reference_mask}"
 
     return None
 
@@ -57,12 +78,14 @@ def inspect_file(config: dict, image_path: Path) -> dict:
             "reason": invalid_reason,
         }
 
+    reference_mask = _get_reference_mask_path()
+
     try:
         passed, details = inspect_against_reference(
             config,
             image_path,
             make_binary_mask,
-            REFERENCE_MASK,
+            reference_mask,
             REFERENCE_IMAGE,
             align_sample_mask,
             build_reference_regions,
@@ -87,7 +110,7 @@ def inspect_file(config: dict, image_path: Path) -> dict:
             "status": INVALID_CAPTURE,
             "reason": str(exc),
         }
-    except Exception as exc:  # pragma: no cover - defensive CLI path
+    except Exception as exc:
         return {
             "image": str(image_path),
             "status": CONFIG_ERROR,
@@ -135,7 +158,7 @@ def print_usage() -> None:
     print("  python3 inspection_system/app/replay_inspection.py inspect-file <image_path>")
     print("  python3 inspection_system/app/replay_inspection.py inspect-folder <folder_path>")
     print(f"  Config file expected at: {CONFIG_FILE}")
-    print(f"  Reference mask expected at: {REFERENCE_MASK}")
+    print(f"  Reference mask expected at: {_get_reference_mask_path()}")
 
 
 def main() -> int:
