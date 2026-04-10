@@ -40,6 +40,9 @@ from inspection_system.app.capture_test import save_debug_outputs
 class InspectionDisplay:
     """GUI display for inspection results with interactive feedback."""
 
+    MIN_WIDTH = 640
+    MIN_HEIGHT = 420
+
     def cleanup(self) -> None:
         """Clean up display resources."""
         try:
@@ -52,7 +55,13 @@ class InspectionDisplay:
             raise ImportError("pygame is required for interactive display. Install with: pip install pygame")
 
         pygame.init()
-        self.screen = pygame.display.set_mode((width, height))
+        display_info = pygame.display.Info()
+        max_width = max(self.MIN_WIDTH, display_info.current_w - 40)
+        max_height = max(self.MIN_HEIGHT, display_info.current_h - 80)
+        initial_width = min(max(width, self.MIN_WIDTH), max_width)
+        initial_height = min(max(height, self.MIN_HEIGHT), max_height)
+
+        self.screen = pygame.display.set_mode((initial_width, initial_height), pygame.RESIZABLE)
         pygame.display.set_caption("Beacon Inspection Training")
         self.font = pygame.font.Font(None, 24)
         self.small_font = pygame.font.Font(None, 18)
@@ -66,40 +75,119 @@ class InspectionDisplay:
         self.BLACK = (0, 0, 0)
         self.GRAY = (128, 128, 128)
 
-        # Button definitions
-        self.buttons = {
-            'approve': pygame.Rect(width - 200, height - 100, 80, 40),
-            'reject': pygame.Rect(width - 100, height - 100, 80, 40),
-            'review': pygame.Rect(width - 300, height - 100, 80, 40),
+        self.buttons: Dict[str, pygame.Rect] = {}
+        self.layout: Dict[str, pygame.Rect] = {}
+        self._reflow_layout()
+
+    @staticmethod
+    def _clamp(value: int, lower: int, upper: int) -> int:
+        return max(lower, min(value, upper))
+
+    def _update_fonts(self) -> None:
+        _, height = self.screen.get_size()
+        base_size = self._clamp(int(height * 0.035), 20, 34)
+        small_size = self._clamp(int(height * 0.026), 15, 26)
+        self.font = pygame.font.Font(None, base_size)
+        self.small_font = pygame.font.Font(None, small_size)
+
+    def _reflow_layout(self) -> None:
+        width, height = self.screen.get_size()
+        pad = self._clamp(int(height * 0.02), 8, 20)
+
+        status_h = self._clamp(int(height * 0.07), 30, 56)
+        controls_h = self._clamp(int(height * 0.17), 70, 140)
+        metrics_h = self._clamp(int(height * 0.16), 70, 130)
+        description_h = self._clamp(int(height * 0.18), 70, 140)
+
+        available_for_image = height - (status_h + controls_h + metrics_h + description_h + pad * 5)
+        image_h = max(80, available_for_image)
+
+        status_rect = pygame.Rect(pad, pad, width - pad * 2, status_h)
+        image_rect = pygame.Rect(pad, status_rect.bottom + pad, width - pad * 2, image_h)
+        metrics_rect = pygame.Rect(pad, image_rect.bottom + pad, width - pad * 2, metrics_h)
+        description_rect = pygame.Rect(pad, metrics_rect.bottom + pad, width - pad * 2, description_h)
+        controls_rect = pygame.Rect(pad, height - controls_h - pad, width - pad * 2, controls_h)
+
+        self.layout = {
+            "status_rect": status_rect,
+            "image_rect": image_rect,
+            "metrics_rect": metrics_rect,
+            "description_rect": description_rect,
+            "controls_rect": controls_rect,
         }
 
-    def draw_image_with_border(self, surface: pygame.Surface, border_color: tuple, border_width: int = 10):
-        """Draw an image with a colored border."""
-        # Draw border
-        border_rect = surface.get_rect()
-        pygame.draw.rect(self.screen, border_color, border_rect, border_width)
+        self._update_fonts()
+        self._layout_buttons(controls_rect)
 
-        # Draw image
-        self.screen.blit(surface, (border_width, border_width))
+    def _layout_buttons(self, controls_rect: pygame.Rect) -> None:
+        pad = self._clamp(int(controls_rect.height * 0.14), 6, 16)
+        gap = self._clamp(int(controls_rect.width * 0.02), 8, 24)
+        button_h = self._clamp(int(controls_rect.height * 0.58), 36, 56)
+        button_w = self._clamp(int(controls_rect.width * 0.26), 88, 220)
+        needed_width = button_w * 3 + gap * 2
+
+        if needed_width <= controls_rect.width - pad * 2:
+            x_start = controls_rect.x + (controls_rect.width - needed_width) // 2
+            y = controls_rect.y + (controls_rect.height - button_h) // 2
+            self.buttons = {
+                "review": pygame.Rect(x_start, y, button_w, button_h),
+                "approve": pygame.Rect(x_start + button_w + gap, y, button_w, button_h),
+                "reject": pygame.Rect(x_start + (button_w + gap) * 2, y, button_w, button_h),
+            }
+            return
+
+        # Fall back to vertical layout for very narrow displays.
+        stack_w = self._clamp(controls_rect.width - pad * 2, 80, 200)
+        stack_gap = self._clamp(int(controls_rect.height * 0.08), 4, 12)
+        stack_h = self._clamp((controls_rect.height - stack_gap * 2) // 3, 28, 44)
+        x = controls_rect.x + (controls_rect.width - stack_w) // 2
+        y0 = controls_rect.y + (controls_rect.height - (stack_h * 3 + stack_gap * 2)) // 2
+        self.buttons = {
+            "review": pygame.Rect(x, y0, stack_w, stack_h),
+            "approve": pygame.Rect(x, y0 + stack_h + stack_gap, stack_w, stack_h),
+            "reject": pygame.Rect(x, y0 + (stack_h + stack_gap) * 2, stack_w, stack_h),
+        }
+
+    def draw_image_with_border(self, surface: pygame.Surface, border_color: tuple, image_rect: pygame.Rect, border_width: int = 4):
+        """Draw an image with a colored border."""
+        draw_rect = surface.get_rect()
+        draw_rect.center = image_rect.center
+        draw_rect.clamp_ip(image_rect)
+        border_rect = draw_rect.inflate(border_width * 2, border_width * 2)
+        pygame.draw.rect(self.screen, border_color, border_rect, border_width)
+        self.screen.blit(surface, draw_rect.topleft)
+
+    def _scale_surface_to_rect(self, surface: pygame.Surface, target_rect: pygame.Rect) -> pygame.Surface:
+        img_width, img_height = surface.get_size()
+        available_w = max(1, target_rect.width - 8)
+        available_h = max(1, target_rect.height - 8)
+        scale = min(available_w / img_width, available_h / img_height)
+        scale = min(scale, 1.0)
+        new_width = max(1, int(img_width * scale))
+        new_height = max(1, int(img_height * scale))
+        return pygame.transform.smoothscale(surface, (new_width, new_height))
 
     def draw_buttons(self):
         """Draw interactive buttons."""
-        # Approve button (green)
-        pygame.draw.rect(self.screen, self.GREEN, self.buttons['approve'])
-        approve_text = self.small_font.render("APPROVE", True, self.BLACK)
-        self.screen.blit(approve_text, (self.buttons['approve'].x + 5, self.buttons['approve'].y + 10))
+        button_colors = {
+            "approve": self.GREEN,
+            "reject": self.RED,
+            "review": self.YELLOW,
+        }
+        button_labels = {
+            "approve": "APPROVE",
+            "reject": "REJECT",
+            "review": "REVIEW",
+        }
 
-        # Reject button (red)
-        pygame.draw.rect(self.screen, self.RED, self.buttons['reject'])
-        reject_text = self.small_font.render("REJECT", True, self.BLACK)
-        self.screen.blit(reject_text, (self.buttons['reject'].x + 10, self.buttons['reject'].y + 10))
+        for key in ["review", "approve", "reject"]:
+            button_rect = self.buttons[key]
+            pygame.draw.rect(self.screen, button_colors[key], button_rect, border_radius=6)
+            text = self.small_font.render(button_labels[key], True, self.BLACK)
+            text_rect = text.get_rect(center=button_rect.center)
+            self.screen.blit(text, text_rect)
 
-        # Review button (yellow)
-        pygame.draw.rect(self.screen, self.YELLOW, self.buttons['review'])
-        review_text = self.small_font.render("REVIEW", True, self.BLACK)
-        self.screen.blit(review_text, (self.buttons['review'].x + 5, self.buttons['review'].y + 10))
-
-    def draw_metrics(self, details: dict, y_offset: int = 50):
+    def draw_metrics(self, details: dict, area: pygame.Rect):
         """Draw inspection metrics on screen."""
         metrics = [
             f"Required Coverage: {details.get('required_coverage', 0):.4f} (min {details.get('min_required_coverage', 0):.4f})",
@@ -113,6 +201,14 @@ class InspectionDisplay:
             metrics.append(f"SSIM: {details['ssim']:.4f}")
         if 'anomaly_score' in details:
             metrics.append(f"Anomaly Score: {details['anomaly_score']:.4f}")
+
+        y = area.y
+        line_height = self.small_font.get_linesize() + 2
+        max_lines = max(1, area.height // line_height)
+        for line in metrics[:max_lines]:
+            text = self.small_font.render(line, True, self.WHITE)
+            self.screen.blit(text, (area.x, y))
+            y += line_height
 
     def generate_inspection_description(self, passed: bool, details: dict) -> str:
         """Generate human-readable description of inspection results."""
@@ -164,10 +260,10 @@ class InspectionDisplay:
 
         return ". ".join(descriptions)
 
-    def draw_description(self, description: str, y_offset: int = 200):
+    def draw_description(self, description: str, area: pygame.Rect):
         """Draw the inspection description on screen."""
         # Split description into lines that fit the screen
-        screen_width = self.screen.get_size()[0] - 20
+        screen_width = area.width
         words = description.split()
         lines = []
         current_line = ""
@@ -185,9 +281,11 @@ class InspectionDisplay:
             lines.append(current_line)
 
         # Draw each line
-        for i, line in enumerate(lines[:6]):  # Limit to 6 lines
+        line_height = self.small_font.get_linesize() + 2
+        max_lines = max(1, area.height // line_height)
+        for i, line in enumerate(lines[:max_lines]):
             text = self.small_font.render(line, True, self.WHITE)
-            self.screen.blit(text, (10, y_offset + i * 22))
+            self.screen.blit(text, (area.x, area.y + i * line_height))
 
     def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional["TrainingLogger"] = None) -> Optional[str]:
         """Display inspection result and wait for user input."""
@@ -202,16 +300,7 @@ class InspectionDisplay:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # Create pygame surface
-        surface = pygame.surfarray.make_surface(image.swapaxes(0, 1))
-
-        # Scale to fit screen while maintaining aspect ratio
-        screen_width, screen_height = self.screen.get_size()
-        img_width, img_height = surface.get_size()
-        scale = min((screen_width - 20) / img_width, (screen_height - 250) / img_height)  # More space for description
-        if scale < 1:
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-            surface = pygame.transform.smoothscale(surface, (new_width, new_height))
+        source_surface = pygame.surfarray.make_surface(image.swapaxes(0, 1))
 
         # Determine border color and generate description
         if passed:
@@ -235,34 +324,40 @@ class InspectionDisplay:
         # Generate human-readable description
         description = self.generate_inspection_description(passed, details)
 
-        # Clear screen
-        self.screen.fill(self.BLACK)
+        def render_frame() -> None:
+            self._reflow_layout()
+            self.screen.fill(self.BLACK)
 
-        # Draw image with border
-        self.draw_image_with_border(surface, border_color)
+            status_rect = self.layout["status_rect"]
+            image_rect = self.layout["image_rect"]
+            metrics_rect = self.layout["metrics_rect"]
+            description_rect = self.layout["description_rect"]
 
-        # Draw status
-        status_surface = self.font.render(f"Status: {status_text}", True, border_color)
-        self.screen.blit(status_surface, (10, 10))
+            surface = self._scale_surface_to_rect(source_surface, image_rect)
+            self.draw_image_with_border(surface, border_color, image_rect)
 
-        # Draw metrics
-        self.draw_metrics(details)
+            status_surface = self.font.render(f"Status: {status_text}", True, border_color)
+            self.screen.blit(status_surface, status_rect.topleft)
 
-        # Draw description
-        self.draw_description(description)
+            self.draw_metrics(details, metrics_rect)
+            self.draw_description(description, description_rect)
+            self.draw_buttons()
+            pygame.display.flip()
 
-        # Draw buttons
-        self.draw_buttons()
-
-        pygame.display.flip()
+        render_frame()
 
         # Wait for user input
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return 'quit'
+                elif event.type == pygame.VIDEORESIZE:
+                    new_width = max(event.w, self.MIN_WIDTH)
+                    new_height = max(event.h, self.MIN_HEIGHT)
+                    self.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
+                    render_frame()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pos = pygame.mouse.get_pos()
+                    mouse_pos = event.pos
                     if self.buttons['approve'].collidepoint(mouse_pos):
                         if logger:
                             logger.log_inspection(image_path, passed, details, 'approve', description)
@@ -275,6 +370,8 @@ class InspectionDisplay:
                         if logger:
                             logger.log_inspection(image_path, passed, details, 'review', description)
                         return 'review'
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return 'quit'
 
             self.clock.tick(30)
 
