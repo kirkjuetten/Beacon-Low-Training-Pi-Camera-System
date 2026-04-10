@@ -20,6 +20,68 @@ from inspection_system.app.runtime_controller import (
 from inspection_system.app.ui_launcher import launch_dashboard, launch_project_manager
 
 
+def print_usage() -> None:
+    print("Usage:")
+    print("  python3 capture_test.py capture")
+    print("  python3 capture_test.py set-reference")
+    print("  python3 capture_test.py inspect")
+    print("  python3 capture_test.py train")
+    print("  python3 capture_test.py dashboard")
+    print("  python3 capture_test.py create-project <name> [description]")
+    print("  python3 capture_test.py switch-project <name>")
+    print("  python3 capture_test.py list-projects")
+    print("  python3 capture_test.py project-manager  # GUI")
+
+
+def command_capture(config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return run_capture_only(config)
+
+
+def command_set_reference(config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return set_reference(config)
+
+
+def command_inspect(config: dict, indicator: IndicatorLED, _argv: list[str]) -> int:
+    return run_capture_and_inspect(config, indicator)
+
+
+def command_train(config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return run_interactive_training(config)
+
+
+def command_create_project(_config: dict, _indicator: IndicatorLED, argv: list[str]) -> int:
+    return handle_create_project(argv)
+
+
+def command_switch_project(_config: dict, _indicator: IndicatorLED, argv: list[str]) -> int:
+    return handle_switch_project(argv)
+
+
+def command_list_projects(_config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return handle_list_projects()
+
+
+def command_project_manager(_config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return launch_project_manager()
+
+
+def command_dashboard(_config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return launch_dashboard()
+
+
+COMMAND_HANDLERS = {
+    "capture": command_capture,
+    "set-reference": command_set_reference,
+    "inspect": command_inspect,
+    "train": command_train,
+    "create-project": command_create_project,
+    "switch-project": command_switch_project,
+    "list-projects": command_list_projects,
+    "project-manager": command_project_manager,
+    "dashboard": command_dashboard,
+}
+
+
 def main() -> int:
     config = load_config()
     mode = sys.argv[1] if len(sys.argv) > 1 else "capture"
@@ -33,41 +95,11 @@ def main() -> int:
     )
 
     try:
-        if mode == "capture":
-            return run_capture_only(config)
-        if mode == "set-reference":
-            return set_reference(config)
-        if mode == "inspect":
-            return run_capture_and_inspect(config, indicator)
-        if mode == "train":
-            return run_interactive_training(config)
-
-        if mode == "create-project":
-            return handle_create_project(sys.argv)
-
-        if mode == "switch-project":
-            return handle_switch_project(sys.argv)
-
-        if mode == "list-projects":
-            return handle_list_projects()
-
-        if mode == "project-manager":
-            return launch_project_manager()
-
-        if mode == "dashboard":
-            return launch_dashboard()
-
-        print("Usage:")
-        print("  python3 capture_test.py capture")
-        print("  python3 capture_test.py set-reference")
-        print("  python3 capture_test.py inspect")
-        print("  python3 capture_test.py train")
-        print("  python3 capture_test.py dashboard")
-        print("  python3 capture_test.py create-project <name> [description]")
-        print("  python3 capture_test.py switch-project <name>")
-        print("  python3 capture_test.py list-projects")
-        print("  python3 capture_test.py project-manager  # GUI")
-        return 2
+        handler = COMMAND_HANDLERS.get(mode)
+        if handler is None:
+            print_usage()
+            return 2
+        return handler(config, indicator, sys.argv)
     finally:
         indicator.cleanup()
 
