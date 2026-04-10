@@ -74,6 +74,7 @@ class InspectionDisplay:
         self.WHITE = (255, 255, 255)
         self.BLACK = (0, 0, 0)
         self.GRAY = (128, 128, 128)
+        self.reference_button_label = "SET REF"
 
         self.buttons: Dict[str, pygame.Rect] = {}
         self.layout: Dict[str, pygame.Rect] = {}
@@ -170,6 +171,15 @@ class InspectionDisplay:
         new_height = max(1, int(img_height * scale))
         return pygame.transform.smoothscale(surface, (new_width, new_height))
 
+    def load_surface_from_image(self, image_path: Path) -> Optional[pygame.Surface]:
+        """Load an image path into a pygame surface for display."""
+        cv2, _ = import_cv2_and_numpy()
+        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if image is None:
+            return None
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return pygame.surfarray.make_surface(image.swapaxes(0, 1))
+
     def draw_buttons(self):
         """Draw interactive buttons."""
         BLUE = (70, 130, 220)
@@ -183,7 +193,7 @@ class InspectionDisplay:
             "approve": "APPROVE",
             "reject": "REJECT",
             "review": "REVIEW",
-            "set_ref": "SET REF",
+            "set_ref": self.reference_button_label,
         }
 
         for key in ["review", "approve", "reject", "set_ref"]:
@@ -305,79 +315,109 @@ class InspectionDisplay:
         pygame.display.flip()
 
     def prompt_set_reference(self) -> str:
-        """Show a full-screen prompt asking the operator to capture a reference.
+        """Deprecated compatibility wrapper for older callers."""
+        return 'capture'
 
-        Returns 'capture' when the operator presses the capture button, or
-        'quit' if they close the window or press Escape.
-        """
-        self._reflow_layout()
-        width, height = self.screen.get_size()
-        pad = self._clamp(int(height * 0.04), 12, 40)
-        btn_w = self._clamp(int(width * 0.35), 160, 360)
-        btn_h = self._clamp(int(height * 0.13), 44, 80)
-        capture_btn = pygame.Rect(
-            (width - btn_w) // 2,
-            height // 2 + pad,
-            btn_w,
-            btn_h,
-        )
+    def run_reference_preview(self, config: dict, has_reference: bool) -> str:
+        """Show a live-ish preview loop until the operator captures/replaces the reference."""
+        self.reference_button_label = "REPLACE REF" if has_reference else "CAPTURE REF"
+        last_surface: Optional[pygame.Surface] = None
+        last_image_path: Optional[Path] = None
+        status_text = "Live preview active"
+        status_color = self.YELLOW
+        next_capture_time = 0.0
 
         def render() -> None:
+            self._reflow_layout()
             self.screen.fill(self.BLACK)
-            lines = [
-                "No reference found for this project.",
-                "Point the camera at the golden reference sample,",
-                "then press CAPTURE REFERENCE.",
+
+            status_rect = self.layout["status_rect"]
+            image_rect = self.layout["image_rect"]
+            metrics_rect = self.layout["metrics_rect"]
+            description_rect = self.layout["description_rect"]
+
+            title = "Reference Preview"
+            title_surface = self.font.render(title, True, status_color)
+            self.screen.blit(title_surface, status_rect.topleft)
+
+            if last_surface is not None:
+                scaled_surface = self._scale_surface_to_rect(last_surface, image_rect)
+                self.draw_image_with_border(scaled_surface, status_color, image_rect)
+            else:
+                placeholder = self.font.render("Waiting for camera preview...", True, self.WHITE)
+                placeholder_rect = placeholder.get_rect(center=image_rect.center)
+                self.screen.blit(placeholder, placeholder_rect)
+
+            metric_lines = [
+                f"Reference file: {'present' if has_reference else 'missing'}",
+                f"Action: {self.reference_button_label}",
+                "Camera preview refreshes automatically.",
             ]
-            line_h = self.font.get_linesize() + 4
-            y_start = height // 2 - (len(lines) * line_h) - pad
-            for i, line in enumerate(lines):
-                surf = self.font.render(line, True, self.YELLOW)
-                rect = surf.get_rect(centerx=width // 2, top=y_start + i * line_h)
-                self.screen.blit(surf, rect)
-            BLUE = (70, 130, 220)
-            pygame.draw.rect(self.screen, BLUE, capture_btn, border_radius=8)
-            label = self.font.render("CAPTURE REFERENCE", True, self.WHITE)
-            self.screen.blit(label, label.get_rect(center=capture_btn.center))
+            y = metrics_rect.y
+            line_height = self.small_font.get_linesize() + 2
+            for line in metric_lines:
+                text = self.small_font.render(line, True, self.WHITE)
+                self.screen.blit(text, (metrics_rect.x, y))
+                y += line_height
+
+            description = (
+                "Point the camera at the golden reference sample. "
+                f"Press {self.reference_button_label} when the framing looks correct."
+            )
+            self.draw_description(description, description_rect)
+            self.draw_buttons()
+
             pygame.display.flip()
 
-        render()
-
         while True:
+            now = time.time()
+            if now >= next_capture_time:
+                result_code, image_path, stderr_text = capture_to_temp(config)
+                if result_code == 0:
+                    surface = self.load_surface_from_image(image_path)
+                    if surface is not None:
+                        last_surface = surface
+                        last_image_path = image_path
+                        status_text = "Live preview active"
+                        status_color = self.GREEN if has_reference else self.YELLOW
+                    else:
+                        status_text = "Preview frame could not be read"
+                        status_color = self.RED
+                else:
+                    status_text = f"Preview capture failed: {stderr_text or 'unknown error'}"
+                    status_color = self.RED
+                next_capture_time = now + 0.35
+                render()
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    cleanup_temp_image()
                     return 'quit'
                 elif event.type == pygame.VIDEORESIZE:
                     new_w = max(event.w, self.MIN_WIDTH)
                     new_h = max(event.h, self.MIN_HEIGHT)
                     self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
-                    width, height = self.screen.get_size()
-                    pad = self._clamp(int(height * 0.04), 12, 40)
-                    btn_w = self._clamp(int(width * 0.35), 160, 360)
-                    btn_h = self._clamp(int(height * 0.13), 44, 80)
-                    capture_btn = pygame.Rect((width - btn_w) // 2, height // 2 + pad, btn_w, btn_h)
                     render()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if capture_btn.collidepoint(event.pos):
-                        return 'capture'
+                    if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(event.pos):
+                        cleanup_temp_image()
+                        return str(last_image_path) if last_image_path is not None else 'capture'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    cleanup_temp_image()
                     return 'quit'
+
+            # Re-render if status changed and no frame has arrived yet.
+            if last_surface is None and status_text:
+                render()
+
             self.clock.tick(30)
 
     def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional["TrainingLogger"] = None) -> Optional[str]:
         """Display inspection result and wait for user input."""
-        cv2, _ = import_cv2_and_numpy()
-
-        # Load and prepare image
-        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-        if image is None:
+        source_surface = self.load_surface_from_image(image_path)
+        if source_surface is None:
             return None
-
-        # Convert BGR to RGB for pygame
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        # Create pygame surface
-        source_surface = pygame.surfarray.make_surface(image.swapaxes(0, 1))
+        self.reference_button_label = "REPLACE REF"
 
         # Determine border color and generate description
         if passed:
@@ -649,17 +689,8 @@ class ThresholdTrainer:
         return applied
 
 
-def capture_reference(config: dict) -> tuple[bool, str]:
-    """Capture a new golden reference for the active project.
-
-    Returns (success, message).
-    """
-    result_code, image_path, stderr_text = capture_to_temp(config)
-    if result_code != 0:
-        msg = f"Reference capture failed: {stderr_text}"
-        cleanup_temp_image()
-        return False, msg
-
+def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str]:
+    """Create the active project's reference assets from an existing captured image."""
     try:
         cv2, np = import_cv2_and_numpy()
         inspection_cfg = config.get("inspection", {})
@@ -683,6 +714,18 @@ def capture_reference(config: dict) -> tuple[bool, str]:
         return True, f"Reference saved ({white_pixels} white pixels)"
     except Exception as exc:
         return False, f"Reference capture error: {exc}"
+
+
+def capture_reference(config: dict) -> tuple[bool, str]:
+    """Capture a new golden reference for the active project."""
+    result_code, image_path, stderr_text = capture_to_temp(config)
+    if result_code != 0:
+        msg = f"Reference capture failed: {stderr_text}"
+        cleanup_temp_image()
+        return False, msg
+
+    try:
+        return save_reference_from_image(config, image_path)
     finally:
         cleanup_temp_image()
 
@@ -723,22 +766,27 @@ def run_interactive_training(config: dict) -> int:
 
         session_count = 0
 
-        # If no reference exists yet, prompt operator to capture one first.
+        # If no reference exists yet, show live preview until the operator captures one.
         if not active_paths["reference_mask"].exists():
             print("No reference mask found. Prompting operator to capture reference.")
-            action = display.prompt_set_reference()
-            if action == 'quit':
-                return 0
-            display.show_message("Capturing reference...", display.YELLOW)
-            success, msg = capture_reference(config)
-            print(msg)
-            active_paths = get_active_runtime_paths()
-            if not success:
-                display.show_message(f"Failed: {msg}", display.RED)
-                time.sleep(3)
-                return 1
-            display.show_message(f"Reference saved. Starting training...", display.GREEN)
-            time.sleep(1)
+            while True:
+                action = display.run_reference_preview(config, has_reference=False)
+                if action == 'quit':
+                    return 0
+                if action in {'capture', '', None}:
+                    display.show_message("Waiting for preview frame...", display.YELLOW)
+                    time.sleep(1)
+                    continue
+                display.show_message("Saving reference...", display.YELLOW)
+                success, msg = save_reference_from_image(config, Path(action))
+                print(msg)
+                active_paths = get_active_runtime_paths()
+                if success:
+                    display.show_message("Reference saved. Starting training...", display.GREEN)
+                    time.sleep(1)
+                    break
+                display.show_message(msg, display.RED)
+                time.sleep(2)
 
         while True:
             # Capture image
@@ -774,13 +822,23 @@ def run_interactive_training(config: dict) -> int:
                 if feedback == 'quit':
                     break
                 elif feedback == 'set_ref':
-                    display.show_message("Capturing reference...", display.YELLOW)
-                    success, msg = capture_reference(config)
-                    print(msg)
-                    active_paths = get_active_runtime_paths()
-                    color = display.GREEN if success else display.RED
-                    display.show_message(msg, color)
-                    time.sleep(1.5)
+                    while True:
+                        action = display.run_reference_preview(config, has_reference=active_paths["reference_mask"].exists())
+                        if action == 'quit':
+                            break
+                        if action in {'capture', '', None}:
+                            display.show_message("Waiting for preview frame...", display.YELLOW)
+                            time.sleep(1)
+                            continue
+                        display.show_message("Saving reference...", display.YELLOW)
+                        success, msg = save_reference_from_image(config, Path(action))
+                        print(msg)
+                        active_paths = get_active_runtime_paths()
+                        color = display.GREEN if success else display.RED
+                        display.show_message(msg, color)
+                        time.sleep(1.5)
+                        if success:
+                            break
                     continue
                 elif feedback in ['approve', 'reject', 'review']:
                     trainer.record_feedback(details, feedback)
