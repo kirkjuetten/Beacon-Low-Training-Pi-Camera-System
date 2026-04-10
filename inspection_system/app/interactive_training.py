@@ -328,6 +328,38 @@ class InspectionDisplay:
         self.screen.blit(text, text_rect)
         pygame.display.flip()
 
+    def flash_action_confirmation(self, message: str, color: tuple, duration_ms: int = 450) -> bool:
+        """Flash a short confirmation overlay. Returns True if user closes the window."""
+        self._reflow_layout()
+        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 120))
+        self.screen.blit(overlay, (0, 0))
+
+        msg_surface = self.font.render(message, True, color)
+        msg_rect = msg_surface.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2))
+        pad_x = 20
+        pad_y = 14
+        badge_rect = pygame.Rect(
+            msg_rect.x - pad_x,
+            msg_rect.y - pad_y,
+            msg_rect.width + pad_x * 2,
+            msg_rect.height + pad_y * 2,
+        )
+        pygame.draw.rect(self.screen, self.BLACK, badge_rect, border_radius=10)
+        pygame.draw.rect(self.screen, color, badge_rect, 2, border_radius=10)
+        self.screen.blit(msg_surface, msg_rect)
+        pygame.display.flip()
+
+        end_tick = pygame.time.get_ticks() + duration_ms
+        while pygame.time.get_ticks() < end_tick:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return True
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return True
+            self.clock.tick(60)
+        return False
+
     def prompt_set_reference(self) -> str:
         """Deprecated compatibility wrapper for older callers."""
         return 'capture'
@@ -488,16 +520,24 @@ class InspectionDisplay:
                     if self.buttons['approve'].collidepoint(mouse_pos):
                         if logger:
                             logger.log_inspection(image_path, passed, details, 'approve', description)
+                        if self.flash_action_confirmation("APPROVED", self.GREEN):
+                            return 'quit'
                         return 'approve'
                     elif self.buttons['reject'].collidepoint(mouse_pos):
                         if logger:
                             logger.log_inspection(image_path, passed, details, 'reject', description)
+                        if self.flash_action_confirmation("REJECTED", self.RED):
+                            return 'quit'
                         return 'reject'
                     elif self.buttons['review'].collidepoint(mouse_pos):
                         if logger:
                             logger.log_inspection(image_path, passed, details, 'review', description)
+                        if self.flash_action_confirmation("MARKED FOR REVIEW", self.YELLOW):
+                            return 'quit'
                         return 'review'
                     elif self.buttons['set_ref'].collidepoint(mouse_pos):
+                        if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
+                            return 'quit'
                         return 'set_ref'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     return 'quit'
