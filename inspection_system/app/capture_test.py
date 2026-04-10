@@ -14,7 +14,7 @@ from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.frame_acquisition import cleanup_temp_image, capture_to_temp
-from inspection_system.app.camera_interface import REFERENCE_MASK, REFERENCE_IMAGE, import_cv2_and_numpy, create_project, switch_project, get_current_project, list_projects, load_config, IndicatorLED
+from inspection_system.app.camera_interface import REFERENCE_MASK, REFERENCE_IMAGE, import_cv2_and_numpy, create_project, switch_project, get_current_project, list_projects, load_config, IndicatorLED, get_active_runtime_paths
 
 
 def run_interactive_training(config: dict) -> int:
@@ -29,8 +29,9 @@ def run_interactive_training(config: dict) -> int:
 
 def save_debug_outputs(stem: str, aligned_sample_mask, diff_image) -> dict:
     cv2, _ = import_cv2_and_numpy()
-    debug_mask_path = Path(REFERENCE_MASK).parent / f"{stem}_mask.png"
-    debug_diff_path = Path(REFERENCE_MASK).parent / f"{stem}_diff.png"
+    active_paths = get_active_runtime_paths()
+    debug_mask_path = active_paths["reference_dir"] / f"{stem}_mask.png"
+    debug_diff_path = active_paths["reference_dir"] / f"{stem}_diff.png"
     cv2.imwrite(str(debug_mask_path), aligned_sample_mask)
     cv2.imwrite(str(debug_diff_path), diff_image)
     return {
@@ -89,10 +90,14 @@ def set_reference(config: dict) -> int:
             print("Adjust ROI / threshold before using this reference.")
             return 3
 
-        cv2.imwrite(str(REFERENCE_MASK), mask)
-        cv2.imwrite(str(REFERENCE_IMAGE), roi_image)
-        print(f"Saved reference mask: {REFERENCE_MASK}")
-        print(f"Saved reference image: {REFERENCE_IMAGE}")
+        active_paths = get_active_runtime_paths()
+        ref_mask_path = active_paths["reference_mask"]
+        ref_image_path = active_paths["reference_image"]
+        ref_mask_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(ref_mask_path), mask)
+        cv2.imwrite(str(ref_image_path), roi_image)
+        print(f"Saved reference mask: {ref_mask_path}")
+        print(f"Saved reference image: {ref_image_path}")
         print(f"Reference white pixels: {white_pixels}")
         return 0
     finally:
@@ -124,12 +129,13 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
         return result_code
 
     try:
+        active_paths = get_active_runtime_paths()
         passed, details = inspect_against_reference(
             config,
             image_path,
             make_binary_mask,
-            REFERENCE_MASK,
-            REFERENCE_IMAGE,
+            active_paths["reference_mask"],
+            active_paths["reference_image"],
             align_sample_mask,
             build_reference_regions,
             compute_section_masks,
