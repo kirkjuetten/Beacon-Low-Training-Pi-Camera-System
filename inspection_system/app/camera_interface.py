@@ -56,6 +56,7 @@ DEFAULT_CONFIG = {
     "alignment": {
         "enabled": True,
         "mode": "moments",
+        "tolerance_profile": "balanced",
         "max_angle_deg": 1.0,
         "max_shift_x": 4,
         "max_shift_y": 3,

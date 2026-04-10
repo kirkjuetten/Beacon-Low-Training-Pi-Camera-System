@@ -4,6 +4,40 @@ from pathlib import Path
 from inspection_system.app.anomaly_detection_utils import detect_anomalies
 
 
+ALIGNMENT_PROFILES = {
+    "strict": {
+        "max_angle_deg": 0.7,
+        "max_shift_x": 2,
+        "max_shift_y": 2,
+    },
+    "balanced": {
+        "max_angle_deg": 1.0,
+        "max_shift_x": 4,
+        "max_shift_y": 3,
+    },
+    "forgiving": {
+        "max_angle_deg": 1.8,
+        "max_shift_x": 7,
+        "max_shift_y": 5,
+    },
+}
+
+
+def resolve_alignment_config(config: dict) -> tuple[dict, str]:
+    """Resolve alignment config, applying optional tolerance profile defaults."""
+    alignment_cfg = dict(config.get("alignment", {}))
+    profile_name = str(alignment_cfg.get("tolerance_profile", "balanced")).strip().lower()
+    if profile_name not in ALIGNMENT_PROFILES:
+        profile_name = "balanced"
+
+    profile_defaults = ALIGNMENT_PROFILES[profile_name]
+    for key, value in profile_defaults.items():
+        alignment_cfg.setdefault(key, value)
+
+    alignment_cfg["tolerance_profile"] = profile_name
+    return alignment_cfg, profile_name
+
+
 def inspect_against_reference(
     config: dict,
     image_path: Path,
@@ -22,6 +56,7 @@ def inspect_against_reference(
     anomaly_detector=None,
 ) -> tuple[bool, dict]:
     inspection_cfg = config.get("inspection", {})
+    alignment_cfg, alignment_profile = resolve_alignment_config(config)
     roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
 
     sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
@@ -48,7 +83,7 @@ def inspect_against_reference(
     aligned_sample_mask, best_angle_deg, best_shift_x, best_shift_y = align_sample_mask(
         sample_mask,
         reference_mask,
-        config.get("alignment", {}),
+        alignment_cfg,
         cv2,
         np,
     )
@@ -108,6 +143,7 @@ def inspect_against_reference(
         "best_angle_deg": best_angle_deg,
         "best_shift_x": best_shift_x,
         "best_shift_y": best_shift_y,
+        "alignment_profile": alignment_profile,
         "required_coverage": required_coverage,
         "outside_allowed_ratio": outside_allowed_ratio,
         "min_section_coverage": min_section_coverage,
