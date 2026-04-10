@@ -42,6 +42,7 @@ class InspectionDisplay:
 
     MIN_WIDTH = 640
     MIN_HEIGHT = 420
+    ALIGNMENT_PROFILES = ["strict", "balanced", "forgiving"]
 
     def cleanup(self) -> None:
         """Clean up display resources."""
@@ -75,6 +76,7 @@ class InspectionDisplay:
         self.BLACK = (0, 0, 0)
         self.GRAY = (128, 128, 128)
         self.reference_button_label = "SET REF"
+        self.alignment_profile_label = "ALIGN BAL"
         self.active_mode = "setup_reference"
         self.visible_buttons: List[str] = []
 
@@ -99,10 +101,16 @@ class InspectionDisplay:
         self.active_mode = mode
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
-            self.visible_buttons = ["review", "approve", "reject", "set_ref"]
+            self.visible_buttons = ["review", "approve", "reject", "set_ref", "align_profile"]
         else:
             self.reference_button_label = "SET REF"
             self.visible_buttons = ["set_ref"]
+
+    def set_alignment_profile_label(self, profile: str) -> None:
+        profile_key = str(profile).strip().lower() or "balanced"
+        if profile_key not in self.ALIGNMENT_PROFILES:
+            profile_key = "balanced"
+        self.alignment_profile_label = f"ALIGN {profile_key[:3].upper()}"
 
     def _reflow_layout(self) -> None:
         width, height = self.screen.get_size()
@@ -197,23 +205,26 @@ class InspectionDisplay:
     def draw_buttons(self):
         """Draw interactive buttons."""
         BLUE = (70, 130, 220)
+        CYAN = (0, 170, 190)
         button_colors = {
             "approve": self.GREEN,
             "reject": self.RED,
             "review": self.YELLOW,
             "set_ref": BLUE,
+            "align_profile": CYAN,
         }
         button_labels = {
             "approve": "APPROVE",
             "reject": "REJECT",
             "review": "REVIEW",
             "set_ref": self.reference_button_label,
+            "align_profile": self.alignment_profile_label,
         }
 
         for key in self.visible_buttons:
             button_rect = self.buttons[key]
             pygame.draw.rect(self.screen, button_colors[key], button_rect, border_radius=6)
-            label_color = self.WHITE if key == "set_ref" else self.BLACK
+            label_color = self.WHITE if key in {"set_ref", "align_profile"} else self.BLACK
             text = self.small_font.render(button_labels[key], True, label_color)
             text_rect = text.get_rect(center=button_rect.center)
             self.screen.blit(text, text_rect)
@@ -232,6 +243,7 @@ class InspectionDisplay:
             metrics.append(f"SSIM: {details['ssim']:.4f}")
         if 'anomaly_score' in details:
             metrics.append(f"Anomaly Score: {details['anomaly_score']:.4f}")
+        metrics.append(f"Alignment profile: {details.get('alignment_profile', 'balanced')}")
 
         y = area.y
         line_height = self.small_font.get_linesize() + 2
@@ -448,8 +460,8 @@ class InspectionDisplay:
                     cleanup_temp_image()
                     return 'quit'
 
-            # Re-render if status changed and no frame has arrived yet.
-            if last_surface is None and status_text:
+            # Keep UI responsive before first camera frame arrives.
+            if last_surface is None:
                 render()
 
             self.clock.tick(30)
@@ -460,6 +472,7 @@ class InspectionDisplay:
         if source_surface is None:
             return None
         self.set_ui_mode("inspection")
+        self.set_alignment_profile_label(str(details.get("alignment_profile", "balanced")))
 
         # Determine border color and generate description
         if passed:
@@ -539,6 +552,10 @@ class InspectionDisplay:
                         if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
                             return 'quit'
                         return 'set_ref'
+                    elif self.buttons['align_profile'].collidepoint(mouse_pos):
+                        if self.flash_action_confirmation("ALIGNMENT PROFILE", (0, 170, 190), duration_ms=300):
+                            return 'quit'
+                        return 'align_profile'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     return 'quit'
 
@@ -780,6 +797,48 @@ def capture_reference(config: dict) -> tuple[bool, str]:
         cleanup_temp_image()
 
 
+def cycle_alignment_profile(config: dict, config_path: Path) -> tuple[str, bool, str]:
+    """Cycle alignment profile and persist it to the active project config."""
+    profiles = ["strict", "balanced", "forgiving"]
+    alignment_cfg = config.setdefault("alignment", {})
+    current = str(alignment_cfg.get("tolerance_profile", "balanced")).strip().lower()
+    if current not in profiles:
+        current = "balanced"
+
+    next_profile = profiles[(profiles.index(current) + 1) % len(profiles)]
+    limits = {
+        "strict": {"max_angle_deg": 0.7, "max_shift_x": 2, "max_shift_y": 2},
+        "balanced": {"max_angle_deg": 1.0, "max_shift_x": 4, "max_shift_y": 3},
+        "forgiving": {"max_angle_deg": 1.8, "max_shift_x": 7, "max_shift_y": 5},
+    }[next_profile]
+
+    alignment_cfg["tolerance_profile"] = next_profile
+    alignment_cfg["max_angle_deg"] = limits["max_angle_deg"]
+    alignment_cfg["max_shift_x"] = limits["max_shift_x"]
+    alignment_cfg["max_shift_y"] = limits["max_shift_y"]
+
+    try:
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                file_config = json.load(f)
+        else:
+            file_config = config.copy()
+
+        file_alignment = file_config.setdefault("alignment", {})
+        file_alignment["tolerance_profile"] = next_profile
+        file_alignment["max_angle_deg"] = limits["max_angle_deg"]
+        file_alignment["max_shift_x"] = limits["max_shift_x"]
+        file_alignment["max_shift_y"] = limits["max_shift_y"]
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(file_config, f, indent=2)
+            f.write("\n")
+
+        return next_profile, True, f"Alignment profile set to {next_profile}"
+    except Exception as exc:
+        return current, False, f"Failed to save alignment profile: {exc}"
+
+
 def run_interactive_training(config: dict) -> int:
     """Run interactive training mode."""
     if not PYGAME_AVAILABLE:
@@ -795,6 +854,7 @@ def run_interactive_training(config: dict) -> int:
 
     display = InspectionDisplay()
     trainer = ThresholdTrainer(active_paths["config_file"], logger)
+    display.set_alignment_profile_label(config.get("alignment", {}).get("tolerance_profile", "balanced"))
 
     led_cfg = config.get("indicator_led", {})
     indicator = IndicatorLED(
@@ -903,6 +963,14 @@ def run_interactive_training(config: dict) -> int:
                         time.sleep(1.5)
                         if success:
                             break
+                    continue
+                elif feedback == 'align_profile':
+                    profile, changed, msg = cycle_alignment_profile(config, active_paths["config_file"])
+                    display.set_alignment_profile_label(profile)
+                    print(msg)
+                    color = display.GREEN if changed else display.RED
+                    display.show_message(msg, color)
+                    time.sleep(1.0)
                     continue
                 elif feedback in ['approve', 'reject', 'review']:
                     trainer.record_feedback(details, feedback)
