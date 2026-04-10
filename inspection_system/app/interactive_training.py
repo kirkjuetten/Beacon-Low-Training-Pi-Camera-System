@@ -117,7 +117,9 @@ class InspectionDisplay:
         pad = self._clamp(int(height * 0.02), 8, 20)
 
         status_h = self._clamp(int(height * 0.07), 30, 56)
-        controls_h = self._clamp(int(height * 0.17), 70, 140)
+        # Inspection mode contains more actions; reserve more vertical room for readable buttons.
+        controls_ratio = 0.25 if self.active_mode == "inspection" else 0.17
+        controls_h = self._clamp(int(height * controls_ratio), 90 if self.active_mode == "inspection" else 70, 180)
         metrics_h = self._clamp(int(height * 0.16), 70, 130)
         description_h = self._clamp(int(height * 0.18), 70, 140)
 
@@ -143,6 +145,42 @@ class InspectionDisplay:
 
     def _layout_buttons(self, controls_rect: pygame.Rect) -> None:
         visible_buttons = self.visible_buttons or ["set_ref"]
+
+        if self.active_mode == "inspection" and len(visible_buttons) == 5:
+            # Use two rows in inspection mode to keep touch targets large.
+            gap_x = self._clamp(int(controls_rect.width * 0.02), 8, 24)
+            gap_y = self._clamp(int(controls_rect.height * 0.10), 8, 18)
+
+            row1_keys = ["review", "approve", "reject"]
+            row2_keys = ["set_ref", "align_profile"]
+
+            row1_h = self._clamp(int(controls_rect.height * 0.38), 34, 58)
+            row2_h = self._clamp(int(controls_rect.height * 0.34), 32, 54)
+            top_y = controls_rect.y + (controls_rect.height - (row1_h + gap_y + row2_h)) // 2
+            row2_y = top_y + row1_h + gap_y
+
+            row1_total_gap = gap_x * (len(row1_keys) - 1)
+            row1_w = max(70, (controls_rect.width - row1_total_gap) // len(row1_keys))
+            row1_total_w = row1_w * len(row1_keys) + row1_total_gap
+            row1_x = controls_rect.x + (controls_rect.width - row1_total_w) // 2
+
+            row2_total_gap = gap_x * (len(row2_keys) - 1)
+            row2_w = max(90, (controls_rect.width - row2_total_gap) // len(row2_keys))
+            row2_total_w = row2_w * len(row2_keys) + row2_total_gap
+            row2_x = controls_rect.x + (controls_rect.width - row2_total_w) // 2
+
+            self.buttons = {}
+            x = row1_x
+            for key in row1_keys:
+                self.buttons[key] = pygame.Rect(x, top_y, row1_w, row1_h)
+                x += row1_w + gap_x
+
+            x = row2_x
+            for key in row2_keys:
+                self.buttons[key] = pygame.Rect(x, row2_y, row2_w, row2_h)
+                x += row2_w + gap_x
+            return
+
         pad = self._clamp(int(controls_rect.height * 0.14), 6, 16)
         gap = self._clamp(int(controls_rect.width * 0.02), 8, 24)
         button_h = self._clamp(int(controls_rect.height * 0.58), 36, 56)
@@ -379,7 +417,7 @@ class InspectionDisplay:
     def run_reference_preview(self, config: dict, has_reference: bool) -> str:
         """Show a live-ish preview loop until the operator captures/replaces the reference."""
         self.set_ui_mode("setup_reference")
-        self.reference_button_label = "RESET REF" if has_reference else "SET REF"
+        self.reference_button_label = "SET REF"
         last_surface: Optional[pygame.Surface] = None
         last_image_path: Optional[Path] = None
         status_color = self.YELLOW
