@@ -411,7 +411,6 @@ class InspectionDisplay:
                     render()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(event.pos):
-                        cleanup_temp_image()
                         return str(last_image_path) if last_image_path is not None else 'capture'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     cleanup_temp_image()
@@ -790,6 +789,7 @@ def run_interactive_training(config: dict) -> int:
                     continue
                 display.show_message("Saving reference...", display.YELLOW)
                 success, msg = save_reference_from_image(config, Path(action))
+                cleanup_temp_image()
                 print(msg)
                 active_paths = get_active_runtime_paths()
                 if success:
@@ -843,6 +843,7 @@ def run_interactive_training(config: dict) -> int:
                             continue
                         display.show_message("Saving reference...", display.YELLOW)
                         success, msg = save_reference_from_image(config, Path(action))
+                        cleanup_temp_image()
                         print(msg)
                         active_paths = get_active_runtime_paths()
                         color = display.GREEN if success else display.RED
