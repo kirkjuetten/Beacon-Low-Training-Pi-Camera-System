@@ -201,7 +201,7 @@ class ProjectManagerGUI:
             return
 
         item = self.tree.item(selection[0])
-        project_name = item['values'][0]
+        project_name = str(item["values"][0]).strip()
 
         if switch_project(project_name):
             self.refresh_projects()
