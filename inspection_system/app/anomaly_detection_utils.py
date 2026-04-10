@@ -14,7 +14,12 @@ def compute_ssim(image1: np.ndarray, image2: np.ndarray) -> float:
     if image1.shape != image2.shape:
         # Resize to match if needed, but ideally they should be aligned
         image2 = cv2.resize(image2, (image1.shape[1], image1.shape[0]))
-    return ssim(image1, image2, channel_axis=-1, data_range=255)
+    try:
+        # scikit-image >= 0.19 uses channel_axis instead of multichannel.
+        return ssim(image1, image2, channel_axis=-1, data_range=255)
+    except TypeError:
+        # Backward compatibility for older scikit-image versions.
+        return ssim(image1, image2, multichannel=True, data_range=255)
 
 
 def compute_histogram_similarity(hist1: np.ndarray, hist2: np.ndarray) -> float:
