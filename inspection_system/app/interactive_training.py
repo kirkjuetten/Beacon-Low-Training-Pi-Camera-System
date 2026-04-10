@@ -804,6 +804,18 @@ def run_interactive_training(config: dict) -> int:
         pulse_ms=int(led_cfg.get("pulse_ms", 750)),
     )
 
+    training_cfg = config.get("training", {})
+    early_review_parts = int(training_cfg.get("early_review_parts", 25))
+    early_review_interval = int(training_cfg.get("early_review_interval", 5))
+    steady_review_interval = int(training_cfg.get("steady_review_interval", 10))
+
+    def should_review_training(count: int) -> bool:
+        if count <= 0:
+            return False
+        if count <= early_review_parts:
+            return count % early_review_interval == 0
+        return count % steady_review_interval == 0
+
     try:
         print("Starting interactive training mode...")
         print("Controls:")
@@ -903,22 +915,33 @@ def run_interactive_training(config: dict) -> int:
                         indicator.pulse_fail()
                     # No indicator for review
 
-                    # Show session summary every 10 samples
-                    if session_count % 10 == 0:
+                    # Show session summary at configured review cadence.
+                    if should_review_training(session_count):
                         summary = logger.get_session_summary()
                         print(f"\nSession Summary (last {summary.get('total', 0)} samples):")
                         print(f"  Approved: {summary.get('approve', 0)}")
                         print(f"  Rejected: {summary.get('reject', 0)}")
                         print(f"  Flagged for review: {summary.get('review', 0)}")
 
-                    # Apply threshold suggestions periodically to avoid noisy rewrites.
-                    if session_count % 10 == 0:
+                    # Review and optionally apply threshold suggestions at configured cadence.
+                    if should_review_training(session_count):
                         suggestions = trainer.suggest_thresholds()
-                        applied = trainer.apply_suggestions(config, suggestions)
-                        if applied:
-                            print("\nApplied threshold updates based on training data:")
-                            for key, value in applied.items():
+                        if suggestions:
+                            print("\nSuggested threshold updates:")
+                            for key, value in suggestions.items():
                                 print(f"  {key}: {value:.4f}")
+
+                            choice = input("Apply suggested threshold updates now? [y/N]: ").strip().lower()
+                            if choice in {"y", "yes"}:
+                                applied = trainer.apply_suggestions(config, suggestions)
+                                if applied:
+                                    print("Applied threshold updates:")
+                                    for key, value in applied.items():
+                                        print(f"  {key}: {value:.4f}")
+                                else:
+                                    print("No threshold changes were applied.")
+                            else:
+                                print("Skipped applying threshold updates for now.")
 
             finally:
                 cleanup_temp_image()
