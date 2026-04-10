@@ -75,9 +75,12 @@ class InspectionDisplay:
         self.BLACK = (0, 0, 0)
         self.GRAY = (128, 128, 128)
         self.reference_button_label = "SET REF"
+        self.active_mode = "setup_reference"
+        self.visible_buttons: List[str] = []
 
         self.buttons: Dict[str, pygame.Rect] = {}
         self.layout: Dict[str, pygame.Rect] = {}
+        self.set_ui_mode("setup_reference")
         self._reflow_layout()
 
     @staticmethod
@@ -90,6 +93,16 @@ class InspectionDisplay:
         small_size = self._clamp(int(height * 0.026), 15, 26)
         self.font = pygame.font.Font(None, base_size)
         self.small_font = pygame.font.Font(None, small_size)
+
+    def set_ui_mode(self, mode: str) -> None:
+        """Set the visible controls for the current training state."""
+        self.active_mode = mode
+        if mode == "inspection":
+            self.reference_button_label = "RESET REF"
+            self.visible_buttons = ["review", "approve", "reject", "set_ref"]
+        else:
+            self.reference_button_label = "SET REF"
+            self.visible_buttons = ["set_ref"]
 
     def _reflow_layout(self) -> None:
         width, height = self.screen.get_size()
@@ -121,36 +134,37 @@ class InspectionDisplay:
         self._layout_buttons(controls_rect)
 
     def _layout_buttons(self, controls_rect: pygame.Rect) -> None:
+        visible_buttons = self.visible_buttons or ["set_ref"]
         pad = self._clamp(int(controls_rect.height * 0.14), 6, 16)
         gap = self._clamp(int(controls_rect.width * 0.02), 8, 24)
         button_h = self._clamp(int(controls_rect.height * 0.58), 36, 56)
-        # 4 buttons: REVIEW | APPROVE | REJECT | SET REF
-        button_w = self._clamp(int(controls_rect.width * 0.20), 70, 180)
-        needed_width = button_w * 4 + gap * 3
+        button_count = len(visible_buttons)
+        button_fraction = 0.7 if button_count == 1 else 0.2
+        button_w = self._clamp(int(controls_rect.width * button_fraction), 110 if button_count == 1 else 70, 320 if button_count == 1 else 180)
+        needed_width = button_w * button_count + gap * max(0, button_count - 1)
 
         if needed_width <= controls_rect.width - pad * 2:
             x_start = controls_rect.x + (controls_rect.width - needed_width) // 2
             y = controls_rect.y + (controls_rect.height - button_h) // 2
-            self.buttons = {
-                "review": pygame.Rect(x_start, y, button_w, button_h),
-                "approve": pygame.Rect(x_start + button_w + gap, y, button_w, button_h),
-                "reject": pygame.Rect(x_start + (button_w + gap) * 2, y, button_w, button_h),
-                "set_ref": pygame.Rect(x_start + (button_w + gap) * 3, y, button_w, button_h),
-            }
+            self.buttons = {}
+            current_x = x_start
+            for key in visible_buttons:
+                self.buttons[key] = pygame.Rect(current_x, y, button_w, button_h)
+                current_x += button_w + gap
             return
 
         # Fall back to vertical layout for very narrow displays.
         stack_w = self._clamp(controls_rect.width - pad * 2, 80, 200)
         stack_gap = self._clamp(int(controls_rect.height * 0.06), 3, 10)
-        stack_h = self._clamp((controls_rect.height - stack_gap * 3) // 4, 22, 40)
+        stack_h = self._clamp((controls_rect.height - stack_gap * max(0, button_count - 1)) // button_count, 22, 40)
         x = controls_rect.x + (controls_rect.width - stack_w) // 2
-        y0 = controls_rect.y + (controls_rect.height - (stack_h * 4 + stack_gap * 3)) // 2
-        self.buttons = {
-            "review": pygame.Rect(x, y0, stack_w, stack_h),
-            "approve": pygame.Rect(x, y0 + stack_h + stack_gap, stack_w, stack_h),
-            "reject": pygame.Rect(x, y0 + (stack_h + stack_gap) * 2, stack_w, stack_h),
-            "set_ref": pygame.Rect(x, y0 + (stack_h + stack_gap) * 3, stack_w, stack_h),
-        }
+        total_stack_height = stack_h * button_count + stack_gap * max(0, button_count - 1)
+        y0 = controls_rect.y + (controls_rect.height - total_stack_height) // 2
+        self.buttons = {}
+        current_y = y0
+        for key in visible_buttons:
+            self.buttons[key] = pygame.Rect(x, current_y, stack_w, stack_h)
+            current_y += stack_h + stack_gap
 
     def draw_image_with_border(self, surface: pygame.Surface, border_color: tuple, image_rect: pygame.Rect, border_width: int = 4):
         """Draw an image with a colored border."""
@@ -196,7 +210,7 @@ class InspectionDisplay:
             "set_ref": self.reference_button_label,
         }
 
-        for key in ["review", "approve", "reject", "set_ref"]:
+        for key in self.visible_buttons:
             button_rect = self.buttons[key]
             pygame.draw.rect(self.screen, button_colors[key], button_rect, border_radius=6)
             label_color = self.WHITE if key == "set_ref" else self.BLACK
@@ -320,10 +334,10 @@ class InspectionDisplay:
 
     def run_reference_preview(self, config: dict, has_reference: bool) -> str:
         """Show a live-ish preview loop until the operator captures/replaces the reference."""
-        self.reference_button_label = "REPLACE REF" if has_reference else "CAPTURE REF"
+        self.set_ui_mode("setup_reference")
+        self.reference_button_label = "RESET REF" if has_reference else "SET REF"
         last_surface: Optional[pygame.Surface] = None
         last_image_path: Optional[Path] = None
-        status_text = "Live preview active"
         status_color = self.YELLOW
         next_capture_time = 0.0
 
@@ -378,13 +392,10 @@ class InspectionDisplay:
                     if surface is not None:
                         last_surface = surface
                         last_image_path = image_path
-                        status_text = "Live preview active"
                         status_color = self.GREEN if has_reference else self.YELLOW
                     else:
-                        status_text = "Preview frame could not be read"
                         status_color = self.RED
                 else:
-                    status_text = f"Preview capture failed: {stderr_text or 'unknown error'}"
                     status_color = self.RED
                 next_capture_time = now + 0.35
                 render()
@@ -417,7 +428,7 @@ class InspectionDisplay:
         source_surface = self.load_surface_from_image(image_path)
         if source_surface is None:
             return None
-        self.reference_button_label = "REPLACE REF"
+        self.set_ui_mode("inspection")
 
         # Determine border color and generate description
         if passed:
