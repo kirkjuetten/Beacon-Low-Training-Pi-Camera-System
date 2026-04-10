@@ -355,6 +355,7 @@ def build_capture_command(config: dict, output_file: Path) -> list[str]:
     capture = config.get("capture", {})
     cmd = [
         "rpicam-still",
+        "--nopreview",
         "-o",
         str(output_file),
         "--timeout",
