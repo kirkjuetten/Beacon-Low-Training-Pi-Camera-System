@@ -35,7 +35,7 @@ from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
-from inspection_system.app.capture_test import save_debug_outputs
+from inspection_system.app.reference_service import save_debug_outputs
 
 
 class InspectionDisplay:

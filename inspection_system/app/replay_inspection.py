@@ -14,7 +14,7 @@ from inspection_system.app.camera_interface import (
     import_cv2_and_numpy,
 )
 from inspection_system.app.inspection_pipeline import inspect_against_reference
-from inspection_system.app.capture_test import save_debug_outputs
+from inspection_system.app.reference_service import save_debug_outputs
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
