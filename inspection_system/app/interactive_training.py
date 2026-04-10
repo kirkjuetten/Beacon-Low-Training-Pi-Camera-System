@@ -10,6 +10,7 @@ import json
 import sys
 import time
 import logging
+import select
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -906,6 +907,7 @@ def run_interactive_training(config: dict) -> int:
     early_review_parts = int(training_cfg.get("early_review_parts", 25))
     early_review_interval = int(training_cfg.get("early_review_interval", 5))
     steady_review_interval = int(training_cfg.get("steady_review_interval", 10))
+    update_prompt_timeout_s = float(training_cfg.get("update_prompt_timeout_s", 5.0))
 
     def should_review_training(count: int) -> bool:
         if count <= 0:
@@ -913,6 +915,21 @@ def run_interactive_training(config: dict) -> int:
         if count <= early_review_parts:
             return count % early_review_interval == 0
         return count % steady_review_interval == 0
+
+    def prompt_apply_updates_with_timeout(timeout_s: float) -> bool:
+        """Ask once for update approval without blocking indefinitely."""
+        prompt = f"Apply suggested threshold updates now? [y/N] (auto-skip in {int(timeout_s)}s): "
+        print(prompt, end="", flush=True)
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], timeout_s)
+            if ready:
+                response = sys.stdin.readline().strip().lower()
+                return response in {"y", "yes"}
+        except Exception:
+            # If stdin/select is unavailable, fail safe and skip auto-apply.
+            pass
+        print("(auto-skip)")
+        return False
 
     try:
         print("Starting interactive training mode...")
@@ -1037,8 +1054,7 @@ def run_interactive_training(config: dict) -> int:
                             for key, value in suggestions.items():
                                 print(f"  {key}: {value:.4f}")
 
-                            choice = input("Apply suggested threshold updates now? [y/N]: ").strip().lower()
-                            if choice in {"y", "yes"}:
+                            if prompt_apply_updates_with_timeout(update_prompt_timeout_s):
                                 applied = trainer.apply_suggestions(config, suggestions)
                                 if applied:
                                     print("Applied threshold updates:")
