@@ -5,7 +5,7 @@ from pathlib import Path
 # Add the parent directory to sys.path to allow imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from inspection_system.app.camera_interface import load_config
+from inspection_system.app.camera_interface import IndicatorLED, load_config
 from inspection_system.app.indicator_context import IndicatorContext
 from inspection_system.app.project_service import (
     handle_create_project,
