@@ -99,7 +99,9 @@ class ProjectManagerGUI:
         ttk.Button(right_buttons, text="Import",
                   command=self.import_project).grid(row=0, column=1, padx=(0, 5))
         ttk.Button(right_buttons, text="Refresh",
-                  command=self.refresh_projects).grid(row=0, column=2)
+                  command=self.refresh_projects).grid(row=0, column=2, padx=(0, 5))
+        ttk.Button(right_buttons, text="Back to Dashboard",
+                  command=self._launch_dashboard).grid(row=0, column=3, padx=(10, 0))
 
         # Status bar
         self.status_var = tk.StringVar()
@@ -113,6 +115,12 @@ class ProjectManagerGUI:
 
         # Load initial data
         self.refresh_projects()
+
+    def _launch_dashboard(self):
+        """Close project manager and open the operator dashboard."""
+        self.root.destroy()
+        from inspection_system.app.operator_dashboard import main as dashboard_main
+        dashboard_main()
 
     def refresh_projects(self):
         """Refresh the projects list."""
@@ -352,6 +360,13 @@ def main():
     tools_menu = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label="Tools", menu=tools_menu)
     tools_menu.add_command(label="Launch Training GUI", command=launch_training_gui)
+    tools_menu.add_separator()
+    tools_menu.add_command(
+        label="Launch Dashboard",
+        command=lambda: (root.destroy(), __import__(
+            "inspection_system.app.operator_dashboard", fromlist=["main"]
+        ).main()),
+    )
 
     # Help menu
     help_menu = tk.Menu(menubar, tearoff=0)
