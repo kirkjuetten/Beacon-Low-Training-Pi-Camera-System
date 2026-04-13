@@ -22,6 +22,18 @@ The current implementation is strongest as **localized print / marking inspectio
 - `inspection_system/reference/` — reference mask assets
 - `samples/` — starter folder structure for replay datasets
 
+## Raspberry Pi connection
+
+If the Pi was restarted or you are reconnecting after downtime, use the connection runbook:
+
+- `docs/PI_CONNECTION.md`
+
+Quick reconnect from Windows PowerShell:
+
+```powershell
+ssh pi@pi-inspect
+```
+
 ## Recommended workflow
 
 ### 1. Set up Projects (New!)

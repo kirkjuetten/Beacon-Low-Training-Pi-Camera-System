@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from inspection_system.app import camera_interface, frame_acquisition
-from inspection_system.app.capture_test import run_capture_and_inspect
+from inspection_system.app.runtime_controller import run_capture_and_inspect
 from inspection_system.app.replay_inspection import inspect_file
 
 
