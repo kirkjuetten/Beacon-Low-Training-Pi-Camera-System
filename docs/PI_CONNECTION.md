@@ -116,3 +116,78 @@ For authorized access to `beaconpi` credentials, contact:
 
 1. Kirk Juetten
 2. James Cowdery
+
+## Daily Fast Path (Use This Next Time)
+
+Use this exact sequence at the start of a work session.
+
+1. Connect to Pi:
+
+```powershell
+ssh -4 pi@pi-inspect
+```
+
+2. In the Pi shell, update code:
+
+```bash
+cd ~/Beacon-Low-Training-Pi-Camera-System
+git pull origin feature/next-phase-ui-workflow
+```
+
+3. Run a quick smoke test:
+
+```bash
+python3 -m inspection_system.app.capture_test list-projects
+python3 -m inspection_system.app.capture_test capture
+python3 -m inspection_system.app.capture_test inspect
+```
+
+If those three commands run, the system is in a good state for testing/debugging.
+
+## How We Work (Repeatable Dev Loop)
+
+This is the team workflow we used successfully:
+
+1. Edit code locally in VS Code.
+2. Commit and push to GitHub branch.
+3. On Pi over SSH: `git pull`.
+4. Run target command (`capture`, `inspect`, or other).
+5. Observe behavior on real hardware and report output.
+6. Repeat.
+
+This loop is expected and is the recommended way to develop this project.
+
+## SSH vs Desktop/VNC (What You Can Expect)
+
+### Works over SSH
+
+1. Pull code updates.
+2. Run headless commands like `capture` and `inspect`.
+3. Read pass/fail and debug output paths.
+
+### Requires Pi Desktop or VNC
+
+1. Dashboard GUI.
+2. Interactive GUI-based training/project windows.
+
+If you run dashboard from plain SSH, you should see a message saying a graphical desktop session is required. That is expected behavior.
+
+## One-Time Setup Items Already Completed
+
+These were the main blockers this session and are now fixed:
+
+1. Missing Python dependencies on Pi (`python3-skimage`, `python3-sklearn`) installed.
+2. `capture_test.py` import fix for `IndicatorLED` merged.
+3. Headless dashboard behavior improved to show clear guidance instead of traceback.
+
+You should not need to redo these each session.
+
+## Will It Be This Difficult Every Time?
+
+No. Today included one-time setup and bug-fix work. Typical next session should be:
+
+1. SSH in.
+2. `git pull`.
+3. Run smoke commands.
+
+If anything fails, capture terminal output and continue the normal debug loop.
