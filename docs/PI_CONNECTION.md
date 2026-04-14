@@ -225,3 +225,31 @@ sudo apt-get install -y matchbox-keyboard
 ```
 
 After install, restart the app (`dashboard` or `project-manager`) and tap any text input field.
+
+## One-Tap Desktop Shortcut (Recommended)
+
+To make startup easy and stable across updates, use the included launcher installer once on the Pi desktop session.
+
+Run this one time on Pi:
+
+```bash
+cd ~/Beacon-Low-Training-Pi-Camera-System
+chmod +x scripts/pi-launch-dashboard.sh scripts/install_pi_desktop_launcher.sh
+./scripts/install_pi_desktop_launcher.sh
+```
+
+What it creates:
+
+1. App launcher: `~/.local/share/applications/beacon-inspection-dashboard.desktop`
+2. Desktop icon: `~/Desktop/Beacon Inspection Dashboard.desktop`
+
+Daily use:
+
+1. Pull updates as normal: `git pull origin feature/next-phase-ui-workflow`
+2. Tap **Beacon Inspection Dashboard** desktop icon.
+
+Why this stays stable:
+
+1. The shortcut always calls `scripts/pi-launch-dashboard.sh` in your repo path.
+2. As code updates, the launcher path stays the same.
+3. Simple logs are written to `~/beacon-dashboard.log` for troubleshooting.
