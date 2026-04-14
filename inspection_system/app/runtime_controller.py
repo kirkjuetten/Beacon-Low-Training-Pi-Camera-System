@@ -40,6 +40,7 @@ def run_interactive_training(config: dict) -> int:
 
 def print_inspection_result(passed: bool, details: dict) -> None:
     print("Inspection result:", "PASS" if passed else "FAIL")
+    print(f"Inspection mode: {details.get('inspection_mode', 'mask_only')}")
     print(f"ROI: {details['roi']}")
     print(f"Best angle correction: {details.get('best_angle_deg', 0.0):.2f} deg")
     print(f"Best shift correction: x={details.get('best_shift_x', 0)}, y={details.get('best_shift_y', 0)} px")
@@ -50,21 +51,27 @@ def print_inspection_result(passed: bool, details: dict) -> None:
     if details.get("section_coverages"):
         print("Section coverages:", ", ".join(f"{v:.3f}" for v in details["section_coverages"]))
     if "ssim" in details:
+        ssim_gate_active = bool(details.get("ssim_gate_active", False))
         if details.get("min_ssim") is not None:
-            print(f"SSIM: {details['ssim']:.4f} (min {details['min_ssim']:.4f})")
+            suffix = " [gate]" if ssim_gate_active else " [info]"
+            print(f"SSIM: {details['ssim']:.4f} (min {details['min_ssim']:.4f}){suffix}")
         else:
             print(f"SSIM: {details['ssim']:.4f}")
     if "histogram_similarity" in details:
         print(f"Histogram similarity: {details['histogram_similarity']:.4f}")
     if "mse" in details:
+        mse_gate_active = bool(details.get("mse_gate_active", False))
         if details.get("max_mse") is not None:
-            print(f"MSE: {details['mse']:.2f} (max {details['max_mse']:.2f})")
+            suffix = " [gate]" if mse_gate_active else " [info]"
+            print(f"MSE: {details['mse']:.2f} (max {details['max_mse']:.2f}){suffix}")
         else:
             print(f"MSE: {details['mse']:.2f}")
     if "anomaly_score" in details:
         anomaly_score = details.get("anomaly_score")
+        anomaly_gate_active = bool(details.get("anomaly_gate_active", False))
         if anomaly_score is not None and details.get("min_anomaly_score") is not None:
-            print(f"Anomaly score: {anomaly_score:.4f} (min {details['min_anomaly_score']:.4f})")
+            suffix = " [gate]" if anomaly_gate_active else " [info]"
+            print(f"Anomaly score: {anomaly_score:.4f} (min {details['min_anomaly_score']:.4f}){suffix}")
         elif anomaly_score is not None:
             print(f"Anomaly score: {anomaly_score:.4f}")
     if details.get("debug_paths"):

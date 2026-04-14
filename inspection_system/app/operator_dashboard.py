@@ -38,6 +38,7 @@ PREVIEW_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 CONFIG_FIELD_SPECS = [
     ("capture.timeout_ms", "Capture Timeout (ms)", int),
     ("capture.shutter_us", "Shutter (us)", int),
+    ("inspection.inspection_mode", "Inspection Mode", str),
     ("inspection.threshold_value", "Threshold Value", int),
     ("inspection.min_feature_pixels", "Min Feature Pixels", int),
     ("inspection.min_required_coverage", "Min Required Coverage", float),

@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     },
     "inspection": {
         "enabled": True,
+        "inspection_mode": "mask_only",
         "roi": {
             "x": 0,
             "y": 0,

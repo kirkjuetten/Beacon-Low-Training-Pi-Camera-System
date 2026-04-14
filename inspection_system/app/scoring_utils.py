@@ -62,14 +62,23 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     max_outside_allowed_ratio = float(inspection_cfg.get("max_outside_allowed_ratio", 0.02))
     min_section_coverage_limit = float(inspection_cfg.get("min_section_coverage", 0.85))
 
+    inspection_mode = str(inspection_cfg.get("inspection_mode", "mask_only")).strip().lower()
+    valid_modes = {"mask_only", "mask_and_ssim", "mask_and_ml", "full"}
+    if inspection_mode not in valid_modes:
+        inspection_mode = "mask_only"
+
     # Tier 2 optional gates: enabled only if project config provides threshold values.
     min_ssim = _optional_float(inspection_cfg.get("min_ssim"))
     max_mse = _optional_float(inspection_cfg.get("max_mse"))
     min_anomaly_score = _optional_float(inspection_cfg.get("min_anomaly_score"))
 
-    ssim_pass = True if min_ssim is None else (ssim_value is not None and ssim_value >= min_ssim)
-    mse_pass = True if max_mse is None else (mse_value is not None and mse_value <= max_mse)
-    anomaly_pass = True if min_anomaly_score is None else (
+    ssim_gate_active = inspection_mode in {"mask_and_ssim", "full"} and min_ssim is not None
+    mse_gate_active = inspection_mode in {"mask_and_ssim", "full"} and max_mse is not None
+    anomaly_gate_active = inspection_mode in {"mask_and_ml", "full"} and min_anomaly_score is not None
+
+    ssim_pass = True if not ssim_gate_active else (ssim_value is not None and ssim_value >= min_ssim)
+    mse_pass = True if not mse_gate_active else (mse_value is not None and mse_value <= max_mse)
+    anomaly_pass = True if not anomaly_gate_active else (
         anomaly_score is not None and anomaly_score >= min_anomaly_score
     )
 
@@ -95,4 +104,8 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         "min_ssim": min_ssim,
         "max_mse": max_mse,
         "min_anomaly_score": min_anomaly_score,
+        "inspection_mode": inspection_mode,
+        "ssim_gate_active": ssim_gate_active,
+        "mse_gate_active": mse_gate_active,
+        "anomaly_gate_active": anomaly_gate_active,
     }

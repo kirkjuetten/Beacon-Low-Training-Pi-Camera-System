@@ -156,6 +156,10 @@ def inspect_against_reference(
         "min_ssim": threshold_summary.get("min_ssim"),
         "max_mse": threshold_summary.get("max_mse"),
         "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
+        "inspection_mode": threshold_summary.get("inspection_mode", "mask_only"),
+        "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
+        "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
+        "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),
         "debug_paths": debug_paths,
         **anomaly_metrics,
     }
