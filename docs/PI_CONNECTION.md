@@ -205,3 +205,23 @@ Operator expectation after Stage 2:
 1. Open Project Manager from Dashboard.
 2. Dashboard closes automatically.
 3. Use `Back to Dashboard` inside Project Manager to return.
+
+## Touchscreen Keyboard Support
+
+Tk text fields now trigger an on-screen keyboard automatically in Dashboard and Project Manager.
+
+Supported keyboard apps (auto-detected in this order):
+
+1. `wvkbd-mobintl`
+2. `wvkbd`
+3. `matchbox-keyboard`
+4. `onboard`
+
+If no keyboard appears on Pi, install one package and retry:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y matchbox-keyboard
+```
+
+After install, restart the app (`dashboard` or `project-manager`) and tap any text input field.

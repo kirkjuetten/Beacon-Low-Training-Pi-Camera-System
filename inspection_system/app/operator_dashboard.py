@@ -30,6 +30,7 @@ from inspection_system.app.camera_interface import (
     switch_project,
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
+from inspection_system.app.touch_keyboard import TouchKeyboardManager
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -149,6 +150,7 @@ class OperatorDashboard:
         self.root.title("Beacon Inspection Dashboard")
         self.root.geometry("1360x860")
         self.root.minsize(1180, 760)
+        self.keyboard_manager = TouchKeyboardManager(self.root)
 
         self.operation_running = False
         self.preview_photo = None

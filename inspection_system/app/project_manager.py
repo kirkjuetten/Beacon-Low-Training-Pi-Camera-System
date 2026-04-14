@@ -23,6 +23,7 @@ from inspection_system.app.camera_interface import (
     create_project, switch_project, get_current_project, list_projects,
     delete_project, export_project, import_project, PROJECTS_DIR
 )
+from inspection_system.app.touch_keyboard import TouchKeyboardManager
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,7 @@ class ProjectManagerGUI:
         self.root = root
         self.root.title("Beacon Inspection - Project Manager")
         self.root.geometry("800x600")
+        self.keyboard_manager = TouchKeyboardManager(self.root)
 
         # Create main frame
         main_frame = ttk.Frame(self.root, padding="10")
