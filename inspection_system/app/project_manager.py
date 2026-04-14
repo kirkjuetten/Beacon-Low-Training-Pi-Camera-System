@@ -36,7 +36,7 @@ class ProjectManagerGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Beacon Inspection - Project Manager")
-        self.root.geometry("800x600")
+        self._configure_window_size()
         self.keyboard_manager = TouchKeyboardManager(self.root)
 
         # Create main frame
@@ -126,6 +126,19 @@ class ProjectManagerGUI:
 
         # Load initial data
         self.refresh_projects()
+
+    def _configure_window_size(self) -> None:
+        self.root.update_idletasks()
+        screen_w = int(self.root.winfo_screenwidth())
+        screen_h = int(self.root.winfo_screenheight())
+
+        target_w = min(980, max(720, screen_w - 20))
+        target_h = min(680, max(420, screen_h - 90))
+        self.root.geometry(f"{target_w}x{target_h}+8+8")
+
+        min_w = min(720, max(620, screen_w - 30))
+        min_h = min(420, max(360, screen_h - 120))
+        self.root.minsize(min_w, min_h)
 
     def _launch_dashboard(self):
         """Close project manager and open the operator dashboard."""

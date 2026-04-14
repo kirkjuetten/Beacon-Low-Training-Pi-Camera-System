@@ -208,8 +208,7 @@ class OperatorDashboard:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Beacon Inspection Dashboard")
-        self.root.geometry("1200x760")
-        self.root.minsize(900, 520)
+        self._configure_window_size()
         self.keyboard_manager = TouchKeyboardManager(self.root)
         if self.keyboard_manager.enabled:
             self.root.bind_all("<Control-k>", lambda _e: self.hide_keyboard())
@@ -239,6 +238,20 @@ class OperatorDashboard:
 
         self._build_layout()
         self.refresh_dashboard()
+
+    def _configure_window_size(self) -> None:
+        # Fit within the usable desktop area on small Pi touchscreens.
+        self.root.update_idletasks()
+        screen_w = int(self.root.winfo_screenwidth())
+        screen_h = int(self.root.winfo_screenheight())
+
+        target_w = min(1200, max(760, screen_w - 20))
+        target_h = min(760, max(420, screen_h - 90))
+        self.root.geometry(f"{target_w}x{target_h}+8+8")
+
+        min_w = min(760, max(640, screen_w - 30))
+        min_h = min(420, max(360, screen_h - 120))
+        self.root.minsize(min_w, min_h)
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
