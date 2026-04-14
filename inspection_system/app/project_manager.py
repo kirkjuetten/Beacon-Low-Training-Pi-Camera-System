@@ -5,13 +5,13 @@ Project Manager GUI for Beacon Inspection System
 Provides a graphical interface for managing multiple inspection projects.
 """
 
+import subprocess
 import sys
 import json
 from pathlib import Path
 from typing import List, Dict, Optional
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import threading
 
 try:
     import pygame
@@ -23,6 +23,10 @@ from inspection_system.app.camera_interface import (
     create_project, switch_project, get_current_project, list_projects,
     delete_project, export_project, import_project, PROJECTS_DIR
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CAPTURE_SCRIPT = REPO_ROOT / "inspection_system" / "app" / "capture_test.py"
 
 
 class ProjectManagerGUI:
@@ -326,18 +330,10 @@ def launch_training_gui():
     if not PYGAME_AVAILABLE:
         messagebox.showerror("Error", "Pygame is required for training GUI.\nInstall with: pip install pygame")
         return
-
-    def run_training():
-        try:
-            from inspection_system.app.capture_test import main as training_main
-            # Run training with 'train' argument
-            sys.argv = ['capture_test.py', 'train']
-            training_main()
-        except Exception as e:
-            print(f"Training GUI error: {e}")
-
-    # Run in separate thread to avoid blocking GUI
-    threading.Thread(target=run_training, daemon=True).start()
+    try:
+        subprocess.Popen([sys.executable, str(CAPTURE_SCRIPT), "train"], cwd=str(REPO_ROOT))
+    except OSError as exc:
+        messagebox.showerror("Error", f"Failed to launch training GUI: {exc}")
 
 
 def main():
@@ -354,19 +350,14 @@ def main():
     menubar.add_cascade(label="File", menu=file_menu)
     file_menu.add_command(label="Refresh", command=app.refresh_projects)
     file_menu.add_separator()
-    file_menu.add_command(label="Exit", command=root.quit)
+    file_menu.add_command(label="Exit", command=root.destroy)
 
     # Tools menu
     tools_menu = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label="Tools", menu=tools_menu)
     tools_menu.add_command(label="Launch Training GUI", command=launch_training_gui)
     tools_menu.add_separator()
-    tools_menu.add_command(
-        label="Launch Dashboard",
-        command=lambda: (root.destroy(), __import__(
-            "inspection_system.app.operator_dashboard", fromlist=["main"]
-        ).main()),
-    )
+    tools_menu.add_command(label="Launch Dashboard", command=app._launch_dashboard)
 
     # Help menu
     help_menu = tk.Menu(menubar, tearoff=0)

@@ -103,10 +103,10 @@ class InspectionDisplay:
         self.active_mode = mode
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
-            self.visible_buttons = ["review", "approve", "reject", "set_ref", "align_profile"]
+            self.visible_buttons = ["review", "approve", "reject", "set_ref", "align_profile", "home"]
         else:
             self.reference_button_label = "SET REF"
-            self.visible_buttons = ["set_ref"]
+            self.visible_buttons = ["set_ref", "home"]
 
     def set_alignment_profile_label(self, profile: str) -> None:
         profile_key = str(profile).strip().lower() or "balanced"
@@ -148,13 +148,15 @@ class InspectionDisplay:
     def _layout_buttons(self, controls_rect: pygame.Rect) -> None:
         visible_buttons = self.visible_buttons or ["set_ref"]
 
-        if self.active_mode == "inspection" and len(visible_buttons) == 5:
+        if self.active_mode == "inspection" and len(visible_buttons) in {5, 6}:
             # Use two rows in inspection mode to keep touch targets large.
             gap_x = self._clamp(int(controls_rect.width * 0.02), 8, 24)
             gap_y = self._clamp(int(controls_rect.height * 0.10), 8, 18)
 
             row1_keys = ["review", "approve", "reject"]
             row2_keys = ["set_ref", "align_profile"]
+            if "home" in visible_buttons:
+                row2_keys.append("home")
 
             row1_h = self._clamp(int(controls_rect.height * 0.38), 34, 58)
             row2_h = self._clamp(int(controls_rect.height * 0.34), 32, 54)
@@ -252,6 +254,7 @@ class InspectionDisplay:
             "review": self.YELLOW,
             "set_ref": BLUE,
             "align_profile": CYAN,
+            "home": self.GRAY,
         }
         button_labels = {
             "approve": "APPROVE",
@@ -259,12 +262,13 @@ class InspectionDisplay:
             "review": "REVIEW",
             "set_ref": self.reference_button_label,
             "align_profile": self.alignment_profile_label,
+            "home": "HOME",
         }
 
         for key in self.visible_buttons:
             button_rect = self.buttons[key]
             pygame.draw.rect(self.screen, button_colors[key], button_rect, border_radius=6)
-            label_color = self.WHITE if key in {"set_ref", "align_profile"} else self.BLACK
+            label_color = self.WHITE if key in {"set_ref", "align_profile", "home"} else self.BLACK
             text = self.small_font.render(button_labels[key], True, label_color)
             text_rect = text.get_rect(center=button_rect.center)
             self.screen.blit(text, text_rect)
@@ -496,6 +500,8 @@ class InspectionDisplay:
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(event.pos):
                         return str(last_image_path) if last_image_path is not None else 'capture'
+                    if self.buttons.get('home') and self.buttons['home'].collidepoint(event.pos):
+                        return 'home'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     cleanup_temp_image()
                     return 'quit'
@@ -596,6 +602,10 @@ class InspectionDisplay:
                         if self.flash_action_confirmation("ALIGNMENT PROFILE", (0, 170, 190), duration_ms=300):
                             return 'quit'
                         return 'align_profile'
+                    elif self.buttons['home'].collidepoint(mouse_pos):
+                        if self.flash_action_confirmation("RETURNING HOME", self.GRAY, duration_ms=300):
+                            return 'quit'
+                        return 'home'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     return 'quit'
 
@@ -949,6 +959,7 @@ def run_interactive_training(config: dict) -> int:
         print("- Red REJECT button: Reject the sample")
         print("- Yellow REVIEW button: Flag for human review")
         print("- Blue SET REF button: Capture a new golden reference")
+        print("- Gray HOME button: Return to dashboard/home screen")
         print("- Close window or Esc to exit")
         print("\nDetailed descriptions will appear on screen for each inspection.")
 
@@ -959,6 +970,9 @@ def run_interactive_training(config: dict) -> int:
             print("No reference mask found. Prompting operator to capture reference.")
             while True:
                 action = display.run_reference_preview(config, has_reference=False)
+                if action == 'home':
+                    print("Returning to dashboard/home.")
+                    return 0
                 if action == 'quit':
                     return 0
                 if action in {'capture', '', None}:
@@ -1008,11 +1022,18 @@ def run_interactive_training(config: dict) -> int:
                 # Display result and get feedback
                 feedback = display.display_inspection(image_path, passed, details, logger)
 
+                if feedback == 'home':
+                    print("Returning to dashboard/home.")
+                    break
                 if feedback == 'quit':
                     break
                 elif feedback == 'set_ref':
+                    go_home = False
                     while True:
                         action = display.run_reference_preview(config, has_reference=active_paths["reference_mask"].exists())
+                        if action == 'home':
+                            go_home = True
+                            break
                         if action == 'quit':
                             break
                         if action in {'capture', '', None}:
@@ -1029,6 +1050,9 @@ def run_interactive_training(config: dict) -> int:
                         time.sleep(1.5)
                         if success:
                             break
+                    if go_home:
+                        print("Returning to dashboard/home.")
+                        break
                     continue
                 elif feedback == 'align_profile':
                     profile, changed, msg = cycle_alignment_profile(config, active_paths["config_file"])
