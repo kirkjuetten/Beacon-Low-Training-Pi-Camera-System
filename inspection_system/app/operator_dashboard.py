@@ -228,7 +228,6 @@ class OperatorDashboard:
         self.new_project_name_var = tk.StringVar()
         self.new_project_desc_var = tk.StringVar()
         self.preview_path_var = tk.StringVar(value="Preview: none")
-        self.preview_toggle_var = tk.StringVar(value="Hide Preview" if self.preview_enabled else "Show Preview")
 
         self.summary_vars = {
             "total_samples": tk.StringVar(value="0"),
@@ -279,7 +278,9 @@ class OperatorDashboard:
         header.columnconfigure(0, weight=1)
 
         ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Button(header, textvariable=self.preview_toggle_var, command=self.toggle_preview).grid(row=0, column=1, padx=(8, 0), sticky="e")
+        self.preview_toggle_button = ttk.Button(header, text="", command=self.toggle_preview)
+        self.preview_toggle_button.grid(row=0, column=1, padx=(8, 0), sticky="e")
+        self._update_preview_toggle_button_text()
         if self.keyboard_manager.enabled:
             ttk.Button(header, text="Hide Keyboard", command=self.hide_keyboard).grid(row=0, column=2, padx=(8, 0), sticky="e")
             ttk.Label(header, textvariable=self.status_var).grid(row=0, column=3, sticky="e")
@@ -443,12 +444,16 @@ class OperatorDashboard:
         ttk.Button(buttons, text="Clear Console", command=self.clear_console).grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
     def append_console(self, text: str) -> None:
+        if not hasattr(self, "console"):
+            return
         self.console.configure(state="normal")
         self.console.insert("end", text)
         self.console.see("end")
         self.console.configure(state="disabled")
 
     def clear_console(self) -> None:
+        if not hasattr(self, "console"):
+            return
         self.console.configure(state="normal")
         self.console.delete("1.0", "end")
         self.console.configure(state="disabled")
@@ -692,9 +697,14 @@ class OperatorDashboard:
 
     def toggle_preview(self) -> None:
         self.preview_enabled = not self.preview_enabled
-        self.preview_toggle_var.set("Hide Preview" if self.preview_enabled else "Show Preview")
+        self._update_preview_toggle_button_text()
         self._build_layout()
         self.refresh_dashboard()
+
+    def _update_preview_toggle_button_text(self) -> None:
+        if hasattr(self, "preview_toggle_button"):
+            label = "Hide Preview" if self.preview_enabled else "Show Preview"
+            self.preview_toggle_button.configure(text=label)
 
     def refresh_live_preview(self) -> None:
         if self.operation_running:
