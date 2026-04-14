@@ -136,6 +136,11 @@ def find_preview_image(reference_dir: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
+def should_close_dashboard_on_launch(mode: str) -> bool:
+    """Return whether dashboard should close after launching a tool."""
+    return mode == "project-manager"
+
+
 class OperatorDashboard:
     """Single-window operator UI for routine inspection tasks."""
 
@@ -389,6 +394,9 @@ class OperatorDashboard:
             subprocess.Popen([sys.executable, str(CAPTURE_SCRIPT), mode], cwd=str(REPO_ROOT))
             self.append_console(f"\n> Launched {label}.\n")
             self.status_var.set(f"Launched {label}")
+            if should_close_dashboard_on_launch(mode):
+                self.append_console("> Closing dashboard; use Project Manager -> Back to Dashboard when ready.\n")
+                self.root.after(0, self.root.destroy)
         except OSError as exc:
             messagebox.showerror("Launch failed", f"Could not launch {label}: {exc}")
 

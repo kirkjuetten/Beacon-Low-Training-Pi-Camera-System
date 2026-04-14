@@ -8,6 +8,7 @@ from inspection_system.app.operator_dashboard import (
     find_preview_image,
     get_nested_config_value,
     parse_config_value,
+    should_close_dashboard_on_launch,
 )
 
 
@@ -96,3 +97,9 @@ def test_find_preview_image_returns_none_without_supported_files(tmp_path) -> No
     (tmp_path / "notes.txt").write_text("ignore", encoding="utf-8")
 
     assert find_preview_image(tmp_path) is None
+
+
+def test_should_close_dashboard_on_launch_policy() -> None:
+    assert should_close_dashboard_on_launch("project-manager") is True
+    assert should_close_dashboard_on_launch("train") is False
+    assert should_close_dashboard_on_launch("capture") is False

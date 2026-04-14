@@ -191,3 +191,17 @@ No. Today included one-time setup and bug-fix work. Typical next session should 
 3. Run smoke commands.
 
 If anything fails, capture terminal output and continue the normal debug loop.
+
+## UX Hardening Stages (Current Status)
+
+The staged navigation improvements are now applied in order:
+
+1. Stage 1 complete: safer launch paths in Project Manager and explicit HOME action in training UI.
+2. Stage 2 complete: launching Project Manager from Dashboard now closes Dashboard to keep one primary operator window.
+3. Stage 3 complete: regression coverage added for launch close policy and navigation behavior checks.
+
+Operator expectation after Stage 2:
+
+1. Open Project Manager from Dashboard.
+2. Dashboard closes automatically.
+3. Use `Back to Dashboard` inside Project Manager to return.
