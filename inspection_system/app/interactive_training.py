@@ -119,11 +119,11 @@ class InspectionDisplay:
         pad = self._clamp(int(height * 0.02), 8, 20)
 
         status_h = self._clamp(int(height * 0.07), 30, 56)
-        # Inspection mode contains more actions; reserve more vertical room for readable buttons.
-        controls_ratio = 0.25 if self.active_mode == "inspection" else 0.17
+        # Keep controls readable while prioritizing the camera image area.
+        controls_ratio = 0.21 if self.active_mode == "inspection" else 0.15
         controls_h = self._clamp(int(height * controls_ratio), 90 if self.active_mode == "inspection" else 70, 180)
-        metrics_h = self._clamp(int(height * 0.16), 70, 130)
-        description_h = self._clamp(int(height * 0.18), 70, 140)
+        metrics_h = self._clamp(int(height * 0.12), 58, 110)
+        description_h = self._clamp(int(height * 0.13), 58, 115)
 
         available_for_image = height - (status_h + controls_h + metrics_h + description_h + pad * 5)
         image_h = max(80, available_for_image)
@@ -230,7 +230,8 @@ class InspectionDisplay:
         available_w = max(1, target_rect.width - 8)
         available_h = max(1, target_rect.height - 8)
         scale = min(available_w / img_width, available_h / img_height)
-        scale = min(scale, 1.0)
+        # Allow controlled upscaling for small ROI captures on larger touch displays.
+        scale = min(scale, 2.4)
         new_width = max(1, int(img_width * scale))
         new_height = max(1, int(img_height * scale))
         return pygame.transform.smoothscale(surface, (new_width, new_height))

@@ -1,10 +1,12 @@
 import time
+from pathlib import Path
 
 import pytest
 
 from inspection_system.app.operator_dashboard import (
     apply_config_updates,
     build_config_editor_values,
+    describe_preview_image,
     find_preview_image,
     get_nested_config_value,
     parse_config_value,
@@ -70,8 +72,8 @@ def test_build_config_editor_values_returns_string_values() -> None:
 
 
 def test_find_preview_image_returns_most_recent_image(tmp_path) -> None:
-    older = tmp_path / "golden_reference_image.png"
-    newer = tmp_path / "sample_diff.png"
+    older = tmp_path / "capture_a.png"
+    newer = tmp_path / "capture_b.png"
     ignored = tmp_path / "notes.txt"
 
     older.write_bytes(b"older")
@@ -93,6 +95,26 @@ def test_find_preview_image_returns_most_recent_image(tmp_path) -> None:
     assert preview == newer
 
 
+def test_find_preview_image_prefers_reference_image_over_newer_debug_diff(tmp_path) -> None:
+    reference = tmp_path / "golden_reference_image.png"
+    debug_diff = tmp_path / "temp_capture_diff.png"
+
+    reference.write_bytes(b"reference")
+    debug_diff.write_bytes(b"diff")
+
+    now = time.time()
+    old_time = now - 10
+    new_time = now - 1
+    import os
+
+    os.utime(reference, (old_time, old_time))
+    os.utime(debug_diff, (new_time, new_time))
+
+    preview = find_preview_image(tmp_path)
+
+    assert preview == reference
+
+
 def test_find_preview_image_returns_none_without_supported_files(tmp_path) -> None:
     (tmp_path / "notes.txt").write_text("ignore", encoding="utf-8")
 
@@ -103,3 +125,10 @@ def test_should_close_dashboard_on_launch_policy() -> None:
     assert should_close_dashboard_on_launch("project-manager") is True
     assert should_close_dashboard_on_launch("train") is False
     assert should_close_dashboard_on_launch("capture") is False
+
+
+def test_describe_preview_image_categories() -> None:
+    assert describe_preview_image(Path("golden_reference_image.png")) == "reference"
+    assert describe_preview_image(Path("temp_capture_diff.png")) == "difference debug"
+    assert describe_preview_image(Path("temp_capture_mask.png")) == "mask debug"
+    assert describe_preview_image(Path("capture_latest.png")) == "latest sample"

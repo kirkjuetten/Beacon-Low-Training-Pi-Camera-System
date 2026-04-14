@@ -36,6 +36,7 @@ from inspection_system.app.touch_keyboard import TouchKeyboardManager
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_SCRIPT = REPO_ROOT / "inspection_system" / "app" / "capture_test.py"
 PREVIEW_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+REFERENCE_PREVIEW_NAME = "golden_reference_image.png"
 CONFIG_FIELD_SPECS = [
     ("capture.timeout_ms", "Capture Timeout (ms)", int),
     ("capture.shutter_us", "Shutter (us)", int),
@@ -128,13 +129,36 @@ def find_preview_image(reference_dir: Path) -> Path | None:
     if not reference_dir.exists():
         return None
 
+    preferred = reference_dir / REFERENCE_PREVIEW_NAME
+    if preferred.exists():
+        return preferred
+
     candidates = [
         path for path in reference_dir.iterdir()
         if path.is_file() and path.suffix.lower() in PREVIEW_EXTENSIONS
     ]
     if not candidates:
         return None
+
+    # Avoid showing debug diff/mask snapshots when a real sample image is available.
+    non_debug = [
+        path for path in candidates
+        if not path.name.endswith("_diff.png") and not path.name.endswith("_mask.png")
+    ]
+    if non_debug:
+        return max(non_debug, key=lambda path: path.stat().st_mtime)
     return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def describe_preview_image(preview_path: Path) -> str:
+    name = preview_path.name
+    if name == REFERENCE_PREVIEW_NAME:
+        return "reference"
+    if name.endswith("_diff.png"):
+        return "difference debug"
+    if name.endswith("_mask.png"):
+        return "mask debug"
+    return "latest sample"
 
 
 def should_close_dashboard_on_launch(mode: str) -> bool:
@@ -148,8 +172,8 @@ class OperatorDashboard:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Beacon Inspection Dashboard")
-        self.root.geometry("1360x860")
-        self.root.minsize(1180, 760)
+        self.root.geometry("1200x760")
+        self.root.minsize(900, 520)
         self.keyboard_manager = TouchKeyboardManager(self.root)
 
         self.operation_running = False
@@ -184,9 +208,9 @@ class OperatorDashboard:
 
         main = ttk.Frame(self.root, padding=14)
         main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=3)
-        main.columnconfigure(2, weight=2)
+        main.columnconfigure(0, weight=5, uniform="top_panels")
+        main.columnconfigure(1, weight=4, uniform="top_panels")
+        main.columnconfigure(2, weight=4, uniform="top_panels")
         main.rowconfigure(1, weight=1)
         main.rowconfigure(2, weight=2)
 
@@ -271,21 +295,25 @@ class OperatorDashboard:
         ttk.Button(buttons, text="Save Config", command=self.save_config_editor).grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
-        ttk.Label(parent, text="Active project").grid(row=0, column=0, columnspan=2, sticky="w")
+        parent.columnconfigure(0, weight=1)
+
+        ttk.Label(parent, text="Active project").grid(row=0, column=0, sticky="w")
         self.project_combo = ttk.Combobox(parent, textvariable=self.project_select_var, state="readonly")
-        self.project_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+        self.project_combo.grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
-        ttk.Button(parent, text="Switch", command=self.switch_selected_project).grid(row=2, column=0, sticky="ew", padx=(0, 4), pady=4)
-        ttk.Button(parent, text="Delete", command=self.delete_selected_project).grid(row=2, column=1, sticky="ew", padx=(4, 0), pady=4)
-        ttk.Button(parent, text="Export", command=self.export_selected_project).grid(row=3, column=0, sticky="ew", padx=(0, 4), pady=4)
-        ttk.Button(parent, text="Import", command=self.import_project_from_zip).grid(row=3, column=1, sticky="ew", padx=(4, 0), pady=4)
+        ttk.Button(parent, text="Switch to Selected Project", command=self.switch_selected_project).grid(row=2, column=0, sticky="ew", pady=3)
+        ttk.Button(parent, text="Delete Selected Project", command=self.delete_selected_project).grid(row=3, column=0, sticky="ew", pady=3)
+        ttk.Button(parent, text="Export Selected Project", command=self.export_selected_project).grid(row=4, column=0, sticky="ew", pady=3)
+        ttk.Button(parent, text="Import Project from ZIP", command=self.import_project_from_zip).grid(row=5, column=0, sticky="ew", pady=3)
 
-        ttk.Separator(parent, orient="horizontal").grid(row=4, column=0, columnspan=2, sticky="ew", pady=12)
+        ttk.Separator(parent, orient="horizontal").grid(row=6, column=0, sticky="ew", pady=12)
 
-        ttk.Label(parent, text="Create project").grid(row=5, column=0, columnspan=2, sticky="w")
-        ttk.Entry(parent, textvariable=self.new_project_name_var).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 8))
-        ttk.Entry(parent, textvariable=self.new_project_desc_var).grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        ttk.Button(parent, text="Create Project", command=self.create_project_from_form).grid(row=8, column=0, columnspan=2, sticky="ew")
+        ttk.Label(parent, text="Create project").grid(row=7, column=0, sticky="w")
+        ttk.Label(parent, text="Name").grid(row=8, column=0, sticky="w")
+        ttk.Entry(parent, textvariable=self.new_project_name_var).grid(row=9, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(parent, text="Description").grid(row=10, column=0, sticky="w")
+        ttk.Entry(parent, textvariable=self.new_project_desc_var).grid(row=11, column=0, sticky="ew", pady=(2, 8))
+        ttk.Button(parent, text="Create Project", command=self.create_project_from_form).grid(row=12, column=0, sticky="ew")
 
     def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
         ttk.Label(parent, textvariable=self.preview_path_var, wraplength=280).grid(row=0, column=0, sticky="w")
@@ -533,10 +561,11 @@ class OperatorDashboard:
             self.preview_photo = None
             return
 
-        self.preview_path_var.set(f"Preview: {preview_path.name}")
+        preview_kind = describe_preview_image(preview_path)
+        self.preview_path_var.set(f"Preview ({preview_kind}): {preview_path.name}")
         if PIL_AVAILABLE:
             image = Image.open(preview_path)
-            image.thumbnail((320, 240))
+            image.thumbnail((420, 300))
             self.preview_photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=self.preview_photo, text="")
         else:
