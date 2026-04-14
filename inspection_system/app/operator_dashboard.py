@@ -211,6 +211,8 @@ class OperatorDashboard:
         self.root.geometry("1200x760")
         self.root.minsize(900, 520)
         self.keyboard_manager = TouchKeyboardManager(self.root)
+        if self.keyboard_manager.enabled:
+            self.root.bind_all("<Control-k>", lambda _e: self.hide_keyboard())
 
         self.operation_running = False
         self.preview_photo = None
@@ -255,7 +257,11 @@ class OperatorDashboard:
         header.columnconfigure(0, weight=1)
 
         ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
+        if self.keyboard_manager.enabled:
+            ttk.Button(header, text="Hide Keyboard", command=self.hide_keyboard).grid(row=0, column=1, padx=(12, 0), sticky="e")
+            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=2, sticky="e")
+        else:
+            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
 
         ops_frame = ttk.LabelFrame(main, text="Operations", padding=12)
         ops_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
@@ -312,9 +318,11 @@ class OperatorDashboard:
         self.project_manager_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
         self.refresh_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
+        self.exit_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=6)
 
         config_frame = ttk.LabelFrame(parent, text="Config Editor", padding=8)
-        config_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+        config_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
         config_frame.columnconfigure(1, weight=1)
 
         for row, (dotted_path, label, _) in enumerate(CONFIG_FIELD_SPECS):
@@ -414,8 +422,22 @@ class OperatorDashboard:
         self.operation_running = busy
         self.status_var.set(status)
         state = "disabled" if busy else "normal"
-        for button in [self.capture_button, self.reference_button, self.inspect_button, self.training_button, self.project_manager_button, self.refresh_button]:
+        for button in [
+            self.capture_button,
+            self.reference_button,
+            self.inspect_button,
+            self.training_button,
+            self.project_manager_button,
+            self.refresh_button,
+            self.exit_button,
+        ]:
             button.configure(state=state)
+
+    def exit_dashboard(self) -> None:
+        if self.operation_running:
+            messagebox.showinfo("Busy", "Wait for current operation to finish before exiting.")
+            return
+        self.root.destroy()
 
     def run_command(self, mode: str) -> None:
         if self.operation_running:
@@ -677,6 +699,10 @@ class OperatorDashboard:
         self.recent_logs.delete(0, tk.END)
         for log in logs[-12:]:
             self.recent_logs.insert(tk.END, f"[{log['timestamp']}] {log['status']} -> {log['feedback']} | {log['filename']}")
+
+    def hide_keyboard(self) -> None:
+        self.keyboard_manager.hide_keyboard()
+        self.status_var.set("Keyboard hidden")
 
 
 def main() -> None:

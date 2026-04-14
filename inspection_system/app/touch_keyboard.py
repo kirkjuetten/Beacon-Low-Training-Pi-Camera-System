@@ -81,6 +81,12 @@ class TouchKeyboardManager:
         if self._process.poll() is None:
             try:
                 self._process.terminate()
+                self._process.wait(timeout=0.8)
+            except subprocess.TimeoutExpired:
+                try:
+                    self._process.kill()
+                except OSError:
+                    pass
             except OSError:
                 pass
         self._process = None

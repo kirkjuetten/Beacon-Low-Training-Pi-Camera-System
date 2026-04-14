@@ -108,6 +108,11 @@ class ProjectManagerGUI:
                   command=self.refresh_projects).grid(row=0, column=2, padx=(0, 5))
         ttk.Button(right_buttons, text="Back to Dashboard",
                   command=self._launch_dashboard).grid(row=0, column=3, padx=(10, 0))
+        if self.keyboard_manager.enabled:
+            ttk.Button(right_buttons, text="Hide Keyboard",
+                      command=self.keyboard_manager.hide_keyboard).grid(row=0, column=4, padx=(10, 0))
+        ttk.Button(right_buttons, text="Exit",
+                  command=self.root.destroy).grid(row=0, column=5, padx=(10, 0))
 
         # Status bar
         self.status_var = tk.StringVar()
