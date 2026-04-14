@@ -39,7 +39,7 @@ CONFIG_FIELD_SPECS = [
     ("capture.timeout_ms", "Capture Timeout (ms)", int),
     ("capture.shutter_us", "Shutter (us)", int),
     ("inspection.threshold_value", "Threshold Value", int),
-    ("inspection.min_white_pixels", "Min White Pixels", int),
+    ("inspection.min_feature_pixels", "Min Feature Pixels", int),
     ("inspection.min_required_coverage", "Min Required Coverage", float),
     ("inspection.max_outside_allowed_ratio", "Max Outside Allowed", float),
     ("inspection.min_section_coverage", "Min Section Coverage", float),

@@ -9,6 +9,7 @@ class FakeCv2:
     IMREAD_COLOR = 1
     COLOR_BGR2GRAY = 2
     THRESH_BINARY = 4
+    THRESH_BINARY_INV = 16
     THRESH_OTSU = 8
 
     def __init__(self, image):
@@ -78,3 +79,56 @@ def test_make_binary_mask_uses_roi_blur_and_threshold() -> None:
     assert fake_cv2.calls[1] == ("cvtColor", (2, 2, 3), fake_cv2.COLOR_BGR2GRAY)
     assert fake_cv2.calls[2] == ("GaussianBlur", (2, 2), (3, 3), 0)
     assert fake_cv2.calls[3] == ("threshold", (2, 2), 180, 255, fake_cv2.THRESH_BINARY)
+
+
+def test_make_binary_mask_supports_otsu_inv() -> None:
+    image = np.arange(4 * 4 * 3, dtype=np.uint8).reshape(4, 4, 3)
+    fake_cv2 = FakeCv2(image)
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    make_binary_mask(
+        Path("sample.jpg"),
+        {
+            "roi": {"x": 0, "y": 0, "width": 2, "height": 2},
+            "blur_kernel": 1,
+            "threshold_mode": "otsu_inv",
+        },
+        fake_import_cv2_and_numpy,
+    )
+
+    assert fake_cv2.calls[2] == (
+        "threshold",
+        (2, 2),
+        0,
+        255,
+        fake_cv2.THRESH_BINARY_INV + fake_cv2.THRESH_OTSU,
+    )
+
+
+def test_make_binary_mask_supports_fixed_inv() -> None:
+    image = np.arange(4 * 4 * 3, dtype=np.uint8).reshape(4, 4, 3)
+    fake_cv2 = FakeCv2(image)
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    make_binary_mask(
+        Path("sample.jpg"),
+        {
+            "roi": {"x": 0, "y": 0, "width": 2, "height": 2},
+            "blur_kernel": 1,
+            "threshold_mode": "fixed_inv",
+            "threshold_value": 123,
+        },
+        fake_import_cv2_and_numpy,
+    )
+
+    assert fake_cv2.calls[2] == (
+        "threshold",
+        (2, 2),
+        123,
+        255,
+        fake_cv2.THRESH_BINARY_INV,
+    )

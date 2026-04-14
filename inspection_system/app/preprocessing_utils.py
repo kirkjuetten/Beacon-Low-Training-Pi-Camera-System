@@ -3,11 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def _safe_int(value, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_roi(image, roi_cfg: dict):
-    x = int(roi_cfg.get("x", 0))
-    y = int(roi_cfg.get("y", 0))
-    w = int(roi_cfg.get("width", 0))
-    h = int(roi_cfg.get("height", 0))
+    x = _safe_int(roi_cfg.get("x", 0), 0)
+    y = _safe_int(roi_cfg.get("y", 0), 0)
+    w = _safe_int(roi_cfg.get("width", 0), 0)
+    h = _safe_int(roi_cfg.get("height", 0), 0)
 
     if w <= 0 or h <= 0:
         return image, (0, 0, image.shape[1], image.shape[0])
@@ -43,6 +52,10 @@ def make_binary_mask(image_path: Path, inspection_cfg: dict, import_cv2_and_nump
 
     if threshold_mode == "otsu":
         _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    elif threshold_mode == "otsu_inv":
+        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    elif threshold_mode == "fixed_inv":
+        _, mask = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY_INV)
     else:
         _, mask = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
 

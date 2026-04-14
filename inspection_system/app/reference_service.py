@@ -38,11 +38,11 @@ def set_reference(config: dict) -> int:
         mask = erode_mask(mask, reference_erode_iterations, cv2, np)
         mask = dilate_mask(mask, reference_dilate_iterations, cv2, np)
 
-        white_pixels = int((mask > 0).sum())
-        min_white_pixels = int(inspection_cfg.get("min_white_pixels", 100))
-        if white_pixels < min_white_pixels:
-            print("Reference mask did not produce enough white pixels.")
-            print(f"White pixels found: {white_pixels}")
+        feature_pixels = int((mask > 0).sum())
+        min_feature_pixels = int(inspection_cfg.get("min_feature_pixels", inspection_cfg.get("min_white_pixels", 100)))
+        if feature_pixels < min_feature_pixels:
+            print("Reference mask did not produce enough feature pixels.")
+            print(f"Feature pixels found: {feature_pixels}")
             print("Adjust ROI / threshold before using this reference.")
             return 3
 
@@ -54,7 +54,7 @@ def set_reference(config: dict) -> int:
         cv2.imwrite(str(ref_image_path), roi_image)
         print(f"Saved reference mask: {ref_mask_path}")
         print(f"Saved reference image: {ref_image_path}")
-        print(f"Reference white pixels: {white_pixels}")
+        print(f"Reference feature pixels: {feature_pixels}")
         return 0
     finally:
         cleanup_temp_image()

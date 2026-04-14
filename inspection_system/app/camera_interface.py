@@ -32,10 +32,10 @@ DEFAULT_CONFIG = {
     "inspection": {
         "enabled": True,
         "roi": {
-            "x": 460,
-            "y": 360,
-            "width": 680,
-            "height": 220,
+            "x": 0,
+            "y": 0,
+            "width": None,
+            "height": None,
         },
         "threshold_mode": "otsu",
         "threshold_value": 180,
@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
         "reference_dilate_iterations": 1,
         "sample_erode_iterations": 1,
         "sample_dilate_iterations": 1,
-        "min_white_pixels": 100,
+        "min_feature_pixels": 100,
         "save_debug_images": True,
         "allowed_dilate_iterations": 2,
         "required_erode_iterations": 1,

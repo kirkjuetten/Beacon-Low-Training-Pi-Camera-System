@@ -806,10 +806,10 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         mask = erode_mask(mask, ref_erode, cv2, np)
         mask = dilate_mask(mask, ref_dilate, cv2, np)
 
-        white_pixels = int((mask > 0).sum())
-        min_white = int(inspection_cfg.get("min_white_pixels", 100))
-        if white_pixels < min_white:
-            return False, f"Too few white pixels ({white_pixels}). Adjust ROI or threshold."
+        feature_pixels = int((mask > 0).sum())
+        min_feature = int(inspection_cfg.get("min_feature_pixels", inspection_cfg.get("min_white_pixels", 100)))
+        if feature_pixels < min_feature:
+            return False, f"Too few feature pixels ({feature_pixels}). Adjust ROI or threshold."
 
         active_paths = get_active_runtime_paths()
         ref_mask_path = active_paths["reference_mask"]
@@ -817,7 +817,7 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         ref_mask_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(ref_mask_path), mask)
         cv2.imwrite(str(ref_image_path), roi_image)
-        return True, f"Reference saved ({white_pixels} white pixels)"
+        return True, f"Reference saved ({feature_pixels} feature pixels)"
     except Exception as exc:
         return False, f"Reference capture error: {exc}"
 
