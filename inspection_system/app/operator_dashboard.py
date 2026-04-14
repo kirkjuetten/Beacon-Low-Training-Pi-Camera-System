@@ -43,10 +43,19 @@ CONFIG_FIELD_SPECS = [
     ("inspection.min_required_coverage", "Min Required Coverage", float),
     ("inspection.max_outside_allowed_ratio", "Max Outside Allowed", float),
     ("inspection.min_section_coverage", "Min Section Coverage", float),
+    ("inspection.min_ssim", "Min SSIM (optional)", float),
+    ("inspection.max_mse", "Max MSE (optional)", float),
+    ("inspection.min_anomaly_score", "Min Anomaly Score (optional)", float),
     ("inspection.save_debug_images", "Save Debug Images", bool),
     ("alignment.enabled", "Alignment Enabled", bool),
     ("indicator_led.enabled", "Indicator LED Enabled", bool),
 ]
+
+OPTIONAL_FLOAT_FIELDS = {
+    "inspection.min_ssim",
+    "inspection.max_mse",
+    "inspection.min_anomaly_score",
+}
 
 
 def read_json_file(file_path: Path) -> dict:
@@ -97,7 +106,11 @@ def apply_config_updates(config: dict, raw_updates: dict[str, str]) -> dict:
     for dotted_path, _, expected_type in CONFIG_FIELD_SPECS:
         if dotted_path not in raw_updates:
             continue
-        set_nested_config_value(updated, dotted_path, parse_config_value(raw_updates[dotted_path], expected_type))
+        raw_value = raw_updates[dotted_path]
+        if dotted_path in OPTIONAL_FLOAT_FIELDS and raw_value.strip() == "":
+            set_nested_config_value(updated, dotted_path, None)
+            continue
+        set_nested_config_value(updated, dotted_path, parse_config_value(raw_value, expected_type))
     return updated
 
 

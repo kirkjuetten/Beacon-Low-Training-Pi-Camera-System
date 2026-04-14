@@ -103,7 +103,8 @@ def inspect_against_reference(
     )
 
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
-    passed, threshold_summary = evaluate_metrics(metrics, inspection_cfg)
+    metric_inputs = {**metrics, **anomaly_metrics}
+    passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
 
     required_coverage = float(threshold_summary["required_coverage"])
     outside_allowed_ratio = float(threshold_summary["outside_allowed_ratio"])
@@ -152,6 +153,9 @@ def inspect_against_reference(
         "min_required_coverage": min_required_coverage,
         "max_outside_allowed_ratio": max_outside_allowed_ratio,
         "min_section_coverage_limit": min_section_coverage_limit,
+        "min_ssim": threshold_summary.get("min_ssim"),
+        "max_mse": threshold_summary.get("max_mse"),
+        "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
         "debug_paths": debug_paths,
         **anomaly_metrics,
     }

@@ -79,3 +79,52 @@ def test_evaluate_metrics_applies_thresholds() -> None:
     assert summary["min_required_coverage"] == 0.92
     assert summary["max_outside_allowed_ratio"] == 0.02
     assert summary["min_section_coverage_limit"] == 0.85
+
+
+def test_evaluate_metrics_applies_optional_ssim_and_mse_gates() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.91,
+        "mse": 4.0,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["ssim"] == 0.91
+    assert summary["mse"] == 4.0
+    assert summary["min_ssim"] == 0.9
+    assert summary["max_mse"] == 5.0
+
+
+def test_evaluate_metrics_fails_when_optional_gate_is_not_met() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.75,
+        "mse": 9.0,
+        "anomaly_score": -0.2,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["min_anomaly_score"] == 0.0

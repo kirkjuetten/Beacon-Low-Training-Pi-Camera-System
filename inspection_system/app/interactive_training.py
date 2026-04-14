@@ -36,6 +36,7 @@ from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 
 
 class InspectionDisplay:
@@ -886,6 +887,16 @@ def run_interactive_training(config: dict) -> int:
 
     active_paths = get_active_runtime_paths()
 
+    model_path = active_paths["reference_dir"] / "anomaly_model.pkl"
+    anomaly_detector = None
+    if model_path.exists():
+        try:
+            anomaly_detector = AnomalyDetector(model_path=model_path)
+            anomaly_detector.load_model()
+            print(f"Loaded anomaly model: {model_path}")
+        except Exception as exc:
+            print(f"Warning: failed to load anomaly model from {model_path}: {exc}")
+
     # Initialize logger
     log_dir = active_paths["log_dir"]
     logger = TrainingLogger(log_dir)
@@ -991,7 +1002,7 @@ def run_interactive_training(config: dict) -> int:
                     import_cv2_and_numpy,
                     dilate_mask,
                     erode_mask,
-                    anomaly_detector=None,
+                    anomaly_detector=anomaly_detector,
                 )
 
                 # Display result and get feedback

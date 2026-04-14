@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from pathlib import Path
+
+from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
 from inspection_system.app.inspection_pipeline import inspect_against_reference
@@ -9,6 +12,20 @@ from inspection_system.app.reference_service import save_debug_outputs
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
+
+
+def load_anomaly_detector(active_paths: dict):
+    model_path = Path(active_paths["reference_dir"]) / "anomaly_model.pkl"
+    if not model_path.exists():
+        return None
+
+    detector = AnomalyDetector(model_path=model_path)
+    try:
+        detector.load_model()
+        return detector
+    except Exception as exc:
+        print(f"Warning: failed to load anomaly model from {model_path}: {exc}")
+        return None
 
 
 def run_interactive_training(config: dict) -> int:
@@ -33,13 +50,23 @@ def print_inspection_result(passed: bool, details: dict) -> None:
     if details.get("section_coverages"):
         print("Section coverages:", ", ".join(f"{v:.3f}" for v in details["section_coverages"]))
     if "ssim" in details:
-        print(f"SSIM: {details['ssim']:.4f}")
+        if details.get("min_ssim") is not None:
+            print(f"SSIM: {details['ssim']:.4f} (min {details['min_ssim']:.4f})")
+        else:
+            print(f"SSIM: {details['ssim']:.4f}")
     if "histogram_similarity" in details:
         print(f"Histogram similarity: {details['histogram_similarity']:.4f}")
     if "mse" in details:
-        print(f"MSE: {details['mse']:.2f}")
+        if details.get("max_mse") is not None:
+            print(f"MSE: {details['mse']:.2f} (max {details['max_mse']:.2f})")
+        else:
+            print(f"MSE: {details['mse']:.2f}")
     if "anomaly_score" in details:
-        print(f"Anomaly score: {details['anomaly_score']:.4f}")
+        anomaly_score = details.get("anomaly_score")
+        if anomaly_score is not None and details.get("min_anomaly_score") is not None:
+            print(f"Anomaly score: {anomaly_score:.4f} (min {details['min_anomaly_score']:.4f})")
+        elif anomaly_score is not None:
+            print(f"Anomaly score: {anomaly_score:.4f}")
     if details.get("debug_paths"):
         for key, path in details["debug_paths"].items():
             print(f"Debug {key}: {path}")
@@ -71,6 +98,7 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
 
     try:
         active_paths = get_active_runtime_paths()
+        anomaly_detector = load_anomaly_detector(active_paths)
         passed, details = inspect_against_reference(
             config,
             image_path,
@@ -86,7 +114,7 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
             import_cv2_and_numpy,
             dilate_mask,
             erode_mask,
-            anomaly_detector=None,
+            anomaly_detector=anomaly_detector,
         )
         print_inspection_result(passed, details)
         if passed:
