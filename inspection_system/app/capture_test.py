@@ -24,6 +24,7 @@ from inspection_system.app.ui_launcher import launch_dashboard, launch_project_m
 def print_usage() -> None:
     print("Usage:")
     print("  python3 capture_test.py dashboard        # Operator home (default)")
+    print("  python3 capture_test.py quick-check      # Run functional smoke sequence")
     print("  python3 capture_test.py capture          # Manual capture only")
     print("  python3 capture_test.py set-reference    # Set reference image")
     print("  python3 capture_test.py inspect          # Run inspection on new part")
@@ -70,7 +71,36 @@ def command_dashboard(_config: dict, _indicator: IndicatorLED, _argv: list[str])
     return launch_dashboard()
 
 
+def command_quick_check(config: dict, indicator: IndicatorLED, _argv: list[str]) -> int:
+    """Run core functional checks in sequence and summarize results."""
+    steps = [
+        ("list-projects", lambda: handle_list_projects()),
+        ("capture", lambda: run_capture_only(config)),
+        ("inspect", lambda: run_capture_and_inspect(config, indicator)),
+    ]
+
+    results: list[tuple[str, int]] = []
+    print("Running quick functional check...")
+    for name, runner in steps:
+        print(f"\n== {name} ==")
+        code = int(runner())
+        results.append((name, code))
+        print(f"{name} exit: {code}")
+        if code != 0:
+            break
+
+    print("\nQuick check summary:")
+    for name, code in results:
+        print(f"- {name}: {'PASS' if code == 0 else 'FAIL'} (exit {code})")
+
+    for _name, code in results:
+        if code != 0:
+            return code
+    return 0
+
+
 COMMAND_HANDLERS = {
+    "quick-check": command_quick_check,
     "capture": command_capture,
     "set-reference": command_set_reference,
     "inspect": command_inspect,
