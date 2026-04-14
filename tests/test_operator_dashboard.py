@@ -115,6 +115,54 @@ def test_find_preview_image_prefers_reference_image_over_newer_debug_diff(tmp_pa
     assert preview == reference
 
 
+def test_find_preview_image_skips_non_informative_reference(tmp_path) -> None:
+    reference = tmp_path / "golden_reference_image.png"
+    sample = tmp_path / "capture_latest.png"
+
+    reference.write_bytes(b"reference")
+    sample.write_bytes(b"sample")
+
+    now = time.time()
+    old_time = now - 10
+    new_time = now - 1
+    import os
+
+    os.utime(reference, (old_time, old_time))
+    os.utime(sample, (new_time, new_time))
+
+    informative = {
+        reference.name: False,
+        sample.name: True,
+    }
+    preview = find_preview_image(tmp_path, is_informative_fn=lambda p: informative.get(p.name, True))
+
+    assert preview == sample
+
+
+def test_find_preview_image_uses_informative_debug_if_needed(tmp_path) -> None:
+    sample = tmp_path / "capture_latest.png"
+    debug_diff = tmp_path / "temp_capture_diff.png"
+
+    sample.write_bytes(b"sample")
+    debug_diff.write_bytes(b"diff")
+
+    now = time.time()
+    old_time = now - 10
+    new_time = now - 1
+    import os
+
+    os.utime(sample, (old_time, old_time))
+    os.utime(debug_diff, (new_time, new_time))
+
+    informative = {
+        sample.name: False,
+        debug_diff.name: True,
+    }
+    preview = find_preview_image(tmp_path, is_informative_fn=lambda p: informative.get(p.name, True))
+
+    assert preview == debug_diff
+
+
 def test_find_preview_image_returns_none_without_supported_files(tmp_path) -> None:
     (tmp_path / "notes.txt").write_text("ignore", encoding="utf-8")
 

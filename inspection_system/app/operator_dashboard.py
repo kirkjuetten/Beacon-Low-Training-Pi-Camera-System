@@ -12,10 +12,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageStat, ImageTk
     PIL_AVAILABLE = True
 except ImportError:
     Image = None
+    ImageStat = None
     ImageTk = None
     PIL_AVAILABLE = False
 
@@ -125,12 +126,29 @@ def build_config_editor_values(config: dict) -> dict[str, str]:
     return values
 
 
-def find_preview_image(reference_dir: Path) -> Path | None:
+def is_informative_preview_image(image_path: Path) -> bool:
+    """Return False for likely blank/black preview images."""
+    if not PIL_AVAILABLE:
+        return True
+    try:
+        image = Image.open(image_path).convert("L")
+        min_px, max_px = image.getextrema()
+        mean_px = float(ImageStat.Stat(image).mean[0])
+    except Exception:
+        return False
+
+    contrast = int(max_px) - int(min_px)
+    return contrast >= 6 and mean_px >= 6.0
+
+
+def find_preview_image(reference_dir: Path, is_informative_fn=None) -> Path | None:
     if not reference_dir.exists():
         return None
 
+    is_informative = is_informative_fn or is_informative_preview_image
+
     preferred = reference_dir / REFERENCE_PREVIEW_NAME
-    if preferred.exists():
+    if preferred.exists() and is_informative(preferred):
         return preferred
 
     candidates = [
@@ -145,6 +163,15 @@ def find_preview_image(reference_dir: Path) -> Path | None:
         path for path in candidates
         if not path.name.endswith("_diff.png") and not path.name.endswith("_mask.png")
     ]
+
+    informative_non_debug = [path for path in non_debug if is_informative(path)]
+    if informative_non_debug:
+        return max(informative_non_debug, key=lambda path: path.stat().st_mtime)
+
+    informative_candidates = [path for path in candidates if is_informative(path)]
+    if informative_candidates:
+        return max(informative_candidates, key=lambda path: path.stat().st_mtime)
+
     if non_debug:
         return max(non_debug, key=lambda path: path.stat().st_mtime)
     return max(candidates, key=lambda path: path.stat().st_mtime)
