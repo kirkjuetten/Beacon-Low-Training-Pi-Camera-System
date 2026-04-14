@@ -95,6 +95,18 @@ def test_find_preview_image_returns_most_recent_image(tmp_path) -> None:
     assert preview == newer
 
 
+def test_find_preview_image_prefers_live_capture_preview(tmp_path) -> None:
+    live = tmp_path / "dashboard_live_preview.png"
+    reference = tmp_path / "golden_reference_image.png"
+
+    live.write_bytes(b"live")
+    reference.write_bytes(b"reference")
+
+    preview = find_preview_image(tmp_path, is_informative_fn=lambda _p: True)
+
+    assert preview == live
+
+
 def test_find_preview_image_prefers_reference_image_over_newer_debug_diff(tmp_path) -> None:
     reference = tmp_path / "golden_reference_image.png"
     debug_diff = tmp_path / "temp_capture_diff.png"
@@ -176,6 +188,7 @@ def test_should_close_dashboard_on_launch_policy() -> None:
 
 
 def test_describe_preview_image_categories() -> None:
+    assert describe_preview_image(Path("dashboard_live_preview.png")) == "live capture"
     assert describe_preview_image(Path("golden_reference_image.png")) == "reference"
     assert describe_preview_image(Path("temp_capture_diff.png")) == "difference debug"
     assert describe_preview_image(Path("temp_capture_mask.png")) == "mask debug"

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import threading
@@ -32,11 +33,13 @@ from inspection_system.app.camera_interface import (
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
 from inspection_system.app.touch_keyboard import TouchKeyboardManager
+from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_SCRIPT = REPO_ROOT / "inspection_system" / "app" / "capture_test.py"
 PREVIEW_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+LIVE_PREVIEW_NAME = "dashboard_live_preview.png"
 REFERENCE_PREVIEW_NAME = "golden_reference_image.png"
 CONFIG_FIELD_SPECS = [
     ("capture.timeout_ms", "Capture Timeout (ms)", int),
@@ -147,6 +150,10 @@ def find_preview_image(reference_dir: Path, is_informative_fn=None) -> Path | No
 
     is_informative = is_informative_fn or is_informative_preview_image
 
+    live_preview = reference_dir / LIVE_PREVIEW_NAME
+    if live_preview.exists() and is_informative(live_preview):
+        return live_preview
+
     preferred = reference_dir / REFERENCE_PREVIEW_NAME
     if preferred.exists() and is_informative(preferred):
         return preferred
@@ -179,6 +186,8 @@ def find_preview_image(reference_dir: Path, is_informative_fn=None) -> Path | No
 
 def describe_preview_image(preview_path: Path) -> str:
     name = preview_path.name
+    if name == LIVE_PREVIEW_NAME:
+        return "live capture"
     if name == REFERENCE_PREVIEW_NAME:
         return "reference"
     if name.endswith("_diff.png"):
@@ -346,7 +355,7 @@ class OperatorDashboard:
         ttk.Label(parent, textvariable=self.preview_path_var, wraplength=280).grid(row=0, column=0, sticky="w")
         self.preview_label = ttk.Label(parent, text="No preview image available", anchor="center")
         self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        ttk.Button(parent, text="Refresh Preview", command=self.refresh_dashboard).grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(parent, text="Refresh Preview", command=self.refresh_live_preview).grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
     def _build_console(self, parent: ttk.LabelFrame) -> None:
         self.console = tk.Text(parent, wrap="word", height=18, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
@@ -579,6 +588,41 @@ class OperatorDashboard:
             self.refresh_dashboard()
         except ValueError as exc:
             messagebox.showerror("Invalid config value", str(exc))
+
+    def refresh_live_preview(self) -> None:
+        if self.operation_running:
+            messagebox.showinfo("Busy", "An operation is already running.")
+            return
+
+        self.append_console("\n> Capturing live preview\n")
+        self.set_busy(True, "Refreshing live preview...")
+        thread = threading.Thread(target=self._refresh_live_preview_thread, daemon=True)
+        thread.start()
+
+    def _refresh_live_preview_thread(self) -> None:
+        active_paths = get_active_runtime_paths()
+        config = read_json_file(active_paths["config_file"])
+        result_code = 1
+        stderr_text = ""
+        try:
+            result_code, image_path, stderr_text = capture_to_temp(config)
+            if result_code == 0 and image_path.exists():
+                preview_path = active_paths["reference_dir"] / LIVE_PREVIEW_NAME
+                preview_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(image_path, preview_path)
+                self.root.after(0, self.append_console, f"> Live preview updated: {preview_path.name}\n")
+            else:
+                detail = stderr_text or "capture failed"
+                self.root.after(0, self.append_console, f"> Live preview capture failed: {detail}\n")
+        finally:
+            cleanup_temp_image()
+
+        def finish() -> None:
+            status = "Live preview updated" if result_code == 0 else "Live preview failed"
+            self.set_busy(False, status)
+            self.refresh_dashboard()
+
+        self.root.after(0, finish)
 
     def refresh_preview(self, active_paths: dict[str, Path]) -> None:
         preview_path = find_preview_image(active_paths["reference_dir"])
