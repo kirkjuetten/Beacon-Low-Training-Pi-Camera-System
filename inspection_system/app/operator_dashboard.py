@@ -209,6 +209,8 @@ class OperatorDashboard:
         self.root = root
         self.root.title("Beacon Inspection Dashboard")
         self._configure_window_size()
+        self.compact_mode = self._screen_h <= 560
+        self.preview_enabled = not self.compact_mode
         self.keyboard_manager = TouchKeyboardManager(self.root)
         if self.keyboard_manager.enabled:
             self.root.bind_all("<Control-k>", lambda _e: self.hide_keyboard())
@@ -226,6 +228,7 @@ class OperatorDashboard:
         self.new_project_name_var = tk.StringVar()
         self.new_project_desc_var = tk.StringVar()
         self.preview_path_var = tk.StringVar(value="Preview: none")
+        self.preview_toggle_var = tk.StringVar(value="Hide Preview" if self.preview_enabled else "Show Preview")
 
         self.summary_vars = {
             "total_samples": tk.StringVar(value="0"),
@@ -244,6 +247,8 @@ class OperatorDashboard:
         self.root.update_idletasks()
         screen_w = int(self.root.winfo_screenwidth())
         screen_h = int(self.root.winfo_screenheight())
+        self._screen_w = screen_w
+        self._screen_h = screen_h
 
         target_w = min(1200, max(760, screen_w - 20))
         target_h = min(760, max(420, screen_h - 90))
@@ -254,61 +259,71 @@ class OperatorDashboard:
         self.root.minsize(min_w, min_h)
 
     def _build_layout(self) -> None:
+        if hasattr(self, "main"):
+            self.main.destroy()
+
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        main = ttk.Frame(self.root, padding=14)
-        main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=5, uniform="top_panels")
-        main.columnconfigure(1, weight=4, uniform="top_panels")
-        main.columnconfigure(2, weight=4, uniform="top_panels")
-        main.rowconfigure(1, weight=1)
-        main.rowconfigure(2, weight=2)
+        self.main = ttk.Frame(self.root, padding=14)
+        self.main.grid(row=0, column=0, sticky="nsew")
+        self.main.columnconfigure(0, weight=6, uniform="top_panels")
+        self.main.columnconfigure(1, weight=5, uniform="top_panels")
+        self.main.columnconfigure(2, weight=4 if self.preview_enabled else 0, uniform="top_panels")
+        self.main.rowconfigure(1, weight=1)
+        if not self.compact_mode:
+            self.main.rowconfigure(2, weight=2)
 
-        header = ttk.Frame(main)
+        header = ttk.Frame(self.main)
         header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
         header.columnconfigure(0, weight=1)
 
         ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Button(header, textvariable=self.preview_toggle_var, command=self.toggle_preview).grid(row=0, column=1, padx=(8, 0), sticky="e")
         if self.keyboard_manager.enabled:
-            ttk.Button(header, text="Hide Keyboard", command=self.hide_keyboard).grid(row=0, column=1, padx=(12, 0), sticky="e")
-            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=2, sticky="e")
+            ttk.Button(header, text="Hide Keyboard", command=self.hide_keyboard).grid(row=0, column=2, padx=(8, 0), sticky="e")
+            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=3, sticky="e")
         else:
-            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
+            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=2, sticky="e")
 
-        ops_frame = ttk.LabelFrame(main, text="Operations", padding=12)
+        ops_frame = ttk.LabelFrame(self.main, text="Operations", padding=12)
         ops_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
         ops_frame.columnconfigure(0, weight=1)
         ops_frame.columnconfigure(1, weight=1)
 
-        project_frame = ttk.LabelFrame(main, text="Projects", padding=12)
+        project_frame = ttk.LabelFrame(self.main, text="Projects", padding=12)
         project_frame.grid(row=1, column=1, sticky="nsew", padx=(0, 10), pady=(0, 10))
         project_frame.columnconfigure(0, weight=1)
         project_frame.columnconfigure(1, weight=1)
 
-        preview_frame = ttk.LabelFrame(main, text="Latest Preview", padding=12)
-        preview_frame.grid(row=1, column=2, sticky="nsew", pady=(0, 10))
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(1, weight=1)
+        self.preview_frame = ttk.LabelFrame(self.main, text="Latest Preview", padding=12)
+        self.preview_frame.columnconfigure(0, weight=1)
+        self.preview_frame.rowconfigure(1, weight=1)
+        if self.preview_enabled:
+            self.preview_frame.grid(row=1, column=2, sticky="nsew", pady=(0, 10))
 
-        output_frame = ttk.LabelFrame(main, text="Operator Console", padding=8)
-        output_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=(0, 10))
-        output_frame.columnconfigure(0, weight=1)
-        output_frame.rowconfigure(0, weight=1)
+        if not self.compact_mode:
+            output_frame = ttk.LabelFrame(self.main, text="Operator Console", padding=8)
+            output_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=(0, 10))
+            output_frame.columnconfigure(0, weight=1)
+            output_frame.rowconfigure(0, weight=1)
 
-        insights_frame = ttk.LabelFrame(main, text="Training Insights", padding=12)
-        insights_frame.grid(row=2, column=2, sticky="nsew")
-        insights_frame.columnconfigure(0, weight=1)
-        insights_frame.rowconfigure(2, weight=1)
+            insights_frame = ttk.LabelFrame(self.main, text="Training Insights", padding=12)
+            insights_frame.grid(row=2, column=2, sticky="nsew")
+            insights_frame.columnconfigure(0, weight=1)
+            insights_frame.rowconfigure(2, weight=1)
 
         self._build_operations_panel(ops_frame)
         self._build_project_panel(project_frame)
-        self._build_preview_panel(preview_frame)
-        self._build_console(output_frame)
-        self._build_insights_panel(insights_frame)
+        self._build_preview_panel(self.preview_frame)
+        if not self.compact_mode:
+            self._build_console(output_frame)
+            self._build_insights_panel(insights_frame)
 
-        status_bar = ttk.Label(self.root, textvariable=self.current_project_var, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.grid(row=1, column=0, sticky="ew")
+        if hasattr(self, "status_bar"):
+            self.status_bar.destroy()
+        self.status_bar = ttk.Label(self.root, textvariable=self.current_project_var, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.grid(row=1, column=0, sticky="ew")
 
     def _build_operations_panel(self, parent: ttk.LabelFrame) -> None:
         info = ttk.Frame(parent)
@@ -334,22 +349,27 @@ class OperatorDashboard:
         self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
         self.exit_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=6)
 
-        config_frame = ttk.LabelFrame(parent, text="Config Editor", padding=8)
-        config_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
-        config_frame.columnconfigure(1, weight=1)
+        if self.compact_mode:
+            ttk.Button(parent, text="Open Config Editor", command=self.open_config_editor_dialog).grid(
+                row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0)
+            )
+        else:
+            config_frame = ttk.LabelFrame(parent, text="Config Editor", padding=8)
+            config_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+            config_frame.columnconfigure(1, weight=1)
 
-        for row, (dotted_path, label, _) in enumerate(CONFIG_FIELD_SPECS):
-            ttk.Label(config_frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
-            var = tk.StringVar()
-            self.config_vars[dotted_path] = var
-            ttk.Entry(config_frame, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
+            for row, (dotted_path, label, _) in enumerate(CONFIG_FIELD_SPECS):
+                ttk.Label(config_frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
+                var = tk.StringVar()
+                self.config_vars[dotted_path] = var
+                ttk.Entry(config_frame, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
 
-        buttons = ttk.Frame(config_frame)
-        buttons.grid(row=len(CONFIG_FIELD_SPECS), column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        buttons.columnconfigure(0, weight=1)
-        buttons.columnconfigure(1, weight=1)
-        ttk.Button(buttons, text="Reload Config", command=self.reload_config_editor).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(buttons, text="Save Config", command=self.save_config_editor).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+            buttons = ttk.Frame(config_frame)
+            buttons.grid(row=len(CONFIG_FIELD_SPECS), column=0, columnspan=2, sticky="ew", pady=(10, 0))
+            buttons.columnconfigure(0, weight=1)
+            buttons.columnconfigure(1, weight=1)
+            ttk.Button(buttons, text="Reload Config", command=self.reload_config_editor).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+            ttk.Button(buttons, text="Save Config", command=self.save_config_editor).grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -373,6 +393,8 @@ class OperatorDashboard:
         ttk.Button(parent, text="Create Project", command=self.create_project_from_form).grid(row=12, column=0, sticky="ew")
 
     def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
+        for child in parent.winfo_children():
+            child.destroy()
         ttk.Label(parent, textvariable=self.preview_path_var, wraplength=280).grid(row=0, column=0, sticky="w")
         self.preview_label = ttk.Label(parent, text="No preview image available", anchor="center")
         self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
@@ -624,6 +646,56 @@ class OperatorDashboard:
         except ValueError as exc:
             messagebox.showerror("Invalid config value", str(exc))
 
+    def open_config_editor_dialog(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Config Editor")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.geometry("760x460")
+
+        frame = ttk.Frame(dialog, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+
+        config = read_json_file(get_active_runtime_paths()["config_file"])
+        editor_vars: dict[str, tk.StringVar] = {}
+        values = build_config_editor_values(config)
+
+        for row, (dotted_path, label, _) in enumerate(CONFIG_FIELD_SPECS):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
+            var = tk.StringVar(value=values.get(dotted_path, ""))
+            editor_vars[dotted_path] = var
+            ttk.Entry(frame, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
+
+        btns = ttk.Frame(frame)
+        btns.grid(row=len(CONFIG_FIELD_SPECS), column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        btns.columnconfigure(0, weight=1)
+        btns.columnconfigure(1, weight=1)
+
+        def save_and_close() -> None:
+            active_paths = get_active_runtime_paths()
+            config_path = active_paths["config_file"]
+            try:
+                current = read_json_file(config_path)
+                updated = apply_config_updates(current, {k: v.get() for k, v in editor_vars.items()})
+                write_json_file(config_path, updated)
+                self.append_console(f"\n> Saved config updates to {config_path}\n")
+                self.refresh_dashboard()
+                dialog.destroy()
+            except ValueError as exc:
+                messagebox.showerror("Invalid config value", str(exc))
+
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(btns, text="Save", command=save_and_close).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+    def toggle_preview(self) -> None:
+        self.preview_enabled = not self.preview_enabled
+        self.preview_toggle_var.set("Hide Preview" if self.preview_enabled else "Show Preview")
+        self._build_layout()
+        self.refresh_dashboard()
+
     def refresh_live_preview(self) -> None:
         if self.operation_running:
             messagebox.showinfo("Busy", "An operation is already running.")
@@ -698,7 +770,13 @@ class OperatorDashboard:
             self.project_select_var.set("")
 
         self.reload_config_editor()
-        self.refresh_preview(active_paths)
+        if self.preview_enabled:
+            self.refresh_preview(active_paths)
+        else:
+            self.preview_path_var.set("Preview: hidden")
+            if hasattr(self, "preview_label"):
+                self.preview_label.configure(text="Preview hidden", image="")
+                self.preview_photo = None
 
         logs = load_training_logs(active_paths["log_dir"])
         summary = analyze_logs(logs) if logs else {}
@@ -709,9 +787,10 @@ class OperatorDashboard:
         self.summary_vars["approval_rate"].set(f"{summary.get('approval_rate', 0):.1%}")
         self.summary_vars["sessions"].set(str(summary.get("sessions", 0)))
 
-        self.recent_logs.delete(0, tk.END)
-        for log in logs[-12:]:
-            self.recent_logs.insert(tk.END, f"[{log['timestamp']}] {log['status']} -> {log['feedback']} | {log['filename']}")
+        if hasattr(self, "recent_logs"):
+            self.recent_logs.delete(0, tk.END)
+            for log in logs[-12:]:
+                self.recent_logs.insert(tk.END, f"[{log['timestamp']}] {log['status']} -> {log['feedback']} | {log['filename']}")
 
     def hide_keyboard(self) -> None:
         self.keyboard_manager.hide_keyboard()
