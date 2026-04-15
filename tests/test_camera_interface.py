@@ -93,3 +93,57 @@ def test_get_active_runtime_paths_uses_current_project_registry(monkeypatch, tmp
     assert paths["config_file"] == project_config
     assert paths["log_dir"] == project_log_dir
     assert paths["reference_mask"] == project_reference_dir / "golden_reference_mask.png"
+
+
+def test_clone_project_copies_project_files_and_registry(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+    monkeypatch.setattr(camera_interface, "REFERENCE_MASK", tmp_path / "reference" / "golden_reference_mask.png")
+    monkeypatch.setattr(camera_interface, "REFERENCE_IMAGE", tmp_path / "reference" / "golden_reference_image.png")
+
+    camera_interface.ensure_directories()
+    assert camera_interface.create_project("alpha", "source project") is True
+
+    source_ref = tmp_path / "projects" / "alpha" / "reference"
+    marker = source_ref / "sample.png"
+    marker.write_bytes(b"img")
+
+    assert camera_interface.clone_project("alpha", "alpha_clone") is True
+
+    cloned_marker = tmp_path / "projects" / "alpha_clone" / "reference" / "sample.png"
+    assert cloned_marker.exists()
+
+    registry = camera_interface.get_project_registry()
+    assert "alpha_clone" in registry["projects"]
+    assert registry["projects"]["alpha_clone"]["description"] == "source project"
+
+
+def test_rename_project_updates_registry_and_current_project(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+    monkeypatch.setattr(camera_interface, "REFERENCE_MASK", tmp_path / "reference" / "golden_reference_mask.png")
+    monkeypatch.setattr(camera_interface, "REFERENCE_IMAGE", tmp_path / "reference" / "golden_reference_image.png")
+
+    camera_interface.ensure_directories()
+    assert camera_interface.create_project("beta", "rename me") is True
+    assert camera_interface.switch_project("beta") is True
+
+    assert camera_interface.rename_project("beta", "beta_renamed") is True
+
+    registry = camera_interface.get_project_registry()
+    assert "beta" not in registry["projects"]
+    assert "beta_renamed" in registry["projects"]
+    assert registry.get("current_project") == "beta_renamed"
+
+    assert (tmp_path / "projects" / "beta").exists() is False
+    assert (tmp_path / "projects" / "beta_renamed").exists() is True

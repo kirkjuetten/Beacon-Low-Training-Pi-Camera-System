@@ -21,7 +21,7 @@ except ImportError:
 
 from inspection_system.app.camera_interface import (
     create_project, switch_project, get_current_project, list_projects,
-    delete_project, export_project, import_project, PROJECTS_DIR
+    delete_project, export_project, import_project, clone_project, rename_project, PROJECTS_DIR
 )
 
 
@@ -91,8 +91,12 @@ class ProjectManagerGUI:
                   command=self.create_project_dialog).grid(row=0, column=0, padx=(0, 5))
         ttk.Button(left_buttons, text="Switch To",
                   command=self.switch_to_project).grid(row=0, column=1, padx=(0, 5))
+        ttk.Button(left_buttons, text="Clone",
+              command=self.clone_project_dialog).grid(row=0, column=2, padx=(0, 5))
+        ttk.Button(left_buttons, text="Rename",
+              command=self.rename_project_dialog).grid(row=0, column=3, padx=(0, 5))
         ttk.Button(left_buttons, text="Delete",
-                  command=self.delete_project).grid(row=0, column=2)
+              command=self.delete_project).grid(row=0, column=4)
 
         # Right buttons
         right_buttons = ttk.Frame(buttons_frame)
@@ -244,6 +248,109 @@ class ProjectManagerGUI:
                 messagebox.showinfo("Success", f"Project '{project_name}' deleted")
             else:
                 messagebox.showerror("Error", f"Failed to delete project '{project_name}'")
+
+    def clone_project_dialog(self):
+        """Clone the selected project under a new name."""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a project first")
+            return
+
+        item = self.tree.item(selection[0])
+        source_name = str(item["values"][0]).strip()
+        source_description = str(item["values"][1]).strip()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Clone Project")
+        dialog.geometry("460x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=f"Source Project: {source_name}").grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 8), sticky=tk.W)
+
+        ttk.Label(dialog, text="New Project Name:").grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+        name_var = tk.StringVar(value=f"{source_name}_copy")
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=34)
+        name_entry.grid(row=1, column=1, padx=10, pady=5, sticky=(tk.W, tk.E))
+
+        ttk.Label(dialog, text="Description:").grid(row=2, column=0, padx=10, pady=5, sticky=tk.W)
+        desc_var = tk.StringVar(value=source_description)
+        desc_entry = ttk.Entry(dialog, textvariable=desc_var, width=34)
+        desc_entry.grid(row=2, column=1, padx=10, pady=5, sticky=(tk.W, tk.E))
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=3, column=0, columnspan=2, pady=14)
+
+        def do_clone() -> None:
+            new_name = name_var.get().strip()
+            description = desc_var.get().strip()
+            if not new_name:
+                messagebox.showerror("Error", "New project name is required")
+                return
+            if new_name == source_name:
+                messagebox.showerror("Error", "New project name must be different from source")
+                return
+            if clone_project(source_name, new_name, description):
+                self.refresh_projects()
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Project '{source_name}' cloned to '{new_name}'")
+            else:
+                messagebox.showerror("Error", f"Failed to clone project '{source_name}'")
+
+        ttk.Button(button_frame, text="Clone", command=do_clone).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(row=0, column=1, padx=5)
+
+        name_entry.focus()
+        dialog.bind('<Return>', lambda _e: do_clone())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
+
+    def rename_project_dialog(self):
+        """Rename the selected project."""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a project first")
+            return
+
+        item = self.tree.item(selection[0])
+        old_name = str(item["values"][0]).strip()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Rename Project")
+        dialog.geometry("420x160")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=f"Current Name: {old_name}").grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 8), sticky=tk.W)
+
+        ttk.Label(dialog, text="New Name:").grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+        name_var = tk.StringVar(value=old_name)
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=32)
+        name_entry.grid(row=1, column=1, padx=10, pady=5, sticky=(tk.W, tk.E))
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=2, column=0, columnspan=2, pady=14)
+
+        def do_rename() -> None:
+            new_name = name_var.get().strip()
+            if not new_name:
+                messagebox.showerror("Error", "New project name is required")
+                return
+            if new_name == old_name:
+                messagebox.showerror("Error", "New project name must be different")
+                return
+            if rename_project(old_name, new_name):
+                self.refresh_projects()
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Project renamed to '{new_name}'")
+            else:
+                messagebox.showerror("Error", f"Failed to rename project '{old_name}'")
+
+        ttk.Button(button_frame, text="Rename", command=do_rename).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(row=0, column=1, padx=5)
+
+        name_entry.focus()
+        dialog.bind('<Return>', lambda _e: do_rename())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
 
     def export_project(self):
         """Export the selected project."""

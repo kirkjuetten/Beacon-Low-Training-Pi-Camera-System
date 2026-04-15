@@ -281,6 +281,97 @@ def delete_project(project_name: str) -> bool:
     return True
 
 
+def clone_project(source_project: str, new_project: str, description: Optional[str] = None) -> bool:
+    """Clone an existing project into a new project name."""
+    registry = get_project_registry()
+
+    if source_project not in registry["projects"]:
+        print(f"Project '{source_project}' does not exist.")
+        return False
+
+    if new_project in registry["projects"]:
+        print(f"Project '{new_project}' already exists.")
+        return False
+
+    source_dir = PROJECTS_DIR / source_project
+    if not source_dir.exists():
+        print(f"Source project directory does not exist: {source_dir}")
+        return False
+
+    target_dir = PROJECTS_DIR / new_project
+
+    try:
+        import shutil
+
+        shutil.copytree(source_dir, target_dir)
+    except Exception as exc:
+        print(f"Failed to clone project '{source_project}': {exc}")
+        return False
+
+    source_info = registry["projects"][source_project]
+    registry["projects"][new_project] = {
+        "description": source_info.get("description", "") if description is None else description,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "config_file": str(target_dir / "config" / "camera_config.json"),
+        "reference_dir": str(target_dir / "reference"),
+        "log_dir": str(target_dir / "logs"),
+    }
+    save_project_registry(registry)
+    print(f"Cloned project '{source_project}' to '{new_project}'")
+    return True
+
+
+def rename_project(old_name: str, new_name: str) -> bool:
+    """Rename an existing project and keep its data and active selection."""
+    registry = get_project_registry()
+
+    if old_name not in registry["projects"]:
+        print(f"Project '{old_name}' does not exist.")
+        return False
+
+    if new_name in registry["projects"]:
+        print(f"Project '{new_name}' already exists.")
+        return False
+
+    old_dir = PROJECTS_DIR / old_name
+    new_dir = PROJECTS_DIR / new_name
+
+    if not old_dir.exists():
+        print(f"Project directory does not exist: {old_dir}")
+        return False
+
+    try:
+        import shutil
+
+        shutil.move(str(old_dir), str(new_dir))
+    except Exception as exc:
+        print(f"Failed to rename project '{old_name}': {exc}")
+        return False
+
+    old_info = registry["projects"].pop(old_name)
+    registry["projects"][new_name] = {
+        "description": old_info.get("description", ""),
+        "created": old_info.get("created", time.strftime("%Y-%m-%d %H:%M:%S")),
+        "config_file": str(new_dir / "config" / "camera_config.json"),
+        "reference_dir": str(new_dir / "reference"),
+        "log_dir": str(new_dir / "logs"),
+    }
+
+    if registry.get("current_project") == old_name:
+        registry["current_project"] = new_name
+
+        global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
+        CONFIG_FILE = new_dir / "config" / "camera_config.json"
+        REFERENCE_DIR = new_dir / "reference"
+        LOG_DIR = new_dir / "logs"
+        REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+        REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+
+    save_project_registry(registry)
+    print(f"Renamed project '{old_name}' to '{new_name}'")
+    return True
+
+
 def export_project(project_name: str, export_path: Path) -> bool:
     """Export a project to a zip file."""
     registry = get_project_registry()
