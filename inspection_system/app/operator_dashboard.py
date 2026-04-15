@@ -123,6 +123,9 @@ def apply_config_updates(config: dict, raw_updates: dict[str, str]) -> dict:
         if dotted_path in OPTIONAL_FLOAT_FIELDS and raw_value.strip() == "":
             set_nested_config_value(updated, dotted_path, None)
             continue
+        if raw_value.strip() == "":
+            # Keep existing value unchanged when a field is blank in sparse legacy configs.
+            continue
         set_nested_config_value(updated, dotted_path, parse_config_value(raw_value, expected_type))
     return updated
 

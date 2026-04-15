@@ -63,6 +63,32 @@ def test_apply_config_updates_updates_nested_fields() -> None:
     assert get_nested_config_value(config, "capture.timeout_ms") == 200
 
 
+def test_apply_config_updates_ignores_blank_non_optional_values() -> None:
+    config = {
+        "capture": {},
+        "inspection": {"threshold_mode": "otsu"},
+        "alignment": {},
+        "indicator_led": {},
+    }
+
+    updated = apply_config_updates(
+        config,
+        {
+            "capture.timeout_ms": "",
+            "capture.shutter_us": "",
+            "inspection.threshold_mode": "fixed",
+            "inspection.threshold_value": "",
+            "inspection.save_debug_images": "",
+        },
+    )
+
+    assert get_nested_config_value(updated, "capture.timeout_ms") is None
+    assert get_nested_config_value(updated, "capture.shutter_us") is None
+    assert get_nested_config_value(updated, "inspection.threshold_mode") == "fixed"
+    assert get_nested_config_value(updated, "inspection.threshold_value") is None
+    assert get_nested_config_value(updated, "inspection.save_debug_images") is None
+
+
 def test_build_config_editor_values_returns_string_values() -> None:
     config = {
         "capture": {"timeout_ms": 200},
