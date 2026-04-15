@@ -53,9 +53,6 @@ class ConfigEditorPage:
 
         self.status_var = tk.StringVar(value="Ready")
         self.current_project_var = tk.StringVar(value="Current project: None")
-        self.active_config_var = tk.StringVar(value="Config: -")
-        self.active_reference_var = tk.StringVar(value="Reference: -")
-        self.active_log_var = tk.StringVar(value="Logs: -")
         self.preview_path_var = tk.StringVar(value="Preview: none")
 
         self._build_layout()
@@ -86,10 +83,7 @@ class ConfigEditorPage:
         info = ttk.LabelFrame(meta, text="Active Runtime", padding=10)
         info.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         info.columnconfigure(0, weight=1)
-        ttk.Label(info, textvariable=self.current_project_var).grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_config_var, wraplength=480).grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_reference_var, wraplength=480).grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_log_var, wraplength=480).grid(row=3, column=0, sticky="w", pady=2)
+        ttk.Label(info, textvariable=self.current_project_var).grid(row=0, column=0, sticky="w")
 
         preview = ttk.LabelFrame(meta, text="Latest Preview", padding=10)
         preview.grid(row=1, column=0, sticky="nsew")
@@ -344,11 +338,6 @@ class ConfigEditorPage:
     def refresh_view(self) -> None:
         current_project = get_current_project() or "None"
         self.current_project_var.set(f"Current project: {current_project}")
-
-        active_paths = get_active_runtime_paths()
-        self.active_config_var.set(f"Config: {active_paths['config_file']}")
-        self.active_reference_var.set(f"Reference: {active_paths['reference_dir']}")
-        self.active_log_var.set(f"Logs: {active_paths['log_dir']}")
 
         self.reload_config_editor()
         if self.display_mode != "live":
