@@ -102,7 +102,7 @@ class InspectionDisplay:
         self.active_mode = mode
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
-            self.visible_buttons = ["review", "approve", "reject", "set_ref", "align_profile", "home"]
+            self.visible_buttons = ["approve", "reject", "review", "capture", "set_ref", "align_profile", "home"]
         else:
             self.reference_button_label = "SET REF"
             self.visible_buttons = ["set_ref", "home"]
@@ -117,10 +117,39 @@ class InspectionDisplay:
         width, height = self.screen.get_size()
         pad = self._clamp(int(height * 0.02), 8, 20)
 
+        if self.active_mode == "inspection":
+            # New inspection layout: left sidebar + main image area + bottom text
+            sidebar_w = self._clamp(int(width * 0.20), 140, 280)
+            image_area_w = width - sidebar_w - pad * 3
+            
+            status_h = self._clamp(int(height * 0.06), 28, 50)
+            description_h = self._clamp(int(height * 0.15), 70, 130)
+            
+            available_for_image = height - (status_h + description_h + pad * 4)
+            image_h = max(80, available_for_image)
+            
+            status_rect = pygame.Rect(pad, pad, width - pad * 2, status_h)
+            image_rect = pygame.Rect(sidebar_w + pad * 2, status_rect.bottom + pad, image_area_w, image_h)
+            description_rect = pygame.Rect(pad, image_rect.bottom + pad, width - pad * 2, description_h)
+            sidebar_rect = pygame.Rect(pad, status_rect.bottom + pad, sidebar_w, image_h)
+            
+            self.layout = {
+                "status_rect": status_rect,
+                "image_rect": image_rect,
+                "metrics_rect": image_rect,  # Reuse image rect for metrics display overlay
+                "description_rect": description_rect,
+                "controls_rect": sidebar_rect,
+                "sidebar_rect": sidebar_rect,
+            }
+            
+            self._update_fonts()
+            self._layout_buttons_sidebar(sidebar_rect)
+            return
+        
+        # Original layout for setup/reference modes
         status_h = self._clamp(int(height * 0.07), 30, 56)
-        # Keep controls readable while prioritizing the camera image area.
-        controls_ratio = 0.21 if self.active_mode == "inspection" else 0.15
-        controls_h = self._clamp(int(height * controls_ratio), 90 if self.active_mode == "inspection" else 70, 180)
+        controls_ratio = 0.15
+        controls_h = self._clamp(int(height * controls_ratio), 70, 180)
         metrics_h = self._clamp(int(height * 0.12), 58, 110)
         description_h = self._clamp(int(height * 0.13), 58, 115)
 
@@ -143,6 +172,40 @@ class InspectionDisplay:
 
         self._update_fonts()
         self._layout_buttons(controls_rect)
+
+    def _layout_buttons_sidebar(self, sidebar_rect: pygame.Rect) -> None:
+        """Layout buttons in a sidebar: decision buttons first (large), utilities below."""
+        decision_buttons = ["approve", "reject", "review"]
+        utility_buttons = ["capture", "set_ref", "align_profile", "home"]
+        
+        gap = self._clamp(int(sidebar_rect.height * 0.03), 6, 12)
+        
+        # Decision buttons: 3 buttons, take ~60% of sidebar height
+        decision_h = self._clamp(int(sidebar_rect.height * 0.18), 50, 90)
+        decisions_total_h = decision_h * 3 + gap * 2
+        decisions_top = sidebar_rect.y + self._clamp(int(sidebar_rect.height * 0.04), 5, 15)
+        
+        # Utility buttons below: compress into remaining space
+        utilities_available_h = sidebar_rect.height - decisions_total_h - gap * 2
+        utility_h = self._clamp(int(utilities_available_h / 4) - gap, 30, 60)
+        utilities_top = decisions_top + decisions_total_h + gap
+        
+        decision_w = sidebar_rect.width - self._clamp(int(sidebar_rect.width * 0.08), 4, 12)
+        utility_w = decision_w
+        
+        self.buttons = {}
+        
+        # Decision buttons (larger, easy to tap)
+        x = sidebar_rect.x + (sidebar_rect.width - decision_w) // 2
+        for i, key in enumerate(decision_buttons):
+            y = decisions_top + i * (decision_h + gap)
+            self.buttons[key] = pygame.Rect(x, y, decision_w, decision_h)
+        
+        # Utility buttons (smaller)
+        x = sidebar_rect.x + (sidebar_rect.width - utility_w) // 2
+        for i, key in enumerate(utility_buttons):
+            y = utilities_top + i * (utility_h + gap)
+            self.buttons[key] = pygame.Rect(x, y, utility_w, utility_h)
 
     def _layout_buttons(self, controls_rect: pygame.Rect) -> None:
         visible_buttons = self.visible_buttons or ["set_ref"]
@@ -245,32 +308,39 @@ class InspectionDisplay:
         return pygame.surfarray.make_surface(image.swapaxes(0, 1))
 
     def draw_buttons(self):
-        """Draw interactive buttons."""
+        """Draw interactive buttons. In inspection mode, add capture button and status."""
         BLUE = (70, 130, 220)
         CYAN = (0, 170, 190)
+        
         button_colors = {
             "approve": self.GREEN,
             "reject": self.RED,
             "review": self.YELLOW,
-            "set_ref": BLUE,
-            "align_profile": CYAN,
+            "capture": BLUE,
+            "set_ref": CYAN,
+            "align_profile": (0, 170, 190),
             "home": self.GRAY,
         }
+
         button_labels = {
             "approve": "APPROVE",
             "reject": "REJECT",
             "review": "REVIEW",
+            "capture": "CAPTURE",
             "set_ref": self.reference_button_label,
             "align_profile": self.alignment_profile_label,
             "home": "HOME",
         }
 
-        for key in self.visible_buttons:
-            button_rect = self.buttons[key]
-            pygame.draw.rect(self.screen, button_colors[key], button_rect, border_radius=6)
-            label_color = self.WHITE if key in {"set_ref", "align_profile", "home"} else self.BLACK
-            text = self.small_font.render(button_labels[key], True, label_color)
-            text_rect = text.get_rect(center=button_rect.center)
+        for key, rect in self.buttons.items():
+            color = button_colors.get(key, self.GRAY)
+            label = button_labels.get(key, key.upper())
+            pygame.draw.rect(self.screen, color, rect, border_radius=6)
+            
+            # Draw label, respecting font size
+            font = self.font if rect.height > 60 else self.small_font
+            text = font.render(label, True, self.WHITE)
+            text_rect = text.get_rect(center=rect.center)
             self.screen.blit(text, text_rect)
 
     def draw_metrics(self, details: dict, area: pygame.Rect):
@@ -512,11 +582,16 @@ class InspectionDisplay:
 
             self.clock.tick(30)
 
-    def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional["TrainingLogger"] = None) -> Optional[str]:
-        """Display inspection result and wait for user input."""
+    def display_inspection(self, image_path: Path, passed: bool, details: dict, logger: Optional["TrainingLogger"] = None) -> tuple[Optional[str], bool]:
+        """Display inspection result and wait for user input.
+        
+        Returns: (feedback_action, ready_to_capture)
+        feedback_action: 'approve', 'reject', 'review', 'set_ref', 'align_profile', 'home', or 'quit'
+        ready_to_capture: True once operator clicks CAPTURE after deciding feedback
+        """
         source_surface = self.load_surface_from_image(image_path)
         if source_surface is None:
-            return None
+            return None, False
         self.set_ui_mode("inspection")
         self.set_alignment_profile_label(str(details.get("alignment_profile", "balanced")))
 
@@ -541,6 +616,10 @@ class InspectionDisplay:
 
         # Generate human-readable description
         description = self.generate_inspection_description(passed, details)
+        
+        # State: waiting for decision or waiting for capture trigger
+        user_feedback = None
+        capture_triggered = False
 
         def render_frame() -> None:
             self._reflow_layout()
@@ -548,27 +627,35 @@ class InspectionDisplay:
 
             status_rect = self.layout["status_rect"]
             image_rect = self.layout["image_rect"]
-            metrics_rect = self.layout["metrics_rect"]
             description_rect = self.layout["description_rect"]
 
             surface = self._scale_surface_to_rect(source_surface, image_rect)
             self.draw_image_with_border(surface, border_color, image_rect)
 
-            status_surface = self.font.render(f"Status: {status_text}", True, border_color)
+            # Status line: show decision if made, ready state if awaiting capture
+            if user_feedback:
+                status_line = f"Status: {status_text} → Decision: {user_feedback.upper()} — Ready to capture next part"
+                status_color = self.YELLOW
+            else:
+                status_line = f"Status: {status_text} — Click a decision button to proceed"
+                status_color = border_color
+            
+            status_surface = self.font.render(status_line, True, status_color)
             self.screen.blit(status_surface, status_rect.topleft)
 
-            self.draw_metrics(details, metrics_rect)
+            # Draw metrics and description in right area
+            self.draw_metrics(details, image_rect)  
             self.draw_description(description, description_rect)
             self.draw_buttons()
             pygame.display.flip()
 
         render_frame()
 
-        # Wait for user input
+        # Two-phase loop: Phase 1 = get user decision; Phase 2 = wait for capture trigger
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    return 'quit'
+                    return 'quit', False
                 elif event.type == pygame.VIDEORESIZE:
                     new_width = max(event.w, self.MIN_WIDTH)
                     new_height = max(event.h, self.MIN_HEIGHT)
@@ -576,38 +663,60 @@ class InspectionDisplay:
                     render_frame()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_pos = event.pos
-                    if self.buttons['approve'].collidepoint(mouse_pos):
-                        if logger:
-                            logger.log_inspection(image_path, passed, details, 'approve', description)
-                        if self.flash_action_confirmation("APPROVED", self.GREEN):
-                            return 'quit'
-                        return 'approve'
-                    elif self.buttons['reject'].collidepoint(mouse_pos):
-                        if logger:
-                            logger.log_inspection(image_path, passed, details, 'reject', description)
-                        if self.flash_action_confirmation("REJECTED", self.RED):
-                            return 'quit'
-                        return 'reject'
-                    elif self.buttons['review'].collidepoint(mouse_pos):
-                        if logger:
-                            logger.log_inspection(image_path, passed, details, 'review', description)
-                        if self.flash_action_confirmation("MARKED FOR REVIEW", self.YELLOW):
-                            return 'quit'
-                        return 'review'
-                    elif self.buttons['set_ref'].collidepoint(mouse_pos):
-                        if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
-                            return 'quit'
-                        return 'set_ref'
-                    elif self.buttons['align_profile'].collidepoint(mouse_pos):
-                        if self.flash_action_confirmation("ALIGNMENT PROFILE", (0, 170, 190), duration_ms=300):
-                            return 'quit'
-                        return 'align_profile'
-                    elif self.buttons['home'].collidepoint(mouse_pos):
-                        if self.flash_action_confirmation("RETURNING HOME", self.GRAY, duration_ms=300):
-                            return 'quit'
-                        return 'home'
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    return 'quit'
+                    
+                    # Phase 1: Waiting for decision
+                    if not user_feedback:
+                        if self.buttons['approve'].collidepoint(mouse_pos):
+                            if logger:
+                                logger.log_inspection(image_path, passed, details, 'approve', description)
+                            if self.flash_action_confirmation("APPROVED", self.GREEN):
+                                return 'quit', False
+                            user_feedback = 'approve'
+                            render_frame()
+                        elif self.buttons['reject'].collidepoint(mouse_pos):
+                            if logger:
+                                logger.log_inspection(image_path, passed, details, 'reject', description)
+                            if self.flash_action_confirmation("REJECTED", self.RED):
+                                return 'quit', False
+                            user_feedback = 'reject'
+                            render_frame()
+                        elif self.buttons['review'].collidepoint(mouse_pos):
+                            if logger:
+                                logger.log_inspection(image_path, passed, details, 'review', description)
+                            if self.flash_action_confirmation("MARKED FOR REVIEW", self.YELLOW):
+                                return 'quit', False
+                            user_feedback = 'review'
+                            render_frame()
+                        elif self.buttons['set_ref'].collidepoint(mouse_pos):
+                            if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
+                                return 'quit', False
+                            return 'set_ref', False
+                        elif self.buttons['align_profile'].collidepoint(mouse_pos):
+                            if self.flash_action_confirmation("ALIGNMENT PROFILE", (0, 170, 190), duration_ms=300):
+                                return 'quit', False
+                            return 'align_profile', False
+                        elif self.buttons['home'].collidepoint(mouse_pos):
+                            if self.flash_action_confirmation("RETURNING HOME", self.GRAY, duration_ms=300):
+                                return 'quit', False
+                            return 'home', False
+                    
+                    # Phase 2: Decision made, waiting for CAPTURE button
+                    else:
+                        if self.buttons['capture'].collidepoint(mouse_pos):
+                            if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
+                                return 'quit', False
+                            return user_feedback, True  # Return decision + ready to capture
+                        elif self.buttons['home'].collidepoint(mouse_pos):
+                            if self.flash_action_confirmation("RETURNING HOME", self.GRAY, duration_ms=300):
+                                return 'quit', False
+                            return 'home', False
+                
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return 'quit', False
+                    elif event.key == pygame.K_RETURN and user_feedback:
+                        # Allow pressing Enter to trigger capture after decision
+                        return user_feedback, True
 
             self.clock.tick(30)
 
@@ -1146,7 +1255,7 @@ def run_interactive_training(config: dict) -> int:
                     continue
 
                 # Display result and get feedback
-                feedback = display.display_inspection(image_path, passed, details, logger)
+                feedback, ready_to_capture = display.display_inspection(image_path, passed, details, logger)
 
                 if feedback == 'home':
                     print("Returning to dashboard/home.")
@@ -1189,6 +1298,11 @@ def run_interactive_training(config: dict) -> int:
                     time.sleep(1.0)
                     continue
                 elif feedback in ['approve', 'reject', 'review']:
+                    if not ready_to_capture:
+                        # This shouldn't happen in normal flow; log and continue
+                        print(f"Warning: Got feedback but not ready to capture. Continuing...")
+                        continue
+                    
                     trainer.record_feedback(details, feedback)
                     session_count += 1
 
