@@ -981,23 +981,55 @@ def run_interactive_training(config: dict) -> int:
 
             try:
                 # Run inspection
-                passed, details = inspect_against_reference(
-                    config,
-                    image_path,
-                    make_binary_mask,
-                    active_paths["reference_mask"],
-                    active_paths["reference_image"],
-                    align_sample_mask,
-                    build_reference_regions,
-                    compute_section_masks,
-                    score_sample,
-                    evaluate_metrics,
-                    save_debug_outputs,
-                    import_cv2_and_numpy,
-                    dilate_mask,
-                    erode_mask,
-                    anomaly_detector=anomaly_detector,
-                )
+                try:
+                    passed, details = inspect_against_reference(
+                        config,
+                        image_path,
+                        make_binary_mask,
+                        active_paths["reference_mask"],
+                        active_paths["reference_image"],
+                        align_sample_mask,
+                        build_reference_regions,
+                        compute_section_masks,
+                        score_sample,
+                        evaluate_metrics,
+                        save_debug_outputs,
+                        import_cv2_and_numpy,
+                        dilate_mask,
+                        erode_mask,
+                        anomaly_detector=anomaly_detector,
+                    )
+                except ValueError as exc:
+                    err = str(exc)
+                    print(f"Inspection error: {err}")
+                    if "Reference mask shape" in err and "sample mask shape" in err:
+                        display.show_message("Reference/sample size mismatch. Re-capture reference.", display.YELLOW)
+                        time.sleep(1.2)
+                        while True:
+                            action = display.run_reference_preview(config, has_reference=active_paths["reference_mask"].exists())
+                            if action == 'home':
+                                print("Returning to dashboard/home.")
+                                return 0
+                            if action == 'quit':
+                                return 0
+                            if action in {'capture', '', None}:
+                                display.show_message("Waiting for preview frame...", display.YELLOW)
+                                time.sleep(1)
+                                continue
+                            display.show_message("Saving reference...", display.YELLOW)
+                            success, msg = save_reference_from_image(config, Path(action))
+                            cleanup_temp_image()
+                            print(msg)
+                            active_paths = get_active_runtime_paths()
+                            color = display.GREEN if success else display.RED
+                            display.show_message(msg, color)
+                            time.sleep(1.5)
+                            if success:
+                                break
+                        continue
+                    display.show_message(f"Inspection error: {err}", display.RED)
+                    time.sleep(1.2)
+                    continue
 
                 # Display result and get feedback
                 feedback = display.display_inspection(image_path, passed, details, logger)

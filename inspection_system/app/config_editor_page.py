@@ -400,14 +400,10 @@ class ConfigEditorPage:
         preview_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         preview_buttons.columnconfigure(0, weight=1)
         preview_buttons.columnconfigure(1, weight=1)
-        preview_buttons.columnconfigure(2, weight=1)
         self.capture_button = ttk.Button(preview_buttons, text="Capture", command=self.capture_live_preview)
         self.capture_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        # Preview is transient; not persisted to disk
-        # self.save_preview_button = ttk.Button(preview_buttons, text="Save", command=self.save_live_preview)
-        self.save_preview_button.grid(row=0, column=1, sticky="ew", padx=4)
         self.stored_button = ttk.Button(preview_buttons, text="Stored", command=self.show_stored_preview)
-        self.stored_button.grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        self.stored_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         config = ttk.LabelFrame(main, text="Config Editor", padding=10)
         config.grid(row=1, column=1, sticky="nsew")
@@ -543,10 +539,8 @@ class ConfigEditorPage:
 
     def _update_preview_button_states(self) -> None:
         if self.busy:
-            self.save_preview_button.configure(state="disabled")
             self.stored_button.configure(state="disabled")
             return
-        self.save_preview_button.configure(state="normal" if self.live_capture_path is not None else "disabled")
         self.stored_button.configure(state="normal")
 
     def _clear_live_capture(self) -> None:
@@ -666,10 +660,6 @@ class ConfigEditorPage:
                 self.refresh_view()
 
         self.root.after(0, finish)
-
-    def save_live_preview(self) -> None:
-        """Preview is transient; this method is deprecated and intentionally does nothing."""
-        pass
 
     def show_stored_preview(self) -> None:
         self.display_mode = "stored"
