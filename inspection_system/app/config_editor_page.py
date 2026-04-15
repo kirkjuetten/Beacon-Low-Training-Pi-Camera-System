@@ -61,9 +61,9 @@ class ConfigEditorPage:
 
         main = ttk.Frame(self.root, padding=14)
         main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=5, uniform="main_panels")
-        main.columnconfigure(1, weight=6, uniform="main_panels")
-        main.rowconfigure(1, weight=1)
+        main.columnconfigure(0, weight=8, uniform="main_panels")
+        main.columnconfigure(1, weight=4, uniform="main_panels")
+        main.rowconfigure(2, weight=1)
 
         header = ttk.Frame(main)
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
@@ -72,25 +72,23 @@ class ConfigEditorPage:
         ttk.Label(header, text="Config + Preview", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
 
-        meta = ttk.Frame(main)
-        meta.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
-        meta.columnconfigure(0, weight=1)
-        meta.rowconfigure(1, weight=1)
+        info = ttk.LabelFrame(main, text="Active Runtime", padding=8)
+        info.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        info.columnconfigure(0, weight=2)
+        info.columnconfigure(1, weight=3)
+        info.columnconfigure(2, weight=3)
+        info.columnconfigure(3, weight=3)
+        ttk.Label(info, textvariable=self.current_project_var).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ttk.Label(info, textvariable=self.active_config_var, wraplength=320).grid(row=0, column=1, sticky="w", padx=(0, 10))
+        ttk.Label(info, textvariable=self.active_reference_var, wraplength=320).grid(row=0, column=2, sticky="w", padx=(0, 10))
+        ttk.Label(info, textvariable=self.active_log_var, wraplength=320).grid(row=0, column=3, sticky="w")
 
-        info = ttk.LabelFrame(meta, text="Active Runtime", padding=10)
-        info.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        info.columnconfigure(0, weight=1)
-        ttk.Label(info, textvariable=self.current_project_var).grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_config_var, wraplength=480).grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_reference_var, wraplength=480).grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_log_var, wraplength=480).grid(row=3, column=0, sticky="w", pady=2)
-
-        preview = ttk.LabelFrame(meta, text="Latest Preview", padding=10)
-        preview.grid(row=1, column=0, sticky="nsew")
+        preview = ttk.LabelFrame(main, text="Latest Preview", padding=10)
+        preview.grid(row=2, column=0, sticky="nsew", padx=(0, 10))
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(1, weight=1)
 
-        ttk.Label(preview, textvariable=self.preview_path_var, wraplength=480).grid(row=0, column=0, sticky="w")
+        ttk.Label(preview, textvariable=self.preview_path_var, wraplength=640).grid(row=0, column=0, sticky="w")
         self.preview_label = ttk.Label(preview, text="No preview image available", anchor="center")
         self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
 
@@ -104,7 +102,7 @@ class ConfigEditorPage:
         self.refresh_view_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         config = ttk.LabelFrame(main, text="Config Editor", padding=10)
-        config.grid(row=1, column=1, sticky="nsew")
+        config.grid(row=2, column=1, sticky="nsew")
         config.columnconfigure(0, weight=1)
         config.rowconfigure(0, weight=1)
 
@@ -229,7 +227,7 @@ class ConfigEditorPage:
         self.preview_path_var.set(f"Preview ({preview_kind}): {preview_path.name}")
         if PIL_AVAILABLE:
             image = Image.open(preview_path)
-            image.thumbnail((520, 380))
+            image.thumbnail((760, 520))
             self.preview_photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=self.preview_photo, text="")
         else:
