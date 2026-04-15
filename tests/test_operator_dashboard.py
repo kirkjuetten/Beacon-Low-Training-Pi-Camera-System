@@ -231,7 +231,7 @@ def test_find_preview_image_returns_none_without_supported_files(tmp_path) -> No
 
 def test_should_close_dashboard_on_launch_policy() -> None:
     assert should_close_dashboard_on_launch("project-manager") is True
-    assert should_close_dashboard_on_launch("config-editor") is True
+    assert should_close_dashboard_on_launch("config-editor") is False
     assert should_close_dashboard_on_launch("train") is False
     assert should_close_dashboard_on_launch("capture") is False
 

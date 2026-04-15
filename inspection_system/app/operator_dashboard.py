@@ -215,7 +215,7 @@ def describe_preview_image(preview_path: Path) -> str:
 
 def should_close_dashboard_on_launch(mode: str) -> bool:
     """Return whether dashboard should close after launching a tool."""
-    return mode in {"project-manager", "config-editor"}
+    return mode in {"project-manager"}
 
 
 class OperatorDashboard:
@@ -463,15 +463,40 @@ class OperatorDashboard:
 
     def _launch_tool(self, mode: str, label: str) -> None:
         try:
-            subprocess.Popen([sys.executable, str(CAPTURE_SCRIPT), mode], cwd=str(REPO_ROOT))
+            process = subprocess.Popen(
+                [sys.executable, str(CAPTURE_SCRIPT), mode],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
             self.append_console(f"\n> Launched {label}.\n")
             self.status_var.set(f"Launched {label}")
+
+            def monitor_output() -> None:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    self.root.after(0, self.append_console, f"[{mode}] {line}")
+                return_code = process.wait()
+                if return_code != 0:
+                    self.root.after(0, self.append_console, f"> {label} exited with code {return_code}\n")
+                    self.root.after(0, self.status_var.set, f"{label} failed (exit {return_code})")
+
+            threading.Thread(target=monitor_output, daemon=True).start()
+
             if should_close_dashboard_on_launch(mode):
                 if mode == "project-manager":
                     self.append_console("> Closing dashboard; use Project Manager -> Back to Dashboard when ready.\n")
                 else:
                     self.append_console("> Closing dashboard; use Config + Preview -> Back to Dashboard when ready.\n")
-                self.root.after(0, self.root.destroy)
+                # Only close after we have confirmed child process is still running.
+                def maybe_close() -> None:
+                    if process.poll() is None:
+                        self.root.destroy()
+                    else:
+                        self.append_console(f"> {label} failed to stay open; dashboard remains available.\n")
+
+                self.root.after(500, maybe_close)
         except OSError as exc:
             messagebox.showerror("Launch failed", f"Could not launch {label}: {exc}")
 
