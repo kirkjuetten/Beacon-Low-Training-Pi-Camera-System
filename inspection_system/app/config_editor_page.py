@@ -28,6 +28,9 @@ from inspection_system.app.operator_dashboard import (
     write_json_file,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_TUNING_DOC = REPO_ROOT / "docs" / "CONFIG_TUNING.md"
+
 if PIL_AVAILABLE:
     from PIL import Image, ImageTk
 else:
@@ -139,17 +142,19 @@ class ConfigEditorPage:
 
         actions = ttk.Frame(config)
         actions.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        for idx in range(4):
+        for idx in range(5):
             actions.columnconfigure(idx, weight=1)
 
-        self.reload_button = ttk.Button(actions, text="Reload Config", command=self.reload_config_editor)
+        self.reload_button = ttk.Button(actions, text="Reload", command=self.reload_config_editor)
         self.reload_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        self.save_button = ttk.Button(actions, text="Save Config", command=self.save_config_editor)
+        self.save_button = ttk.Button(actions, text="Save", command=self.save_config_editor)
         self.save_button.grid(row=0, column=1, sticky="ew", padx=(4, 4))
-        self.back_button = ttk.Button(actions, text="Back to Dashboard", command=self.back_to_dashboard)
+        self.back_button = ttk.Button(actions, text="Back", command=self.back_to_dashboard)
         self.back_button.grid(row=0, column=2, sticky="ew", padx=(4, 4))
         self.exit_button = ttk.Button(actions, text="Exit", command=self.exit_page)
-        self.exit_button.grid(row=0, column=3, sticky="ew", padx=(4, 0))
+        self.exit_button.grid(row=0, column=3, sticky="ew", padx=(4, 4))
+        self.info_button = ttk.Button(actions, text="Info", command=self.show_settings_info)
+        self.info_button.grid(row=0, column=4, sticky="ew", padx=(4, 0))
 
     def _schedule_preview_render(self, _event=None) -> None:
         if self._preview_render_job is not None:
@@ -184,11 +189,48 @@ class ConfigEditorPage:
             self.reload_button,
             self.back_button,
             self.exit_button,
+            self.info_button,
         ]:
             button.configure(state=state)
         self.reload_button.configure(state=state)
         self.save_button.configure(state=state)
         self._update_preview_button_states()
+
+    def _load_settings_info_text(self) -> str:
+        if CONFIG_TUNING_DOC.exists():
+            return CONFIG_TUNING_DOC.read_text(encoding="utf-8")
+        return (
+            "Config tuning guide not found.\n\n"
+            "Expected file:\n"
+            f"{CONFIG_TUNING_DOC}\n"
+        )
+
+    def show_settings_info(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Config Settings Info")
+        dialog.transient(self.root)
+        dialog.geometry("980x700")
+        dialog.minsize(760, 520)
+
+        frame = ttk.Frame(dialog, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Config Tuning Guide", font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        text_widget = tk.Text(frame, wrap="word", font=("Segoe UI", 10), padx=10, pady=10)
+        text_widget.grid(row=1, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=text_widget.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        text_widget.insert("1.0", self._load_settings_info_text())
+        text_widget.configure(state="disabled")
+
+        ttk.Button(frame, text="Close", command=dialog.destroy).grid(row=2, column=0, sticky="e", pady=(10, 0))
 
     def _update_preview_button_states(self) -> None:
         if self.busy:
