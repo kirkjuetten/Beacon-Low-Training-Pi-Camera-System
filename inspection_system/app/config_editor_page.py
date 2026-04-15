@@ -403,7 +403,8 @@ class ConfigEditorPage:
         preview_buttons.columnconfigure(2, weight=1)
         self.capture_button = ttk.Button(preview_buttons, text="Capture", command=self.capture_live_preview)
         self.capture_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        self.save_preview_button = ttk.Button(preview_buttons, text="Save", command=self.save_live_preview)
+        # Preview is transient; not persisted to disk
+        # self.save_preview_button = ttk.Button(preview_buttons, text="Save", command=self.save_live_preview)
         self.save_preview_button.grid(row=0, column=1, sticky="ew", padx=4)
         self.stored_button = ttk.Button(preview_buttons, text="Stored", command=self.show_stored_preview)
         self.stored_button.grid(row=0, column=2, sticky="ew", padx=(4, 0))
@@ -667,15 +668,8 @@ class ConfigEditorPage:
         self.root.after(0, finish)
 
     def save_live_preview(self) -> None:
-        if self.busy or self.live_capture_path is None:
-            return
-        active_paths = get_active_runtime_paths()
-        preview_path = active_paths["reference_dir"] / LIVE_PREVIEW_NAME
-        preview_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(self.live_capture_path, preview_path)
-        self._clear_live_capture()
-        self.set_busy(False, f"Saved preview to {preview_path.name}")
-        self.show_stored_preview()
+        """Preview is transient; this method is deprecated and intentionally does nothing."""
+        pass
 
     def show_stored_preview(self) -> None:
         self.display_mode = "stored"

@@ -159,9 +159,10 @@ def find_preview_image(reference_dir: Path, is_informative_fn=None) -> Path | No
 
     is_informative = is_informative_fn or is_informative_preview_image
 
-    live_preview = reference_dir / LIVE_PREVIEW_NAME
-    if live_preview.exists() and is_informative(live_preview):
-        return live_preview
+    # Live preview is transient; no longer persisted
+    # live_preview = reference_dir / LIVE_PREVIEW_NAME
+    # if live_preview.exists() and is_informative(live_preview):
+    #     return live_preview
 
     preferred = reference_dir / REFERENCE_PREVIEW_NAME
     if preferred.exists() and is_informative(preferred):
@@ -195,8 +196,9 @@ def find_preview_image(reference_dir: Path, is_informative_fn=None) -> Path | No
 
 def describe_preview_image(preview_path: Path) -> str:
     name = preview_path.name
-    if name == LIVE_PREVIEW_NAME:
-        return "live capture"
+    # Live preview is transient; no longer persisted
+    # if name == LIVE_PREVIEW_NAME:
+    #     return "live capture"
     if name == REFERENCE_PREVIEW_NAME:
         return "reference"
     if name.endswith("_diff.png"):
