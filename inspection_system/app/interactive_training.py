@@ -305,6 +305,30 @@ class InspectionDisplay:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         return pygame.surfarray.make_surface(image.swapaxes(0, 1))
 
+    def _make_processed_surface(
+        self,
+        image_path: Path,
+        config: dict,
+    ) -> Optional[pygame.Surface]:
+        """Build a pygame surface showing the binary mask blended over the ROI image.
+        Returns None on any error so callers can fall back to raw display."""
+        try:
+            inspection_cfg = (config or {}).get("inspection", {})
+            roi_image, _gray, mask, _roi, cv2, np = make_binary_mask(
+                image_path, inspection_cfg, import_cv2_and_numpy
+            )
+            roi_rgb = cv2.cvtColor(roi_image, cv2.COLOR_BGR2RGB)
+            overlay = roi_rgb.copy()
+            green_tint = np.array([0, 200, 0], dtype=np.float32)
+            in_mask = mask == 255
+            overlay[in_mask] = np.clip(
+                overlay[in_mask].astype(np.float32) * 0.5 + green_tint * 0.5,
+                0, 255,
+            ).astype(np.uint8)
+            return pygame.surfarray.make_surface(overlay.swapaxes(0, 1))
+        except Exception:
+            return None
+
     def draw_buttons(self):
         """Draw interactive buttons. In inspection mode, add capture button and status."""
         BLUE = (70, 130, 220)
@@ -599,6 +623,14 @@ class InspectionDisplay:
         self.set_ui_mode("inspection")
         self.set_alignment_profile_label(str(details.get("alignment_profile", "balanced")))
 
+        # Read display mode and build processed surface if needed
+        display_mode = (config or {}).get("inspection", {}).get("image_display_mode", "raw")
+        processed_surface: Optional[pygame.Surface] = None
+        if display_mode in ("processed", "split"):
+            processed_surface = self._make_processed_surface(image_path, config or {})
+            if processed_surface is None:
+                display_mode = "raw"  # Fall back silently if processing fails
+
         # Determine border color and generate description
         if passed:
             border_color = self.GREEN
@@ -632,8 +664,24 @@ class InspectionDisplay:
             image_rect = self.layout["image_rect"]
             description_rect = self.layout["description_rect"]
 
-            surface = self._scale_surface_to_rect(source_surface, image_rect)
-            self.draw_image_with_border(surface, border_color, image_rect)
+            if display_mode == "processed" and processed_surface is not None:
+                display_surf = self._scale_surface_to_rect(processed_surface, image_rect)
+            elif display_mode == "split" and processed_surface is not None:
+                half_w = max(1, (image_rect.width - 4) // 2)
+                split_h = max(1, image_rect.height - 8)
+                try:
+                    left = pygame.transform.smoothscale(source_surface, (half_w, split_h))
+                    right = pygame.transform.smoothscale(processed_surface, (half_w, split_h))
+                    combined = pygame.Surface((half_w * 2 + 4, split_h))
+                    combined.fill((40, 40, 40))
+                    combined.blit(left, (0, 0))
+                    combined.blit(right, (half_w + 4, 0))
+                    display_surf = combined
+                except Exception:
+                    display_surf = self._scale_surface_to_rect(source_surface, image_rect)
+            else:
+                display_surf = self._scale_surface_to_rect(source_surface, image_rect)
+            self.draw_image_with_border(display_surf, border_color, image_rect)
 
             # Status line: show decision if made, ready state if awaiting capture
             if user_feedback:
