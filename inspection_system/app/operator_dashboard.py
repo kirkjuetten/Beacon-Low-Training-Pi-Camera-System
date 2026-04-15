@@ -32,7 +32,6 @@ from inspection_system.app.camera_interface import (
     switch_project,
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
-from inspection_system.app.touch_keyboard import TouchKeyboardManager
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
 
 
@@ -209,9 +208,6 @@ class OperatorDashboard:
         self.root = root
         self.root.title("Beacon Inspection Dashboard")
         self._configure_window_size()
-        self.keyboard_manager = TouchKeyboardManager(self.root)
-        if self.keyboard_manager.enabled:
-            self.root.bind_all("<Control-k>", lambda _e: self.hide_keyboard())
 
         self.operation_running = False
         self.preview_photo = None
@@ -240,18 +236,7 @@ class OperatorDashboard:
         self.refresh_dashboard()
 
     def _configure_window_size(self) -> None:
-        # Fit within the usable desktop area on small Pi touchscreens.
-        self.root.update_idletasks()
-        screen_w = int(self.root.winfo_screenwidth())
-        screen_h = int(self.root.winfo_screenheight())
-
-        target_w = min(1200, max(760, screen_w - 20))
-        target_h = min(760, max(420, screen_h - 90))
-        self.root.geometry(f"{target_w}x{target_h}+8+8")
-
-        min_w = min(760, max(640, screen_w - 30))
-        min_h = min(420, max(360, screen_h - 120))
-        self.root.minsize(min_w, min_h)
+        self.root.attributes("-fullscreen", True)
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -270,11 +255,7 @@ class OperatorDashboard:
         header.columnconfigure(0, weight=1)
 
         ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
-        if self.keyboard_manager.enabled:
-            ttk.Button(header, text="Hide Keyboard", command=self.hide_keyboard).grid(row=0, column=1, padx=(12, 0), sticky="e")
-            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=2, sticky="e")
-        else:
-            ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
+        ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
 
         ops_frame = ttk.LabelFrame(main, text="Operations", padding=12)
         ops_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
@@ -712,11 +693,6 @@ class OperatorDashboard:
         self.recent_logs.delete(0, tk.END)
         for log in logs[-12:]:
             self.recent_logs.insert(tk.END, f"[{log['timestamp']}] {log['status']} -> {log['feedback']} | {log['filename']}")
-
-    def hide_keyboard(self) -> None:
-        self.keyboard_manager.hide_keyboard()
-        self.status_var.set("Keyboard hidden")
-
 
 def main() -> None:
     root = tk.Tk()

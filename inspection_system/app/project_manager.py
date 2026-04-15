@@ -23,7 +23,6 @@ from inspection_system.app.camera_interface import (
     create_project, switch_project, get_current_project, list_projects,
     delete_project, export_project, import_project, PROJECTS_DIR
 )
-from inspection_system.app.touch_keyboard import TouchKeyboardManager
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +36,6 @@ class ProjectManagerGUI:
         self.root = root
         self.root.title("Beacon Inspection - Project Manager")
         self._configure_window_size()
-        self.keyboard_manager = TouchKeyboardManager(self.root)
 
         # Create main frame
         main_frame = ttk.Frame(self.root, padding="10")
@@ -108,11 +106,8 @@ class ProjectManagerGUI:
                   command=self.refresh_projects).grid(row=0, column=2, padx=(0, 5))
         ttk.Button(right_buttons, text="Back to Dashboard",
                   command=self._launch_dashboard).grid(row=0, column=3, padx=(10, 0))
-        if self.keyboard_manager.enabled:
-            ttk.Button(right_buttons, text="Hide Keyboard",
-                      command=self.keyboard_manager.hide_keyboard).grid(row=0, column=4, padx=(10, 0))
         ttk.Button(right_buttons, text="Exit",
-                  command=self.root.destroy).grid(row=0, column=5, padx=(10, 0))
+                  command=self.root.destroy).grid(row=0, column=4, padx=(10, 0))
 
         # Status bar
         self.status_var = tk.StringVar()
@@ -128,17 +123,7 @@ class ProjectManagerGUI:
         self.refresh_projects()
 
     def _configure_window_size(self) -> None:
-        self.root.update_idletasks()
-        screen_w = int(self.root.winfo_screenwidth())
-        screen_h = int(self.root.winfo_screenheight())
-
-        target_w = min(980, max(720, screen_w - 20))
-        target_h = min(680, max(420, screen_h - 90))
-        self.root.geometry(f"{target_w}x{target_h}+8+8")
-
-        min_w = min(720, max(620, screen_w - 30))
-        min_h = min(420, max(360, screen_h - 120))
-        self.root.minsize(min_w, min_h)
+        self.root.attributes("-fullscreen", True)
 
     def _launch_dashboard(self):
         """Close project manager and open the operator dashboard."""
