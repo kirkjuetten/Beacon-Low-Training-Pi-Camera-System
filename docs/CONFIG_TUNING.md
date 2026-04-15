@@ -26,6 +26,15 @@ Choose `mask_only` for baseline setup and move to richer modes after baseline is
 
 ## Mask / Coverage Thresholds
 
+### Threshold Mode (`inspection.threshold_mode`)
+- Purpose: Chooses how the binary mask threshold is computed.
+- `fixed`: Uses `threshold_value` with normal polarity.
+- `fixed_inv`: Uses `threshold_value` with inverted polarity.
+- `otsu`: Auto-picks threshold from image histogram with normal polarity.
+- `otsu_inv`: Auto-picks threshold with inverted polarity.
+
+Start with `otsu` if lighting is variable. Use `fixed` or `fixed_inv` when lighting is controlled and you want repeatable mask behavior.
+
 ### Threshold Value (`inspection.threshold_value`)
 - Purpose: Fixed threshold level for mask generation.
 - Increase when: Too much background/noise is being marked.

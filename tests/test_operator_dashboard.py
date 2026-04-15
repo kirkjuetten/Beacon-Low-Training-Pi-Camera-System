@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from inspection_system.app.operator_dashboard import (
+    CONFIG_DROPDOWN_OPTIONS,
+    CONFIG_FIELD_SPECS,
     apply_config_updates,
     build_config_editor_values,
     describe_preview_image,
@@ -30,6 +32,8 @@ def test_apply_config_updates_updates_nested_fields() -> None:
     config = {
         "capture": {"timeout_ms": 200},
         "inspection": {
+            "inspection_mode": "mask_only",
+            "threshold_mode": "otsu",
             "threshold_value": 180,
             "min_required_coverage": 0.92,
             "save_debug_images": True,
@@ -42,6 +46,8 @@ def test_apply_config_updates_updates_nested_fields() -> None:
         config,
         {
             "capture.timeout_ms": "350",
+            "inspection.inspection_mode": "full",
+            "inspection.threshold_mode": "fixed_inv",
             "inspection.min_required_coverage": "0.975",
             "inspection.save_debug_images": "false",
             "alignment.enabled": "false",
@@ -49,6 +55,8 @@ def test_apply_config_updates_updates_nested_fields() -> None:
     )
 
     assert get_nested_config_value(updated, "capture.timeout_ms") == 350
+    assert get_nested_config_value(updated, "inspection.inspection_mode") == "full"
+    assert get_nested_config_value(updated, "inspection.threshold_mode") == "fixed_inv"
     assert get_nested_config_value(updated, "inspection.min_required_coverage") == 0.975
     assert get_nested_config_value(updated, "inspection.save_debug_images") is False
     assert get_nested_config_value(updated, "alignment.enabled") is False
@@ -58,7 +66,7 @@ def test_apply_config_updates_updates_nested_fields() -> None:
 def test_build_config_editor_values_returns_string_values() -> None:
     config = {
         "capture": {"timeout_ms": 200},
-        "inspection": {"min_required_coverage": 0.92},
+        "inspection": {"inspection_mode": "mask_only", "threshold_mode": "otsu", "min_required_coverage": 0.92},
         "alignment": {"enabled": True},
         "indicator_led": {"enabled": False},
     }
@@ -66,9 +74,22 @@ def test_build_config_editor_values_returns_string_values() -> None:
     values = build_config_editor_values(config)
 
     assert values["capture.timeout_ms"] == "200"
+    assert values["inspection.inspection_mode"] == "mask_only"
+    assert values["inspection.threshold_mode"] == "otsu"
     assert values["inspection.min_required_coverage"] == "0.92"
     assert values["alignment.enabled"] == "True"
     assert values["indicator_led.enabled"] == "False"
+
+
+def test_dropdown_options_cover_expected_fixed_choice_fields() -> None:
+    field_paths = {field for field, _, _ in CONFIG_FIELD_SPECS}
+
+    assert "inspection.inspection_mode" in CONFIG_DROPDOWN_OPTIONS
+    assert "inspection.threshold_mode" in CONFIG_DROPDOWN_OPTIONS
+    assert "inspection.save_debug_images" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.enabled" in CONFIG_DROPDOWN_OPTIONS
+    assert "indicator_led.enabled" in CONFIG_DROPDOWN_OPTIONS
+    assert set(CONFIG_DROPDOWN_OPTIONS).issubset(field_paths)
 
 
 def test_find_preview_image_returns_most_recent_image(tmp_path) -> None:

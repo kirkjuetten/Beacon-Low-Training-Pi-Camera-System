@@ -20,6 +20,7 @@ from inspection_system.app.operator_dashboard import (
     REFERENCE_PREVIEW_NAME,
     LIVE_PREVIEW_NAME,
     CONFIG_FIELD_SPECS,
+    CONFIG_DROPDOWN_OPTIONS,
     apply_config_updates,
     build_config_editor_values,
     describe_preview_image,
@@ -47,6 +48,7 @@ class ConfigEditorPage:
         self.root.attributes("-fullscreen", True)
 
         self.config_vars: dict[str, tk.StringVar] = {}
+        self.config_widgets: dict[str, tk.Widget] = {}
         self.preview_photo = None
         self.current_preview_path: str | None = None
         self._preview_render_job: str | None = None
@@ -138,7 +140,17 @@ class ConfigEditorPage:
             ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
             var = tk.StringVar()
             self.config_vars[dotted_path] = var
-            ttk.Entry(form, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
+            if dotted_path in CONFIG_DROPDOWN_OPTIONS:
+                widget = ttk.Combobox(
+                    form,
+                    textvariable=var,
+                    values=CONFIG_DROPDOWN_OPTIONS[dotted_path],
+                    state="readonly",
+                )
+            else:
+                widget = ttk.Entry(form, textvariable=var)
+            widget.grid(row=row, column=1, sticky="ew", pady=3)
+            self.config_widgets[dotted_path] = widget
 
         actions = ttk.Frame(config)
         actions.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))

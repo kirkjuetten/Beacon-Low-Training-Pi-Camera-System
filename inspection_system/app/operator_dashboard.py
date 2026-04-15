@@ -42,6 +42,7 @@ CONFIG_FIELD_SPECS = [
     ("capture.timeout_ms", "Capture Timeout (ms)", int),
     ("capture.shutter_us", "Shutter (us)", int),
     ("inspection.inspection_mode", "Inspection Mode", str),
+    ("inspection.threshold_mode", "Threshold Mode", str),
     ("inspection.threshold_value", "Threshold Value", int),
     ("inspection.min_feature_pixels", "Min Feature Pixels", int),
     ("inspection.min_required_coverage", "Min Required Coverage", float),
@@ -54,6 +55,14 @@ CONFIG_FIELD_SPECS = [
     ("alignment.enabled", "Alignment Enabled", bool),
     ("indicator_led.enabled", "Indicator LED Enabled", bool),
 ]
+
+CONFIG_DROPDOWN_OPTIONS = {
+    "inspection.inspection_mode": ["mask_only", "mask_and_ssim", "mask_and_ml", "full"],
+    "inspection.threshold_mode": ["fixed", "fixed_inv", "otsu", "otsu_inv"],
+    "inspection.save_debug_images": ["True", "False"],
+    "alignment.enabled": ["True", "False"],
+    "indicator_led.enabled": ["True", "False"],
+}
 
 OPTIONAL_FLOAT_FIELDS = {
     "inspection.min_ssim",
