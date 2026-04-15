@@ -39,6 +39,301 @@ else:
     ImageTk = None
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class ROISetupDialog:
+    """Visual ROI setup dialog with image overlay and drag selection."""
+
+    def __init__(self, parent: tk.Tk, on_saved, initial_image_path: Path | None = None):
+        self.parent = parent
+        self.on_saved = on_saved
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("ROI Setup")
+        self.dialog.geometry("1200x780")
+        self.dialog.minsize(900, 620)
+        self.dialog.transient(parent)
+
+        self.status_var = tk.StringVar(value="Load or capture an image, then drag to draw ROI.")
+        self.roi_x_var = tk.StringVar(value="0")
+        self.roi_y_var = tk.StringVar(value="0")
+        self.roi_w_var = tk.StringVar(value="0")
+        self.roi_h_var = tk.StringVar(value="0")
+
+        self.original_image = None
+        self.canvas_photo = None
+        self.current_image_path: Path | None = None
+        self.temp_capture_path: Path | None = None
+        self._drag_anchor: tuple[int, int] | None = None
+        self._syncing_vars = False
+
+        self._scale = 1.0
+        self._offset_x = 0
+        self._offset_y = 0
+        self._render_w = 1
+        self._render_h = 1
+
+        self.roi = {"x": 0, "y": 0, "width": 0, "height": 0}
+
+        self._build_layout()
+        self._load_roi_from_config()
+
+        if initial_image_path is not None and initial_image_path.exists():
+            self._set_image(initial_image_path)
+        else:
+            self._load_stored_image()
+
+        self.dialog.protocol("WM_DELETE_WINDOW", self.close)
+
+    def _build_layout(self) -> None:
+        self.dialog.columnconfigure(0, weight=4)
+        self.dialog.columnconfigure(1, weight=2)
+        self.dialog.rowconfigure(0, weight=1)
+
+        canvas_frame = ttk.LabelFrame(self.dialog, text="ROI Image", padding=10)
+        canvas_frame.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas_frame.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(canvas_frame, bg="#111", highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.canvas.bind("<Configure>", lambda _e: self._render_canvas())
+        self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+
+        controls = ttk.LabelFrame(self.dialog, text="ROI Controls", padding=10)
+        controls.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
+        controls.columnconfigure(1, weight=1)
+
+        ttk.Label(controls, text="X").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(controls, textvariable=self.roi_x_var).grid(row=0, column=1, sticky="ew", pady=4)
+        ttk.Label(controls, text="Y").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(controls, textvariable=self.roi_y_var).grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Label(controls, text="Width").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(controls, textvariable=self.roi_w_var).grid(row=2, column=1, sticky="ew", pady=4)
+        ttk.Label(controls, text="Height").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(controls, textvariable=self.roi_h_var).grid(row=3, column=1, sticky="ew", pady=4)
+
+        ttk.Separator(controls, orient="horizontal").grid(row=4, column=0, columnspan=2, sticky="ew", pady=8)
+
+        ttk.Button(controls, text="Capture", command=self._capture_image).grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
+        ttk.Button(controls, text="Stored", command=self._load_stored_image).grid(row=6, column=0, columnspan=2, sticky="ew", pady=4)
+        ttk.Button(controls, text="Full Frame", command=self._set_full_frame_roi).grid(row=7, column=0, columnspan=2, sticky="ew", pady=4)
+        ttk.Button(controls, text="Save ROI", command=self._save_roi).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(12, 4))
+        ttk.Button(controls, text="Close", command=self.close).grid(row=9, column=0, columnspan=2, sticky="ew", pady=4)
+
+        ttk.Label(
+            controls,
+            text=(
+                "Tip: click and drag over the image to define ROI.\n"
+                "You can also fine tune X/Y/Width/Height fields."
+            ),
+            wraplength=280,
+            justify="left",
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(12, 4))
+
+        ttk.Label(
+            controls,
+            textvariable=self.status_var,
+            wraplength=280,
+            justify="left",
+        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        for var in [self.roi_x_var, self.roi_y_var, self.roi_w_var, self.roi_h_var]:
+            var.trace_add("write", self._on_roi_vars_changed)
+
+    def _load_roi_from_config(self) -> None:
+        config = read_json_file(get_active_runtime_paths()["config_file"])
+        roi_cfg = config.get("inspection", {}).get("roi", {})
+        self.roi = {
+            "x": _safe_int(roi_cfg.get("x", 0), 0),
+            "y": _safe_int(roi_cfg.get("y", 0), 0),
+            "width": _safe_int(roi_cfg.get("width", 0), 0),
+            "height": _safe_int(roi_cfg.get("height", 0), 0),
+        }
+        self._sync_vars_from_roi()
+
+    def _sync_vars_from_roi(self) -> None:
+        self._syncing_vars = True
+        try:
+            self.roi_x_var.set(str(self.roi["x"]))
+            self.roi_y_var.set(str(self.roi["y"]))
+            self.roi_w_var.set(str(self.roi["width"]))
+            self.roi_h_var.set(str(self.roi["height"]))
+        finally:
+            self._syncing_vars = False
+
+    def _apply_vars_to_roi(self) -> None:
+        x = max(0, _safe_int(self.roi_x_var.get(), self.roi["x"]))
+        y = max(0, _safe_int(self.roi_y_var.get(), self.roi["y"]))
+        w = max(0, _safe_int(self.roi_w_var.get(), self.roi["width"]))
+        h = max(0, _safe_int(self.roi_h_var.get(), self.roi["height"]))
+
+        if self.original_image is not None:
+            max_w, max_h = self.original_image.size
+            x = min(x, max_w)
+            y = min(y, max_h)
+            w = min(w, max(0, max_w - x))
+            h = min(h, max(0, max_h - y))
+
+        self.roi = {"x": x, "y": y, "width": w, "height": h}
+
+    def _on_roi_vars_changed(self, *_args) -> None:
+        if self._syncing_vars:
+            return
+        self._apply_vars_to_roi()
+        self._render_canvas()
+
+    def _set_image(self, image_path: Path) -> None:
+        if not PIL_AVAILABLE:
+            self.status_var.set("Pillow not installed. Cannot render ROI image preview.")
+            return
+        try:
+            self.original_image = Image.open(image_path).convert("RGB")
+            self.current_image_path = image_path
+        except Exception as exc:
+            self.status_var.set(f"Failed to load image: {exc}")
+            return
+
+        if self.roi["width"] <= 0 or self.roi["height"] <= 0:
+            self._set_full_frame_roi()
+        self._render_canvas()
+        self.status_var.set(f"Loaded image: {image_path.name}")
+
+    def _load_stored_image(self) -> None:
+        preview_path = find_preview_image(get_active_runtime_paths()["reference_dir"])
+        if preview_path is None:
+            self.status_var.set("No stored preview image found.")
+            return
+        self._set_image(preview_path)
+
+    def _capture_image(self) -> None:
+        config = read_json_file(get_active_runtime_paths()["config_file"])
+        result_code, image_path, stderr_text = capture_to_temp(config)
+        try:
+            if result_code != 0:
+                self.status_var.set(f"Capture failed: {stderr_text or 'unknown error'}")
+                return
+            fd, temp_path_text = tempfile.mkstemp(prefix="beacon-roi-preview-", suffix=image_path.suffix)
+            temp_path = Path(temp_path_text)
+            temp_path.unlink(missing_ok=True)
+            try:
+                import os
+                os.close(fd)
+            except OSError:
+                pass
+            shutil.copy2(image_path, temp_path)
+            if self.temp_capture_path is not None and self.temp_capture_path.exists():
+                self.temp_capture_path.unlink(missing_ok=True)
+            self.temp_capture_path = temp_path
+            self._set_image(temp_path)
+        finally:
+            cleanup_temp_image()
+
+    def _set_full_frame_roi(self) -> None:
+        if self.original_image is None:
+            self.status_var.set("Load an image first to set full-frame ROI.")
+            return
+        width, height = self.original_image.size
+        self.roi = {"x": 0, "y": 0, "width": int(width), "height": int(height)}
+        self._sync_vars_from_roi()
+        self._render_canvas()
+
+    def _render_canvas(self) -> None:
+        self.canvas.delete("all")
+
+        canvas_w = max(1, int(self.canvas.winfo_width()))
+        canvas_h = max(1, int(self.canvas.winfo_height()))
+        if self.original_image is None:
+            self.canvas.create_text(canvas_w // 2, canvas_h // 2, text="No image loaded", fill="#cccccc")
+            return
+
+        img_w, img_h = self.original_image.size
+        self._scale = min(canvas_w / max(1, img_w), canvas_h / max(1, img_h))
+        self._render_w = max(1, int(img_w * self._scale))
+        self._render_h = max(1, int(img_h * self._scale))
+        self._offset_x = (canvas_w - self._render_w) // 2
+        self._offset_y = (canvas_h - self._render_h) // 2
+
+        rendered = self.original_image.resize((self._render_w, self._render_h))
+        self.canvas_photo = ImageTk.PhotoImage(rendered)
+        self.canvas.create_image(self._offset_x, self._offset_y, image=self.canvas_photo, anchor="nw")
+
+        x1 = self._offset_x + int(self.roi["x"] * self._scale)
+        y1 = self._offset_y + int(self.roi["y"] * self._scale)
+        x2 = self._offset_x + int((self.roi["x"] + self.roi["width"]) * self._scale)
+        y2 = self._offset_y + int((self.roi["y"] + self.roi["height"]) * self._scale)
+
+        if x2 > x1 and y2 > y1:
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline="#00ff00", width=2)
+            self.canvas.create_text(x1 + 6, y1 + 6, anchor="nw", fill="#00ff00", text="ROI")
+
+    def _canvas_to_image(self, canvas_x: int, canvas_y: int) -> tuple[int, int]:
+        if self.original_image is None:
+            return 0, 0
+        img_w, img_h = self.original_image.size
+        x = int((canvas_x - self._offset_x) / max(1e-6, self._scale))
+        y = int((canvas_y - self._offset_y) / max(1e-6, self._scale))
+        x = min(max(0, x), img_w)
+        y = min(max(0, y), img_h)
+        return x, y
+
+    def _on_canvas_press(self, event) -> None:
+        if self.original_image is None:
+            return
+        start_x, start_y = self._canvas_to_image(int(event.x), int(event.y))
+        self._drag_anchor = (start_x, start_y)
+        self.roi = {"x": start_x, "y": start_y, "width": 1, "height": 1}
+        self._sync_vars_from_roi()
+        self._render_canvas()
+
+    def _on_canvas_drag(self, event) -> None:
+        if self.original_image is None or self._drag_anchor is None:
+            return
+        end_x, end_y = self._canvas_to_image(int(event.x), int(event.y))
+        start_x, start_y = self._drag_anchor
+        x = min(start_x, end_x)
+        y = min(start_y, end_y)
+        width = abs(end_x - start_x)
+        height = abs(end_y - start_y)
+        self.roi = {"x": x, "y": y, "width": width, "height": height}
+        self._sync_vars_from_roi()
+        self._render_canvas()
+
+    def _on_canvas_release(self, _event) -> None:
+        self._drag_anchor = None
+
+    def _save_roi(self) -> None:
+        self._apply_vars_to_roi()
+        if self.roi["width"] <= 0 or self.roi["height"] <= 0:
+            messagebox.showerror("Invalid ROI", "ROI width and height must be greater than zero.")
+            return
+
+        config_path = get_active_runtime_paths()["config_file"]
+        config = read_json_file(config_path)
+        inspection = config.setdefault("inspection", {})
+        inspection["roi"] = {
+            "x": int(self.roi["x"]),
+            "y": int(self.roi["y"]),
+            "width": int(self.roi["width"]),
+            "height": int(self.roi["height"]),
+        }
+        write_json_file(config_path, config)
+        self.status_var.set(f"Saved ROI to {config_path}")
+        if self.on_saved is not None:
+            self.on_saved()
+
+    def close(self) -> None:
+        if self.temp_capture_path is not None and self.temp_capture_path.exists():
+            self.temp_capture_path.unlink(missing_ok=True)
+        self.dialog.destroy()
+
+
 class ConfigEditorPage:
     """Full-screen config tuning view with integrated preview panel."""
 
@@ -59,6 +354,7 @@ class ConfigEditorPage:
         self.status_var = tk.StringVar(value="Ready")
         self.current_project_var = tk.StringVar(value="Current project: None")
         self.preview_path_var = tk.StringVar(value="Preview: none")
+        self.roi_dialog: ROISetupDialog | None = None
 
         self._build_layout()
         self.refresh_view()
@@ -163,8 +459,8 @@ class ConfigEditorPage:
         self.save_button.grid(row=0, column=1, sticky="ew", padx=(4, 4))
         self.back_button = ttk.Button(actions, text="Back", command=self.back_to_dashboard)
         self.back_button.grid(row=0, column=2, sticky="ew", padx=(4, 4))
-        self.exit_button = ttk.Button(actions, text="Exit", command=self.exit_page)
-        self.exit_button.grid(row=0, column=3, sticky="ew", padx=(4, 4))
+        self.roi_button = ttk.Button(actions, text="ROI", command=self.open_roi_setup)
+        self.roi_button.grid(row=0, column=3, sticky="ew", padx=(4, 4))
         self.info_button = ttk.Button(actions, text="Info", command=self.show_settings_info)
         self.info_button.grid(row=0, column=4, sticky="ew", padx=(4, 0))
 
@@ -200,7 +496,7 @@ class ConfigEditorPage:
             self.capture_button,
             self.reload_button,
             self.back_button,
-            self.exit_button,
+            self.roi_button,
             self.info_button,
         ]:
             button.configure(state=state)
@@ -289,9 +585,21 @@ class ConfigEditorPage:
         except OSError as exc:
             messagebox.showerror("Launch failed", f"Could not launch dashboard: {exc}")
 
-    def exit_page(self) -> None:
-        self._clear_live_capture()
-        self.root.destroy()
+    def open_roi_setup(self) -> None:
+        if self.roi_dialog is not None and self.roi_dialog.dialog.winfo_exists():
+            self.roi_dialog.dialog.focus_set()
+            return
+
+        initial_path: Path | None = None
+        if self.current_preview_path:
+            preview_path = Path(self.current_preview_path)
+            if preview_path.exists():
+                initial_path = preview_path
+
+        def _on_roi_saved() -> None:
+            self.status_var.set("Saved ROI updates")
+
+        self.roi_dialog = ROISetupDialog(self.root, _on_roi_saved, initial_image_path=initial_path)
 
     def reload_config_editor(self) -> None:
         config = read_json_file(get_active_runtime_paths()["config_file"])
