@@ -10,7 +10,6 @@ import json
 import sys
 import time
 import logging
-import select
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -614,6 +613,95 @@ class InspectionDisplay:
 
         pygame.quit()
 
+    def show_training_checkpoint(self, summary: dict, suggestions: dict) -> str:
+        """Pause training and ask operator how to handle pending learning data."""
+        defer_color = (70, 130, 220)
+        discard_color = self.RED
+        update_color = self.GREEN
+        home_color = self.GRAY
+
+        button_rects: dict[str, pygame.Rect] = {}
+
+        def render() -> None:
+            self._reflow_layout()
+            self.screen.fill(self.BLACK)
+            width, height = self.screen.get_size()
+            pad = self._clamp(int(height * 0.02), 10, 20)
+
+            title = self.font.render("Training Review Checkpoint", True, self.YELLOW)
+            self.screen.blit(title, (pad, pad))
+
+            lines = [
+                f"Pending labels: {summary.get('total', 0)}",
+                f"Approved: {summary.get('approve', 0)}   Rejected: {summary.get('reject', 0)}   Review: {summary.get('review', 0)}",
+            ]
+
+            if suggestions:
+                lines.append("Suggested updates:")
+                for key, value in suggestions.items():
+                    lines.append(f"  - {key}: {value:.4f}")
+            else:
+                lines.append("No threshold updates suggested yet (need stronger separation/more data).")
+
+            lines.append("Choose action: Defer keeps collecting, Discard drops pending learning data, Update applies now.")
+
+            y = pad + title.get_height() + 10
+            line_height = self.small_font.get_linesize() + 3
+            for line in lines:
+                text = self.small_font.render(line, True, self.WHITE)
+                self.screen.blit(text, (pad, y))
+                y += line_height
+
+            button_h = self._clamp(int(height * 0.08), 42, 64)
+            button_w = self._clamp(int(width * 0.20), 140, 280)
+            gap = self._clamp(int(width * 0.02), 10, 28)
+            total_w = button_w * 4 + gap * 3
+            start_x = (width - total_w) // 2
+            btn_y = height - button_h - pad
+
+            button_rects.clear()
+            button_rects["defer"] = pygame.Rect(start_x, btn_y, button_w, button_h)
+            button_rects["discard"] = pygame.Rect(start_x + (button_w + gap), btn_y, button_w, button_h)
+            button_rects["update"] = pygame.Rect(start_x + (button_w + gap) * 2, btn_y, button_w, button_h)
+            button_rects["home"] = pygame.Rect(start_x + (button_w + gap) * 3, btn_y, button_w, button_h)
+
+            labels = {
+                "defer": ("DEFER", defer_color),
+                "discard": ("DISCARD", discard_color),
+                "update": ("UPDATE", update_color),
+                "home": ("HOME", home_color),
+            }
+
+            for key, rect in button_rects.items():
+                text_label, color = labels[key]
+                pygame.draw.rect(self.screen, color, rect, border_radius=8)
+                text = self.small_font.render(text_label, True, self.WHITE)
+                text_rect = text.get_rect(center=rect.center)
+                self.screen.blit(text, text_rect)
+
+            pygame.display.flip()
+
+        render()
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return "quit"
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return "quit"
+                if event.type == pygame.VIDEORESIZE:
+                    new_width = max(event.w, self.MIN_WIDTH)
+                    new_height = max(event.h, self.MIN_HEIGHT)
+                    self.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
+                    render()
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    pos = event.pos
+                    for action, rect in button_rects.items():
+                        if rect.collidepoint(pos):
+                            return action
+
+            self.clock.tick(30)
+
 
 class TrainingLogger:
     """Logs training sessions and decisions for analysis."""
@@ -714,6 +802,14 @@ class ThresholdTrainer:
         if training_file.exists():
             with open(training_file, 'r') as f:
                 self.training_data = json.load(f)
+            # Backward compatibility: old records had no learning_state.
+            changed = False
+            for record in self.training_data:
+                if "learning_state" not in record:
+                    record["learning_state"] = "committed"
+                    changed = True
+            if changed:
+                self.save_training_data()
 
     def save_training_data(self):
         """Save training data."""
@@ -726,6 +822,7 @@ class ThresholdTrainer:
         record = {
             'timestamp': time.time(),
             'feedback': feedback,
+            'learning_state': 'pending',
             'metrics': {
                 'required_coverage': details.get('required_coverage', 0),
                 'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
@@ -737,13 +834,46 @@ class ThresholdTrainer:
         self.training_data.append(record)
         self.save_training_data()
 
+    def get_pending_summary(self) -> dict:
+        """Get summary of pending (not yet committed/discarded) training records."""
+        pending = [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+        summary = {'approve': 0, 'reject': 0, 'review': 0, 'total': len(pending)}
+        for record in pending:
+            feedback = str(record.get('feedback', '')).lower()
+            if feedback in summary:
+                summary[feedback] += 1
+        return summary
+
+    def commit_pending_feedback(self) -> int:
+        """Mark pending records as committed after applying threshold updates."""
+        updated = 0
+        for record in self.training_data:
+            if record.get('learning_state', 'committed') == 'pending':
+                record['learning_state'] = 'committed'
+                updated += 1
+        if updated:
+            self.save_training_data()
+        return updated
+
+    def discard_pending_feedback(self) -> int:
+        """Exclude pending records from learning while preserving audit history."""
+        updated = 0
+        for record in self.training_data:
+            if record.get('learning_state', 'committed') == 'pending':
+                record['learning_state'] = 'discarded'
+                updated += 1
+        if updated:
+            self.save_training_data()
+        return updated
+
     def suggest_thresholds(self) -> dict:
         """Analyze training data and suggest new thresholds."""
-        if len(self.training_data) < 10:
+        learning_records = [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+        if len(learning_records) < 10:
             return {}  # Need more data
 
-        approved = [r for r in self.training_data if r['feedback'] == 'approve']
-        rejected = [r for r in self.training_data if r['feedback'] == 'reject']
+        approved = [r for r in learning_records if r['feedback'] == 'approve']
+        rejected = [r for r in learning_records if r['feedback'] == 'reject']
 
         if not approved or not rejected:
             return {}
@@ -908,7 +1038,6 @@ def run_interactive_training(config: dict) -> int:
     early_review_parts = int(training_cfg.get("early_review_parts", 25))
     early_review_interval = int(training_cfg.get("early_review_interval", 5))
     steady_review_interval = int(training_cfg.get("steady_review_interval", 10))
-    update_prompt_timeout_s = float(training_cfg.get("update_prompt_timeout_s", 5.0))
 
     def should_review_training(count: int) -> bool:
         if count <= 0:
@@ -916,21 +1045,6 @@ def run_interactive_training(config: dict) -> int:
         if count <= early_review_parts:
             return count % early_review_interval == 0
         return count % steady_review_interval == 0
-
-    def prompt_apply_updates_with_timeout(timeout_s: float) -> bool:
-        """Ask once for update approval without blocking indefinitely."""
-        prompt = f"Apply suggested threshold updates now? [y/N] (auto-skip in {int(timeout_s)}s): "
-        print(prompt, end="", flush=True)
-        try:
-            ready, _, _ = select.select([sys.stdin], [], [], timeout_s)
-            if ready:
-                response = sys.stdin.readline().strip().lower()
-                return response in {"y", "yes"}
-        except Exception:
-            # If stdin/select is unavailable, fail safe and skip auto-apply.
-            pass
-        print("(auto-skip)")
-        return False
 
     try:
         print("Starting interactive training mode...")
@@ -1087,30 +1201,30 @@ def run_interactive_training(config: dict) -> int:
 
                     # Show session summary at configured review cadence.
                     if should_review_training(session_count):
-                        summary = logger.get_session_summary()
-                        print(f"\nSession Summary (last {summary.get('total', 0)} samples):")
-                        print(f"  Approved: {summary.get('approve', 0)}")
-                        print(f"  Rejected: {summary.get('reject', 0)}")
-                        print(f"  Flagged for review: {summary.get('review', 0)}")
-
-                    # Review and optionally apply threshold suggestions at configured cadence.
-                    if should_review_training(session_count):
+                        summary = trainer.get_pending_summary()
                         suggestions = trainer.suggest_thresholds()
-                        if suggestions:
-                            print("\nSuggested threshold updates:")
-                            for key, value in suggestions.items():
-                                print(f"  {key}: {value:.4f}")
-
-                            if prompt_apply_updates_with_timeout(update_prompt_timeout_s):
+                        action = display.show_training_checkpoint(summary, suggestions)
+                        if action in {'quit', 'home'}:
+                            print("Returning to dashboard/home.")
+                            break
+                        if action == 'defer':
+                            print("Deferred updates; continuing to collect training data.")
+                        elif action == 'discard':
+                            discarded = trainer.discard_pending_feedback()
+                            print(f"Discarded {discarded} pending training records.")
+                        elif action == 'update':
+                            if not suggestions:
+                                print("No suggestions to apply yet; continuing with current settings.")
+                            else:
                                 applied = trainer.apply_suggestions(config, suggestions)
                                 if applied:
+                                    committed = trainer.commit_pending_feedback()
                                     print("Applied threshold updates:")
                                     for key, value in applied.items():
                                         print(f"  {key}: {value:.4f}")
+                                    print(f"Committed {committed} training records.")
                                 else:
                                     print("No threshold changes were applied.")
-                            else:
-                                print("Skipped applying threshold updates for now.")
 
             finally:
                 cleanup_temp_image()
