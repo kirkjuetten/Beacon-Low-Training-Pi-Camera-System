@@ -827,20 +827,6 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         return False, f"Reference save error: {exc}"
 
 
-def capture_reference(config: dict) -> tuple[bool, str]:
-    """Capture a new golden reference for the active project."""
-    result_code, image_path, stderr_text = capture_to_temp(config)
-    if result_code != 0:
-        msg = f"Reference capture failed: {stderr_text}"
-        cleanup_temp_image()
-        return False, msg
-
-    try:
-        return save_reference_from_image(config, image_path)
-    finally:
-        cleanup_temp_image()
-
-
 def cycle_alignment_profile(config: dict, config_path: Path) -> tuple[str, bool, str]:
     """Cycle alignment profile and persist it to the active project config."""
     profiles = ["strict", "balanced", "forgiving"]
