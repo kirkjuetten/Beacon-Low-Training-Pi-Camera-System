@@ -63,10 +63,13 @@ def inspect_against_reference(
     inspection_cfg = config.get("inspection", {})
     alignment_cfg, alignment_profile = resolve_alignment_config(config)
     
-    # Check if reference settings match current config
-    settings_match, mismatch_msg = check_reference_settings_match(config)
-    if not settings_match:
-        logger.warning(f"Reference settings mismatch: {mismatch_msg}")
+    # Check if reference settings match current config (with safety wrapper)
+    try:
+        settings_match, mismatch_msg = check_reference_settings_match(config)
+        if not settings_match:
+            logger.warning(f"Reference settings mismatch: {mismatch_msg}")
+    except Exception as exc:
+        logger.debug(f"Could not check reference settings: {exc}")
     
     roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
 

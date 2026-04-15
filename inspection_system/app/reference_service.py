@@ -77,7 +77,9 @@ def save_reference_metadata(config: dict) -> None:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
     except Exception as exc:
-        print(f"Warning: Could not save reference metadata: {exc}")
+        # Don't crash on metadata save; just warn
+        import sys
+        print(f"Warning: Could not save reference metadata: {exc}", file=sys.stderr)
 
 
 def load_reference_metadata() -> dict | None:
@@ -166,7 +168,10 @@ def set_reference(config: dict) -> int:
         print(f"Saved reference mask: {ref_mask_path}")
         print(f"Saved reference image: {ref_image_path}")
         print(f"Reference feature pixels: {feature_pixels}")
-        save_reference_metadata(config)
+        try:
+            save_reference_metadata(config)
+        except Exception as exc:
+            print(f"Warning: could not save reference metadata: {exc}")
         return 0
     finally:
         cleanup_temp_image()
