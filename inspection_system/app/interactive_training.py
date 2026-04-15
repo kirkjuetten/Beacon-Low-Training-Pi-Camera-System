@@ -35,7 +35,7 @@ from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
-from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.reference_service import save_debug_outputs, bake_reference_mask
 from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 
 
@@ -809,20 +809,12 @@ class ThresholdTrainer:
 
 def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str]:
     """Create the active project's reference assets from an existing captured image."""
+    roi_image, mask, feature_pixels, error_msg = bake_reference_mask(image_path, config)
+    if error_msg:
+        return False, error_msg
+
     try:
-        cv2, np = import_cv2_and_numpy()
-        inspection_cfg = config.get("inspection", {})
-        roi_image, _, mask, _, _, _ = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
-        ref_erode = int(inspection_cfg.get("reference_erode_iterations", 1))
-        ref_dilate = int(inspection_cfg.get("reference_dilate_iterations", 1))
-        mask = erode_mask(mask, ref_erode, cv2, np)
-        mask = dilate_mask(mask, ref_dilate, cv2, np)
-
-        feature_pixels = int((mask > 0).sum())
-        min_feature = int(inspection_cfg.get("min_feature_pixels", inspection_cfg.get("min_white_pixels", 100)))
-        if feature_pixels < min_feature:
-            return False, f"Too few feature pixels ({feature_pixels}). Adjust ROI or threshold."
-
+        cv2, _ = import_cv2_and_numpy()
         active_paths = get_active_runtime_paths()
         ref_mask_path = active_paths["reference_mask"]
         ref_image_path = active_paths["reference_image"]
@@ -831,7 +823,7 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         cv2.imwrite(str(ref_image_path), roi_image)
         return True, f"Reference saved ({feature_pixels} feature pixels)"
     except Exception as exc:
-        return False, f"Reference capture error: {exc}"
+        return False, f"Reference save error: {exc}"
 
 
 def capture_reference(config: dict) -> tuple[bool, str]:

@@ -20,15 +20,14 @@ def save_debug_outputs(stem: str, aligned_sample_mask, diff_image) -> dict:
     }
 
 
-def set_reference(config: dict) -> int:
-    result_code, image_path, stderr_text = capture_to_temp(config)
-    if result_code != 0:
-        print("Reference capture failed.")
-        if stderr_text:
-            print(stderr_text)
-        cleanup_temp_image()
-        return result_code
-
+def bake_reference_mask(image_path: Path, config: dict) -> tuple[object, object, int, str | None]:
+    """
+    Pure reference-baking function: process image into reference assets.
+    
+    Returns:
+        (roi_image, mask, feature_pixels, error_message)
+        If error_message is None, baking succeeded.
+    """
     try:
         cv2, np = import_cv2_and_numpy()
         inspection_cfg = config.get("inspection", {})
@@ -41,15 +40,35 @@ def set_reference(config: dict) -> int:
         feature_pixels = int((mask > 0).sum())
         min_feature_pixels = int(inspection_cfg.get("min_feature_pixels", inspection_cfg.get("min_white_pixels", 100)))
         if feature_pixels < min_feature_pixels:
-            print("Reference mask did not produce enough feature pixels.")
-            print(f"Feature pixels found: {feature_pixels}")
-            print("Adjust ROI / threshold before using this reference.")
+            error_msg = f"Too few feature pixels ({feature_pixels}). Adjust ROI or threshold."
+            return None, None, 0, error_msg
+
+        return roi_image, mask, feature_pixels, None
+    except Exception as exc:
+        return None, None, 0, f"Reference baking error: {exc}"
+
+
+def set_reference(config: dict) -> int:
+    result_code, image_path, stderr_text = capture_to_temp(config)
+    if result_code != 0:
+        print("Reference capture failed.")
+        if stderr_text:
+            print(stderr_text)
+        cleanup_temp_image()
+        return result_code
+
+    try:
+        roi_image, mask, feature_pixels, error_msg = bake_reference_mask(image_path, config)
+        if error_msg:
+            print(error_msg)
             return 3
 
         active_paths = get_active_runtime_paths()
         ref_mask_path = active_paths["reference_mask"]
         ref_image_path = active_paths["reference_image"]
         ref_mask_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        cv2, _ = import_cv2_and_numpy()
         cv2.imwrite(str(ref_mask_path), mask)
         cv2.imwrite(str(ref_image_path), roi_image)
         print(f"Saved reference mask: {ref_mask_path}")
