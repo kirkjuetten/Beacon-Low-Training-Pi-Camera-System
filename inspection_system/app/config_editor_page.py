@@ -43,6 +43,8 @@ class ConfigEditorPage:
 
         self.config_vars: dict[str, tk.StringVar] = {}
         self.preview_photo = None
+        self.current_preview_path: str | None = None
+        self._preview_render_job: str | None = None
         self.busy = False
 
         self.status_var = tk.StringVar(value="Ready")
@@ -93,6 +95,7 @@ class ConfigEditorPage:
         ttk.Label(preview, textvariable=self.preview_path_var, wraplength=480).grid(row=0, column=0, sticky="w")
         self.preview_label = ttk.Label(preview, text="No preview image available", anchor="center")
         self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        self.preview_label.bind("<Configure>", self._schedule_preview_render)
 
         preview_buttons = ttk.Frame(preview)
         preview_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -146,6 +149,30 @@ class ConfigEditorPage:
         self.back_button.grid(row=0, column=2, sticky="ew", padx=(4, 4))
         self.exit_button = ttk.Button(actions, text="Exit", command=self.root.destroy)
         self.exit_button.grid(row=0, column=3, sticky="ew", padx=(4, 0))
+
+    def _schedule_preview_render(self, _event=None) -> None:
+        if self._preview_render_job is not None:
+            try:
+                self.root.after_cancel(self._preview_render_job)
+            except Exception:
+                pass
+        self._preview_render_job = self.root.after(50, self._render_preview_image)
+
+    def _render_preview_image(self) -> None:
+        self._preview_render_job = None
+        if self.current_preview_path is None or not PIL_AVAILABLE:
+            return
+
+        label_width = max(1, int(self.preview_label.winfo_width()))
+        label_height = max(1, int(self.preview_label.winfo_height()))
+        if label_width <= 1 or label_height <= 1:
+            self._schedule_preview_render()
+            return
+
+        image = Image.open(self.current_preview_path)
+        image.thumbnail((max(1, label_width - 8), max(1, label_height - 8)))
+        self.preview_photo = ImageTk.PhotoImage(image)
+        self.preview_label.configure(image=self.preview_photo, text="")
 
     def set_busy(self, busy: bool, status: str) -> None:
         self.busy = busy
@@ -220,6 +247,7 @@ class ConfigEditorPage:
     def refresh_preview(self) -> None:
         preview_path = find_preview_image(get_active_runtime_paths()["reference_dir"])
         if preview_path is None:
+            self.current_preview_path = None
             self.preview_path_var.set("Preview: none")
             self.preview_label.configure(text="No preview image available", image="")
             self.preview_photo = None
@@ -228,11 +256,10 @@ class ConfigEditorPage:
         preview_kind = describe_preview_image(preview_path)
         self.preview_path_var.set(f"Preview ({preview_kind}): {preview_path.name}")
         if PIL_AVAILABLE:
-            image = Image.open(preview_path)
-            image.thumbnail((520, 380))
-            self.preview_photo = ImageTk.PhotoImage(image)
-            self.preview_label.configure(image=self.preview_photo, text="")
+            self.current_preview_path = str(preview_path)
+            self._schedule_preview_render()
         else:
+            self.current_preview_path = None
             self.preview_label.configure(text=str(preview_path), image="")
             self.preview_photo = None
 
