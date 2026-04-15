@@ -56,6 +56,7 @@ CONFIG_FIELD_SPECS = [
     ("inspection.min_ssim", "Min SSIM (optional)", float),
     ("inspection.max_mse", "Max MSE (optional)", float),
     ("inspection.min_anomaly_score", "Min Anomaly Score (optional)", float),
+    ("inspection.image_display_mode", "Image Display Mode", str),
     ("inspection.save_debug_images", "Save Debug Images", bool),
     ("alignment.enabled", "Alignment Enabled", bool),
     ("alignment.tolerance_profile", "Alignment Profile", str),
@@ -65,6 +66,7 @@ CONFIG_FIELD_SPECS = [
 CONFIG_DROPDOWN_OPTIONS = {
     "inspection.inspection_mode": ["mask_only", "mask_and_ssim", "mask_and_ml", "full"],
     "inspection.threshold_mode": ["fixed", "fixed_inv", "otsu", "otsu_inv"],
+    "inspection.image_display_mode": ["raw", "processed", "split"],
     "inspection.save_debug_images": ["True", "False"],
     "alignment.enabled": ["True", "False"],
     "alignment.tolerance_profile": ["strict", "balanced", "forgiving"],
