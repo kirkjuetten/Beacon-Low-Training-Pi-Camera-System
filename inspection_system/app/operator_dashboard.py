@@ -44,7 +44,7 @@ CONFIG_FIELD_SPECS = [
     ("inspection.inspection_mode", "Inspection Mode", str),
     ("inspection.threshold_mode", "Threshold Mode", str),
     ("inspection.threshold_value", "Threshold Value", int),
-    ("inspection.mask_blur_kernel", "Blur Kernel (pixels)", int),
+    ("inspection.blur_kernel", "Blur Kernel (pixels)", int),
     ("inspection.reference_erode_iterations", "Reference Erode Iterations", int),
     ("inspection.reference_dilate_iterations", "Reference Dilate Iterations", int),
     ("inspection.sample_erode_iterations", "Sample Erode Iterations", int),

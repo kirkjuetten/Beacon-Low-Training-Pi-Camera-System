@@ -63,9 +63,9 @@ def save_reference_metadata(config: dict) -> None:
                 "y2": int(inspection_cfg.get("roi_y2", 480)),
             },
             "threshold": {
-                "type": str(inspection_cfg.get("mask_threshold_type", "fixed")).lower(),
-                "value": float(inspection_cfg.get("mask_threshold_value", 150.0)),
-                "blur_kernel": int(inspection_cfg.get("mask_blur_kernel", 5)),
+                "type": str(inspection_cfg.get("threshold_mode", "fixed")).lower(),
+                "value": float(inspection_cfg.get("threshold_value", 150.0)),
+                "blur_kernel": int(inspection_cfg.get("blur_kernel", 5)),
             },
             "morphology": {
                 "reference_erode_iterations": int(inspection_cfg.get("reference_erode_iterations", 1)),
@@ -117,12 +117,12 @@ def check_reference_settings_match(config: dict) -> tuple[bool, str | None]:
     
     # Check threshold
     thresh_meta = meta.get("threshold", {})
-    current_thresh_type = str(inspection_cfg.get("mask_threshold_type", "fixed")).lower()
+    current_thresh_type = str(inspection_cfg.get("threshold_mode", "fixed")).lower()
     meta_thresh_type = str(thresh_meta.get("type", "fixed")).lower()
     if current_thresh_type != meta_thresh_type:
         return False, f"Threshold type mismatch: reference was {meta_thresh_type}; current is {current_thresh_type}"
     
-    current_thresh_val = float(inspection_cfg.get("mask_threshold_value", 150.0))
+    current_thresh_val = float(inspection_cfg.get("threshold_value", 150.0))
     meta_thresh_val = float(thresh_meta.get("value", 150.0))
     if abs(current_thresh_val - meta_thresh_val) > 0.1:
         return False, f"Threshold value mismatch: reference was {meta_thresh_val}; current is {current_thresh_val}"
