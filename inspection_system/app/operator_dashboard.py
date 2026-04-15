@@ -236,7 +236,19 @@ class OperatorDashboard:
         self.refresh_dashboard()
 
     def _configure_window_size(self) -> None:
-        self.root.attributes("-fullscreen", True)
+        # Some Pi display stacks clip the bottom row in strict fullscreen.
+        # Use a near-fullscreen geometry with a small safe margin instead.
+        self.root.update_idletasks()
+        screen_w = int(self.root.winfo_screenwidth())
+        screen_h = int(self.root.winfo_screenheight())
+
+        side_margin = 8
+        top_margin = 0
+        bottom_safe_margin = 28
+
+        target_w = max(640, screen_w - (side_margin * 2))
+        target_h = max(360, screen_h - top_margin - bottom_safe_margin)
+        self.root.geometry(f"{target_w}x{target_h}+{side_margin}+{top_margin}")
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
