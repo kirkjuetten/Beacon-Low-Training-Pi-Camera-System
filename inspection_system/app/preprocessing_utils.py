@@ -32,7 +32,12 @@ def get_roi(image, roi_cfg: dict):
     return image[y:y2, x:x2], (x, y, x2 - x, y2 - y)
 
 
-def make_binary_mask(image_path: Path, inspection_cfg: dict, import_cv2_and_numpy):
+def make_binary_mask(image_path: Path, inspection_cfg: dict, import_cv2_and_numpy=None):
+    # Backward-compatible fallback for older call sites that passed only (image_path, inspection_cfg).
+    if import_cv2_and_numpy is None:
+        from inspection_system.app.camera_interface import import_cv2_and_numpy as _import_cv2_and_numpy
+        import_cv2_and_numpy = _import_cv2_and_numpy
+
     cv2, np = import_cv2_and_numpy()
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
