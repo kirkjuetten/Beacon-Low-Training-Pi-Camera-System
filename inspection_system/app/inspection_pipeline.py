@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from inspection_system.app.anomaly_detection_utils import detect_anomalies
+from inspection_system.app.reference_service import check_reference_settings_match
+
+
+logger = logging.getLogger(__name__)
 
 
 ALIGNMENT_PROFILES = {
@@ -57,6 +62,12 @@ def inspect_against_reference(
 ) -> tuple[bool, dict]:
     inspection_cfg = config.get("inspection", {})
     alignment_cfg, alignment_profile = resolve_alignment_config(config)
+    
+    # Check if reference settings match current config
+    settings_match, mismatch_msg = check_reference_settings_match(config)
+    if not settings_match:
+        logger.warning(f"Reference settings mismatch: {mismatch_msg}")
+    
     roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
 
     sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))

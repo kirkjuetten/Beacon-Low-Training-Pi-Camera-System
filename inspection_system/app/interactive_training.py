@@ -35,7 +35,7 @@ from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
-from inspection_system.app.reference_service import save_debug_outputs, bake_reference_mask
+from inspection_system.app.reference_service import save_debug_outputs, bake_reference_mask, save_reference_metadata
 from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 
 
@@ -821,6 +821,7 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         ref_mask_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(ref_mask_path), mask)
         cv2.imwrite(str(ref_image_path), roi_image)
+        save_reference_metadata(config)
         return True, f"Reference saved ({feature_pixels} feature pixels)"
     except Exception as exc:
         return False, f"Reference save error: {exc}"
