@@ -18,7 +18,7 @@ from inspection_system.app.runtime_controller import (
     run_capture_only,
     run_interactive_training,
 )
-from inspection_system.app.ui_launcher import launch_dashboard, launch_project_manager
+from inspection_system.app.ui_launcher import launch_config_editor, launch_dashboard, launch_project_manager
 
 
 def print_usage() -> None:
@@ -33,6 +33,7 @@ def print_usage() -> None:
     print("  python3 capture_test.py switch-project <name>")
     print("  python3 capture_test.py list-projects")
     print("  python3 capture_test.py project-manager  # GUI project manager")
+    print("  python3 capture_test.py config-editor    # GUI config + preview")
 
 
 def command_capture(config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
@@ -69,6 +70,10 @@ def command_project_manager(_config: dict, _indicator: IndicatorLED, _argv: list
 
 def command_dashboard(_config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
     return launch_dashboard()
+
+
+def command_config_editor(_config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return launch_config_editor()
 
 
 def command_quick_check(config: dict, indicator: IndicatorLED, _argv: list[str]) -> int:
@@ -109,6 +114,7 @@ COMMAND_HANDLERS = {
     "switch-project": command_switch_project,
     "list-projects": command_list_projects,
     "project-manager": command_project_manager,
+    "config-editor": command_config_editor,
     "dashboard": command_dashboard,
 }
 

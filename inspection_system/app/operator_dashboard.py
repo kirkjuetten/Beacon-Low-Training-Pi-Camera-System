@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
 import threading
@@ -32,7 +31,6 @@ from inspection_system.app.camera_interface import (
     switch_project,
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
-from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -198,7 +196,7 @@ def describe_preview_image(preview_path: Path) -> str:
 
 def should_close_dashboard_on_launch(mode: str) -> bool:
     """Return whether dashboard should close after launching a tool."""
-    return mode == "project-manager"
+    return mode in {"project-manager", "config-editor"}
 
 
 class OperatorDashboard:
@@ -210,8 +208,6 @@ class OperatorDashboard:
         self._configure_window_size()
 
         self.operation_running = False
-        self.preview_photo = None
-        self.config_vars: dict[str, tk.StringVar] = {}
 
         self.status_var = tk.StringVar(value="Ready")
         self.current_project_var = tk.StringVar(value="Current project: None")
@@ -221,7 +217,6 @@ class OperatorDashboard:
         self.project_select_var = tk.StringVar()
         self.new_project_name_var = tk.StringVar()
         self.new_project_desc_var = tk.StringVar()
-        self.preview_path_var = tk.StringVar(value="Preview: none")
 
         self.summary_vars = {
             "total_samples": tk.StringVar(value="0"),
@@ -236,19 +231,7 @@ class OperatorDashboard:
         self.refresh_dashboard()
 
     def _configure_window_size(self) -> None:
-        # Some Pi display stacks clip the bottom row in strict fullscreen.
-        # Use a near-fullscreen geometry with a small safe margin instead.
-        self.root.update_idletasks()
-        screen_w = int(self.root.winfo_screenwidth())
-        screen_h = int(self.root.winfo_screenheight())
-
-        side_margin = 8
-        top_margin = 0
-        bottom_safe_margin = 28
-
-        target_w = max(640, screen_w - (side_margin * 2))
-        target_h = max(360, screen_h - top_margin - bottom_safe_margin)
-        self.root.geometry(f"{target_w}x{target_h}+{side_margin}+{top_margin}")
+        self.root.attributes("-fullscreen", True)
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -258,12 +241,11 @@ class OperatorDashboard:
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=5, uniform="top_panels")
         main.columnconfigure(1, weight=4, uniform="top_panels")
-        main.columnconfigure(2, weight=4, uniform="top_panels")
         main.rowconfigure(1, weight=1)
         main.rowconfigure(2, weight=2)
 
         header = ttk.Frame(main)
-        header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         header.columnconfigure(0, weight=1)
 
         ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
@@ -279,24 +261,18 @@ class OperatorDashboard:
         project_frame.columnconfigure(0, weight=1)
         project_frame.columnconfigure(1, weight=1)
 
-        preview_frame = ttk.LabelFrame(main, text="Latest Preview", padding=12)
-        preview_frame.grid(row=1, column=2, sticky="nsew", pady=(0, 10))
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(1, weight=1)
-
         output_frame = ttk.LabelFrame(main, text="Operator Console", padding=8)
-        output_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=(0, 10))
+        output_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 10))
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
 
         insights_frame = ttk.LabelFrame(main, text="Training Insights", padding=12)
-        insights_frame.grid(row=2, column=2, sticky="nsew")
+        insights_frame.grid(row=2, column=1, sticky="nsew")
         insights_frame.columnconfigure(0, weight=1)
         insights_frame.rowconfigure(2, weight=1)
 
         self._build_operations_panel(ops_frame)
         self._build_project_panel(project_frame)
-        self._build_preview_panel(preview_frame)
         self._build_console(output_frame)
         self._build_insights_panel(insights_frame)
 
@@ -322,27 +298,12 @@ class OperatorDashboard:
         self.training_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
         self.project_manager_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.config_editor_button = ttk.Button(parent, text="Open Config + Preview", command=self.launch_config_editor)
+        self.config_editor_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
-        self.refresh_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.refresh_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
-        self.exit_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=6)
-
-        config_frame = ttk.LabelFrame(parent, text="Config Editor", padding=8)
-        config_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
-        config_frame.columnconfigure(1, weight=1)
-
-        for row, (dotted_path, label, _) in enumerate(CONFIG_FIELD_SPECS):
-            ttk.Label(config_frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
-            var = tk.StringVar()
-            self.config_vars[dotted_path] = var
-            ttk.Entry(config_frame, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
-
-        buttons = ttk.Frame(config_frame)
-        buttons.grid(row=len(CONFIG_FIELD_SPECS), column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        buttons.columnconfigure(0, weight=1)
-        buttons.columnconfigure(1, weight=1)
-        ttk.Button(buttons, text="Reload Config", command=self.reload_config_editor).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(buttons, text="Save Config", command=self.save_config_editor).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.exit_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -364,12 +325,6 @@ class OperatorDashboard:
         ttk.Label(parent, text="Description").grid(row=10, column=0, sticky="w")
         ttk.Entry(parent, textvariable=self.new_project_desc_var).grid(row=11, column=0, sticky="ew", pady=(2, 8))
         ttk.Button(parent, text="Create Project", command=self.create_project_from_form).grid(row=12, column=0, sticky="ew")
-
-    def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
-        ttk.Label(parent, textvariable=self.preview_path_var, wraplength=280).grid(row=0, column=0, sticky="w")
-        self.preview_label = ttk.Label(parent, text="No preview image available", anchor="center")
-        self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        ttk.Button(parent, text="Refresh Preview", command=self.refresh_live_preview).grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
     def _build_console(self, parent: ttk.LabelFrame) -> None:
         self.console = tk.Text(parent, wrap="word", height=18, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
@@ -434,6 +389,7 @@ class OperatorDashboard:
             self.inspect_button,
             self.training_button,
             self.project_manager_button,
+            self.config_editor_button,
             self.refresh_button,
             self.exit_button,
         ]:
@@ -483,13 +439,19 @@ class OperatorDashboard:
     def launch_project_manager(self) -> None:
         self._launch_tool("project-manager", "project manager")
 
+    def launch_config_editor(self) -> None:
+        self._launch_tool("config-editor", "config + preview")
+
     def _launch_tool(self, mode: str, label: str) -> None:
         try:
             subprocess.Popen([sys.executable, str(CAPTURE_SCRIPT), mode], cwd=str(REPO_ROOT))
             self.append_console(f"\n> Launched {label}.\n")
             self.status_var.set(f"Launched {label}")
             if should_close_dashboard_on_launch(mode):
-                self.append_console("> Closing dashboard; use Project Manager -> Back to Dashboard when ready.\n")
+                if mode == "project-manager":
+                    self.append_console("> Closing dashboard; use Project Manager -> Back to Dashboard when ready.\n")
+                else:
+                    self.append_console("> Closing dashboard; use Config + Preview -> Back to Dashboard when ready.\n")
                 self.root.after(0, self.root.destroy)
         except OSError as exc:
             messagebox.showerror("Launch failed", f"Could not launch {label}: {exc}")
@@ -600,77 +562,6 @@ class OperatorDashboard:
         else:
             messagebox.showerror("Create failed", f"Could not create project '{project_name}'.")
 
-    def reload_config_editor(self) -> None:
-        config = read_json_file(get_active_runtime_paths()["config_file"])
-        for dotted_path, value in build_config_editor_values(config).items():
-            self.config_vars[dotted_path].set(value)
-
-    def save_config_editor(self) -> None:
-        active_paths = get_active_runtime_paths()
-        config_path = active_paths["config_file"]
-        try:
-            config = read_json_file(config_path)
-            updated = apply_config_updates(config, {key: var.get() for key, var in self.config_vars.items()})
-            write_json_file(config_path, updated)
-            self.append_console(f"\n> Saved config updates to {config_path}\n")
-            self.refresh_dashboard()
-        except ValueError as exc:
-            messagebox.showerror("Invalid config value", str(exc))
-
-    def refresh_live_preview(self) -> None:
-        if self.operation_running:
-            messagebox.showinfo("Busy", "An operation is already running.")
-            return
-
-        self.append_console("\n> Capturing live preview\n")
-        self.set_busy(True, "Refreshing live preview...")
-        thread = threading.Thread(target=self._refresh_live_preview_thread, daemon=True)
-        thread.start()
-
-    def _refresh_live_preview_thread(self) -> None:
-        active_paths = get_active_runtime_paths()
-        config = read_json_file(active_paths["config_file"])
-        result_code = 1
-        stderr_text = ""
-        try:
-            result_code, image_path, stderr_text = capture_to_temp(config)
-            if result_code == 0 and image_path.exists():
-                preview_path = active_paths["reference_dir"] / LIVE_PREVIEW_NAME
-                preview_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(image_path, preview_path)
-                self.root.after(0, self.append_console, f"> Live preview updated: {preview_path.name}\n")
-            else:
-                detail = stderr_text or "capture failed"
-                self.root.after(0, self.append_console, f"> Live preview capture failed: {detail}\n")
-        finally:
-            cleanup_temp_image()
-
-        def finish() -> None:
-            status = "Live preview updated" if result_code == 0 else "Live preview failed"
-            self.set_busy(False, status)
-            self.refresh_dashboard()
-
-        self.root.after(0, finish)
-
-    def refresh_preview(self, active_paths: dict[str, Path]) -> None:
-        preview_path = find_preview_image(active_paths["reference_dir"])
-        if preview_path is None:
-            self.preview_path_var.set("Preview: none")
-            self.preview_label.configure(text="No preview image available", image="")
-            self.preview_photo = None
-            return
-
-        preview_kind = describe_preview_image(preview_path)
-        self.preview_path_var.set(f"Preview ({preview_kind}): {preview_path.name}")
-        if PIL_AVAILABLE:
-            image = Image.open(preview_path)
-            image.thumbnail((420, 300))
-            self.preview_photo = ImageTk.PhotoImage(image)
-            self.preview_label.configure(image=self.preview_photo, text="")
-        else:
-            self.preview_label.configure(text=str(preview_path), image="")
-            self.preview_photo = None
-
     def refresh_dashboard(self) -> None:
         current_project = get_current_project() or "None"
         self.current_project_var.set(f"Current project: {current_project}")
@@ -689,9 +580,6 @@ class OperatorDashboard:
             self.project_select_var.set(project_names[0])
         else:
             self.project_select_var.set("")
-
-        self.reload_config_editor()
-        self.refresh_preview(active_paths)
 
         logs = load_training_logs(active_paths["log_dir"])
         summary = analyze_logs(logs) if logs else {}

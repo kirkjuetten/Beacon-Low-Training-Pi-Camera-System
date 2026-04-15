@@ -44,3 +44,22 @@ def launch_dashboard() -> int:
             return 2
         print(f"Dashboard failed to launch: {exc}")
         return 1
+
+
+def launch_config_editor() -> int:
+    try:
+        from inspection_system.app.config_editor_page import main as config_main
+
+        config_main()
+        return 0
+    except ImportError as exc:
+        print(f"Config editor not available: {exc}")
+        print("Install tkinter for config editor support")
+        return 1
+    except Exception as exc:
+        if _is_tk_display_error(exc):
+            print("Config editor requires a graphical desktop session.")
+            print("Run this on the Pi desktop (monitor attached) or via VNC.")
+            return 2
+        print(f"Config editor failed to launch: {exc}")
+        return 1
