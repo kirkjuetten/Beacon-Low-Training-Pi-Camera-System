@@ -78,9 +78,6 @@ class InspectionDisplay:
         self.GRAY = (128, 128, 128)
         self.reference_button_label = "SET REF"
         self.alignment_profile_label = "ALIGN BAL"
-        self.display_mode_index = 0
-        self.display_mode_order = ["raw", "processed", "split"]
-        self.display_mode_label = "VIEW RAW"
         self.active_mode = "setup_reference"
         self.visible_buttons: List[str] = []
 
@@ -105,23 +102,10 @@ class InspectionDisplay:
         self.active_mode = mode
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
-            self.visible_buttons = ["approve", "reject", "review", "capture", "view_mode", "set_ref", "home"]
+            self.visible_buttons = ["approve", "reject", "review", "capture", "set_ref"]
         else:
             self.reference_button_label = "SET REF"
             self.visible_buttons = ["set_ref", "home"]
-
-    def set_display_mode(self, mode: str) -> None:
-        normalized = str(mode).strip().lower()
-        if normalized not in self.display_mode_order:
-            normalized = "raw"
-        self.display_mode_index = self.display_mode_order.index(normalized)
-        self.display_mode_label = f"VIEW {normalized[:4].upper()}"
-
-    def cycle_display_mode(self) -> str:
-        self.display_mode_index = (self.display_mode_index + 1) % len(self.display_mode_order)
-        mode = self.display_mode_order[self.display_mode_index]
-        self.display_mode_label = f"VIEW {mode[:4].upper()}"
-        return mode
 
     def set_alignment_profile_label(self, profile: str) -> None:
         profile_key = str(profile).strip().lower() or "balanced"
@@ -192,7 +176,7 @@ class InspectionDisplay:
     def _layout_buttons_sidebar(self, sidebar_rect: pygame.Rect) -> None:
         """Layout buttons in a sidebar: decision buttons first (large), utilities below."""
         decision_buttons = ["approve", "reject", "review"]
-        utility_buttons = ["capture", "view_mode", "set_ref", "home"]
+        utility_buttons = ["capture", "set_ref"]
         
         gap = self._clamp(int(sidebar_rect.height * 0.03), 6, 12)
         
@@ -203,7 +187,7 @@ class InspectionDisplay:
         
         # Utility buttons below: compress into remaining space
         utilities_available_h = sidebar_rect.height - decisions_total_h - gap * 2
-        utility_h = self._clamp(int(utilities_available_h / 4) - gap, 30, 60)
+        utility_h = self._clamp(int(utilities_available_h / 2) - gap, 36, 70)
         utilities_top = decisions_top + decisions_total_h + gap
         
         decision_w = sidebar_rect.width - self._clamp(int(sidebar_rect.width * 0.08), 4, 12)
@@ -321,56 +305,6 @@ class InspectionDisplay:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         return pygame.surfarray.make_surface(image.swapaxes(0, 1))
 
-    def _make_processed_surface(self, image_path: Path, details: dict, config: dict, reference_mask_path: Optional[Path]) -> Optional[pygame.Surface]:
-        """Build a processed visualization with mask and mismatch overlays."""
-        cv2, _ = import_cv2_and_numpy()
-        image_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            return None
-
-        sample_mask = make_binary_mask(image_bgr, config)
-        angle = float(details.get("best_angle_deg", 0.0) or 0.0)
-        shift_x = int(details.get("best_shift_x", 0) or 0)
-        shift_y = int(details.get("best_shift_y", 0) or 0)
-        sample_mask = align_sample_mask(sample_mask, angle, shift_x, shift_y)
-
-        overlay = image_bgr.copy()
-        sample_on = sample_mask > 0
-        overlay[sample_on] = (0, 255, 120)
-
-        if reference_mask_path is not None and reference_mask_path.exists():
-            reference_mask = cv2.imread(str(reference_mask_path), cv2.IMREAD_GRAYSCALE)
-            if reference_mask is not None and reference_mask.shape == sample_mask.shape:
-                ref_on = reference_mask > 0
-                extra = sample_on & ~ref_on
-                missing = ref_on & ~sample_on
-                overlay[extra] = (0, 0, 255)
-                overlay[missing] = (0, 255, 255)
-
-        blended = cv2.addWeighted(image_bgr, 0.45, overlay, 0.55, 0)
-        blended_rgb = cv2.cvtColor(blended, cv2.COLOR_BGR2RGB)
-        return pygame.surfarray.make_surface(blended_rgb.swapaxes(0, 1))
-
-    @staticmethod
-    def _make_split_surface(left_surface: pygame.Surface, right_surface: pygame.Surface) -> pygame.Surface:
-        left_w, left_h = left_surface.get_size()
-        right_w, right_h = right_surface.get_size()
-        target_h = max(left_h, right_h)
-
-        if left_h != target_h:
-            left_w = max(1, int(left_w * target_h / max(1, left_h)))
-            left_surface = pygame.transform.smoothscale(left_surface, (left_w, target_h))
-        if right_h != target_h:
-            right_w = max(1, int(right_w * target_h / max(1, right_h)))
-            right_surface = pygame.transform.smoothscale(right_surface, (right_w, target_h))
-
-        gap = 8
-        output = pygame.Surface((left_surface.get_width() + right_surface.get_width() + gap, target_h))
-        output.fill((24, 24, 24))
-        output.blit(left_surface, (0, 0))
-        output.blit(right_surface, (left_surface.get_width() + gap, 0))
-        return output
-
     def draw_buttons(self):
         """Draw interactive buttons. In inspection mode, add capture button and status."""
         BLUE = (70, 130, 220)
@@ -381,7 +315,6 @@ class InspectionDisplay:
             "reject": self.RED,
             "review": self.YELLOW,
             "capture": BLUE,
-            "view_mode": (120, 95, 180),
             "set_ref": CYAN,
             "home": self.GRAY,
         }
@@ -391,7 +324,6 @@ class InspectionDisplay:
             "reject": "REJECT",
             "review": "REVIEW",
             "capture": "CAPTURE",
-            "view_mode": self.display_mode_label,
             "set_ref": self.reference_button_label,
             "home": "HOME",
         }
@@ -658,7 +590,7 @@ class InspectionDisplay:
         """Display inspection result and wait for user input.
         
         Returns: (feedback_action, ready_to_capture)
-        feedback_action: 'approve', 'reject', 'review', 'set_ref', 'home', or 'quit'
+        feedback_action: 'approve', 'reject', 'review', 'set_ref', or 'quit'
         ready_to_capture: True once operator clicks CAPTURE after deciding feedback
         """
         source_surface = self.load_surface_from_image(image_path)
@@ -666,8 +598,6 @@ class InspectionDisplay:
             return None, False
         self.set_ui_mode("inspection")
         self.set_alignment_profile_label(str(details.get("alignment_profile", "balanced")))
-        inspection_cfg = (config or {}).get("inspection", {})
-        self.set_display_mode(inspection_cfg.get("image_display_mode", "raw"))
 
         # Determine border color and generate description
         if passed:
@@ -702,17 +632,7 @@ class InspectionDisplay:
             image_rect = self.layout["image_rect"]
             description_rect = self.layout["description_rect"]
 
-            mode = self.display_mode_order[self.display_mode_index]
-            if mode == "raw":
-                view_surface = source_surface
-            elif mode == "processed":
-                processed_surface = self._make_processed_surface(image_path, details, config or {}, reference_mask_path)
-                view_surface = processed_surface or source_surface
-            else:
-                processed_surface = self._make_processed_surface(image_path, details, config or {}, reference_mask_path)
-                view_surface = self._make_split_surface(source_surface, processed_surface or source_surface)
-
-            surface = self._scale_surface_to_rect(view_surface, image_rect)
+            surface = self._scale_surface_to_rect(source_surface, image_rect)
             self.draw_image_with_border(surface, border_color, image_rect)
 
             # Status line: show decision if made, ready state if awaiting capture
@@ -770,18 +690,10 @@ class InspectionDisplay:
                                 return 'quit', False
                             user_feedback = 'review'
                             render_frame()
-                        elif self.buttons['view_mode'].collidepoint(mouse_pos):
-                            mode = self.cycle_display_mode()
-                            self.flash_action_confirmation(f"DISPLAY {mode.upper()}", (120, 95, 180), duration_ms=220)
-                            render_frame()
                         elif self.buttons['set_ref'].collidepoint(mouse_pos):
                             if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
                                 return 'quit', False
                             return 'set_ref', False
-                        elif self.buttons['home'].collidepoint(mouse_pos):
-                            if self.flash_action_confirmation("RETURNING HOME", self.GRAY, duration_ms=300):
-                                return 'quit', False
-                            return 'home', False
                     
                     # Phase 2: Decision made, waiting for CAPTURE button
                     else:
@@ -789,10 +701,6 @@ class InspectionDisplay:
                             if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
                                 return 'quit', False
                             return user_feedback, True  # Return decision + ready to capture
-                        elif self.buttons['home'].collidepoint(mouse_pos):
-                            if self.flash_action_confirmation("RETURNING HOME", self.GRAY, duration_ms=300):
-                                return 'quit', False
-                            return 'home', False
                 
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
@@ -1244,9 +1152,7 @@ def run_interactive_training(config: dict) -> int:
         print("- Green APPROVE button: Accept the sample")
         print("- Red REJECT button: Reject the sample")
         print("- Yellow REVIEW button: Flag for human review")
-        print("- Purple VIEW button: Toggle RAW / PROCESSED / SPLIT image display")
         print("- Blue SET REF button: Capture a new golden reference")
-        print("- Gray HOME button: Return to dashboard/home screen")
         print("- Close window or Esc to exit")
         print("\nDetailed descriptions will appear on screen for each inspection.")
 
