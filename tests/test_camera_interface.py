@@ -192,3 +192,52 @@ def test_rename_project_updates_registry_and_current_project(monkeypatch, tmp_pa
 
     assert (tmp_path / "projects" / "beta").exists() is False
     assert (tmp_path / "projects" / "beta_renamed").exists() is True
+
+
+def test_delete_active_project_switches_to_remaining_project(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+    monkeypatch.setattr(camera_interface, "REFERENCE_MASK", tmp_path / "reference" / "golden_reference_mask.png")
+    monkeypatch.setattr(camera_interface, "REFERENCE_IMAGE", tmp_path / "reference" / "golden_reference_image.png")
+
+    camera_interface.ensure_directories()
+    assert camera_interface.create_project("alpha", "first") is True
+    assert camera_interface.create_project("beta", "second") is True
+    assert camera_interface.switch_project("beta") is True
+
+    assert camera_interface.delete_project("beta") is True
+
+    registry = camera_interface.get_project_registry()
+    assert "beta" not in registry["projects"]
+    assert registry["current_project"] == "alpha"
+    assert camera_interface.CONFIG_FILE == tmp_path / "projects" / "alpha" / "config" / "camera_config.json"
+    assert (tmp_path / "projects" / "beta").exists() is False
+
+
+def test_delete_last_active_project_clears_current_project(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+    monkeypatch.setattr(camera_interface, "REFERENCE_MASK", tmp_path / "reference" / "golden_reference_mask.png")
+    monkeypatch.setattr(camera_interface, "REFERENCE_IMAGE", tmp_path / "reference" / "golden_reference_image.png")
+
+    camera_interface.ensure_directories()
+    assert camera_interface.create_project("solo", "only") is True
+    assert camera_interface.switch_project("solo") is True
+
+    assert camera_interface.delete_project("solo") is True
+
+    registry = camera_interface.get_project_registry()
+    assert registry["projects"] == {}
+    assert registry["current_project"] is None
+    assert camera_interface.CONFIG_FILE == tmp_path / "config" / "camera_config.json"
+    assert (tmp_path / "projects" / "solo").exists() is False

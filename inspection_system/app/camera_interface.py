@@ -17,6 +17,24 @@ REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
 TEMP_IMAGE = BASE_DIR / "temp_capture.png"
 
 
+def _reset_global_runtime_paths() -> None:
+    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
+    CONFIG_FILE = CONFIG_DIR / "camera_config.json"
+    REFERENCE_DIR = BASE_DIR / "reference"
+    LOG_DIR = BASE_DIR / "logs"
+    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+
+
+def _set_global_runtime_paths(project_info: Dict) -> None:
+    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
+    CONFIG_FILE = Path(project_info["config_file"])
+    REFERENCE_DIR = Path(project_info["reference_dir"])
+    LOG_DIR = Path(project_info["log_dir"])
+    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+
+
 def _deep_merge_defaults(defaults, config):
     if isinstance(defaults, dict) and isinstance(config, dict):
         merged = {}
@@ -214,15 +232,8 @@ def switch_project(project_name: str) -> bool:
     registry["current_project"] = project_name
     save_project_registry(registry)
 
-    # Update global paths to point to current project
-    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
     project_info = registry["projects"][project_name]
-
-    CONFIG_FILE = Path(project_info["config_file"])
-    REFERENCE_DIR = Path(project_info["reference_dir"])
-    LOG_DIR = Path(project_info["log_dir"])
-    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
-    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+    _set_global_runtime_paths(project_info)
 
     print(f"Switched to project '{project_name}'")
     return True
@@ -281,9 +292,7 @@ def delete_project(project_name: str) -> bool:
         print(f"Project '{project_name}' does not exist.")
         return False
 
-    if registry.get("current_project") == project_name:
-        print("Cannot delete the currently active project. Switch to another project first.")
-        return False
+    deleting_current = registry.get("current_project") == project_name
 
     # Remove project directory
     project_dir = PROJECTS_DIR / project_name
@@ -293,6 +302,17 @@ def delete_project(project_name: str) -> bool:
 
     # Remove from registry
     del registry["projects"][project_name]
+
+    if deleting_current:
+        remaining_projects = sorted(registry["projects"])
+        if remaining_projects:
+            replacement_project = remaining_projects[0]
+            registry["current_project"] = replacement_project
+            _set_global_runtime_paths(registry["projects"][replacement_project])
+        else:
+            registry["current_project"] = None
+            _reset_global_runtime_paths()
+
     save_project_registry(registry)
 
     print(f"Deleted project '{project_name}'")
@@ -377,13 +397,7 @@ def rename_project(old_name: str, new_name: str) -> bool:
 
     if registry.get("current_project") == old_name:
         registry["current_project"] = new_name
-
-        global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
-        CONFIG_FILE = new_dir / "config" / "camera_config.json"
-        REFERENCE_DIR = new_dir / "reference"
-        LOG_DIR = new_dir / "logs"
-        REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
-        REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+        _set_global_runtime_paths(registry["projects"][new_name])
 
     save_project_registry(registry)
     print(f"Renamed project '{old_name}' to '{new_name}'")
