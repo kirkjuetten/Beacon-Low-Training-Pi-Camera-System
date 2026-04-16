@@ -43,6 +43,35 @@ def resolve_alignment_config(config: dict) -> tuple[dict, str]:
     return alignment_cfg, profile_name
 
 
+def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, float]:
+    margins = [
+        float(details.get("required_coverage", 0.0)) - float(details.get("effective_min_required_coverage", details.get("min_required_coverage", 0.0))),
+        float(details.get("effective_max_outside_allowed_ratio", details.get("max_outside_allowed_ratio", 0.0))) - float(details.get("outside_allowed_ratio", 0.0)),
+        float(details.get("min_section_coverage", 0.0)) - float(details.get("effective_min_section_coverage", details.get("min_section_coverage_limit", 0.0))),
+    ]
+
+    optional_gates = [
+        ("ssim_gate_active", "ssim", "effective_min_ssim", "min_ssim", "higher"),
+        ("mse_gate_active", "mse", "effective_max_mse", "max_mse", "lower"),
+        ("anomaly_gate_active", "anomaly_score", "effective_min_anomaly_score", "min_anomaly_score", "higher"),
+    ]
+    for gate_key, metric_key, effective_key, fallback_key, direction in optional_gates:
+        if not details.get(gate_key):
+            continue
+        value = details.get(metric_key)
+        threshold = details.get(effective_key, details.get(fallback_key))
+        if value is None or threshold is None:
+            margins.append(-1.0)
+            continue
+        if direction == "higher":
+            margins.append(float(value) - float(threshold))
+        else:
+            margins.append(float(threshold) - float(value))
+
+    failed_gate_count = sum(1 for margin in margins if margin < 0)
+    return (1 if passed else 0, -failed_gate_count, round(sum(margins), 6))
+
+
 def inspect_against_reference(
     config: dict,
     image_path: Path,
@@ -167,10 +196,19 @@ def inspect_against_reference(
         "min_required_coverage": min_required_coverage,
         "max_outside_allowed_ratio": max_outside_allowed_ratio,
         "min_section_coverage_limit": min_section_coverage_limit,
+        "effective_min_required_coverage": threshold_summary.get("effective_min_required_coverage", min_required_coverage),
+        "effective_max_outside_allowed_ratio": threshold_summary.get("effective_max_outside_allowed_ratio", max_outside_allowed_ratio),
+        "effective_min_section_coverage": threshold_summary.get("effective_min_section_coverage", min_section_coverage_limit),
         "min_ssim": threshold_summary.get("min_ssim"),
         "max_mse": threshold_summary.get("max_mse"),
         "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
+        "effective_min_ssim": threshold_summary.get("effective_min_ssim"),
+        "effective_max_mse": threshold_summary.get("effective_max_mse"),
+        "effective_min_anomaly_score": threshold_summary.get("effective_min_anomaly_score"),
         "inspection_mode": threshold_summary.get("inspection_mode", "mask_only"),
+        "blend_mode": threshold_summary.get("blend_mode", "hard_only"),
+        "tolerance_mode": threshold_summary.get("tolerance_mode", "balanced"),
+        "learned_ranges_active": bool(threshold_summary.get("learned_ranges_active", False)),
         "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
         "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
         "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),
@@ -178,3 +216,73 @@ def inspect_against_reference(
         **anomaly_metrics,
     }
     return passed, details
+
+
+def inspect_against_references(
+    config: dict,
+    image_path: Path,
+    reference_candidates: list[dict],
+    make_binary_mask,
+    align_sample_mask,
+    build_reference_regions,
+    compute_section_masks,
+    score_sample,
+    evaluate_metrics,
+    save_debug_outputs,
+    import_cv2_and_numpy,
+    dilate_mask,
+    erode_mask,
+    anomaly_detector=None,
+) -> tuple[bool, dict]:
+    if not reference_candidates:
+        raise FileNotFoundError("No reference candidates are available for inspection.")
+
+    ranked_results: list[tuple[tuple[int, int, float], bool, dict]] = []
+    errors: list[str] = []
+    evaluated_ids: list[str] = []
+
+    for candidate in reference_candidates:
+        reference_id = str(candidate.get("reference_id", "unknown"))
+        evaluated_ids.append(reference_id)
+        try:
+            passed, details = inspect_against_reference(
+                config,
+                image_path,
+                make_binary_mask,
+                Path(candidate["reference_mask_path"]),
+                Path(candidate["reference_image_path"]),
+                align_sample_mask,
+                build_reference_regions,
+                compute_section_masks,
+                score_sample,
+                evaluate_metrics,
+                save_debug_outputs,
+                import_cv2_and_numpy,
+                dilate_mask,
+                erode_mask,
+                anomaly_detector=anomaly_detector,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            errors.append(f"{reference_id}: {exc}")
+            continue
+
+        details["reference_id"] = reference_id
+        details["reference_label"] = str(candidate.get("label", reference_id))
+        details["reference_role"] = str(candidate.get("role", "candidate"))
+        details["reference_mask_path"] = str(candidate.get("reference_mask_path"))
+        details["reference_image_path"] = str(candidate.get("reference_image_path"))
+        details["reference_candidate_count"] = len(reference_candidates)
+        details["evaluated_reference_ids"] = list(evaluated_ids)
+        details["reference_strategy"] = str(config.get("inspection", {}).get("reference_strategy", "golden_only"))
+        ranked_results.append((_reference_candidate_rank(passed, details), passed, details))
+
+    if not ranked_results:
+        if errors:
+            raise ValueError("; ".join(errors))
+        raise FileNotFoundError("No usable reference candidates were found for inspection.")
+
+    _, passed, best_details = max(ranked_results, key=lambda item: item[0])
+    if errors:
+        best_details["reference_candidate_errors"] = errors
+    best_details["evaluated_reference_ids"] = evaluated_ids
+    return passed, best_details

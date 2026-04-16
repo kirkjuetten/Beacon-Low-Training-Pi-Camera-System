@@ -79,19 +79,31 @@ def test_inspect_file_uses_runtime_reference_paths_and_anomaly_detector(monkeypa
     monkeypatch.setattr(replay_inspection, "classify_invalid_capture", lambda config, path: None)
     monkeypatch.setattr(replay_inspection, "get_active_runtime_paths", lambda: active_paths)
     monkeypatch.setattr(replay_inspection, "load_anomaly_detector", lambda paths: detector)
+    monkeypatch.setattr(
+        replay_inspection,
+        "list_runtime_reference_candidates",
+        lambda config, paths: [
+            {
+                "reference_id": "golden",
+                "label": "Golden Reference",
+                "role": "golden",
+                "reference_mask_path": active_paths["reference_mask"],
+                "reference_image_path": active_paths["reference_image"],
+            }
+        ],
+    )
 
-    def fake_inspect_against_reference(
+    def fake_inspect_against_references(
         config,
         sample_image_path,
+        reference_candidates,
         make_binary_mask,
-        reference_mask_path,
-        reference_image_path,
         *args,
         anomaly_detector=None,
     ):
         captured["sample_image_path"] = sample_image_path
-        captured["reference_mask_path"] = reference_mask_path
-        captured["reference_image_path"] = reference_image_path
+        captured["reference_mask_path"] = reference_candidates[0]["reference_mask_path"]
+        captured["reference_image_path"] = reference_candidates[0]["reference_image_path"]
         captured["anomaly_detector"] = anomaly_detector
         return True, {
             "required_coverage": 0.95,
@@ -103,7 +115,7 @@ def test_inspect_file_uses_runtime_reference_paths_and_anomaly_detector(monkeypa
             "best_shift_y": 0,
         }
 
-    monkeypatch.setattr(replay_inspection, "inspect_against_reference", fake_inspect_against_reference)
+    monkeypatch.setattr(replay_inspection, "inspect_against_references", fake_inspect_against_references)
 
     result = replay_inspection.inspect_file({"inspection": {}}, image_path)
 

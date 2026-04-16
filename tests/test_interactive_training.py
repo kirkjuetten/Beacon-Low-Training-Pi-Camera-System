@@ -1,5 +1,6 @@
 import json
 
+import inspection_system.app.interactive_training as interactive_training
 from inspection_system.app.interactive_training import ThresholdTrainer
 
 
@@ -61,6 +62,61 @@ def test_apply_suggestions_skips_unchanged_values(tmp_path) -> None:
     applied = trainer.apply_suggestions(config, {"min_required_coverage": 0.9455})
 
     assert applied == {}
+
+
+def test_extract_learned_ranges_collects_good_and_reject_statistics(tmp_path) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(json.dumps({"inspection": {}}, indent=2) + "\n", encoding="utf-8")
+
+    trainer = ThresholdTrainer(config_path)
+    trainer.record_feedback(
+        {"required_coverage": 0.82, "outside_allowed_ratio": 0.03, "min_section_coverage": 0.70, "ssim": 0.88, "mse": 7.0},
+        "approve",
+    )
+    trainer.record_feedback(
+        {"required_coverage": 0.90, "outside_allowed_ratio": 0.01, "min_section_coverage": 0.88, "ssim": 0.94, "mse": 3.0},
+        "approve",
+    )
+    trainer.record_feedback(
+        {"required_coverage": 0.76, "outside_allowed_ratio": 0.05, "min_section_coverage": 0.60, "ssim": 0.80, "mse": 9.0},
+        "reject",
+    )
+
+    learned_ranges = trainer.extract_learned_ranges()
+
+    assert learned_ranges["required_coverage"]["good_min"] == 0.82
+    assert learned_ranges["required_coverage"]["good_max"] == 0.9
+    assert learned_ranges["required_coverage"]["reject_max"] == 0.76
+    assert learned_ranges["outside_allowed_ratio"]["good_max"] == 0.03
+    assert learned_ranges["mse"]["direction"] == "lower_is_better"
+
+
+def test_apply_learning_update_persists_learned_ranges(tmp_path) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(json.dumps({"inspection": {"blend_mode": "blend_balanced"}}, indent=2) + "\n", encoding="utf-8")
+
+    trainer = ThresholdTrainer(config_path)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    learned_ranges = {
+        "required_coverage": {
+            "direction": "higher_is_better",
+            "good_min": 0.82,
+            "good_max": 0.95,
+            "good_mean": 0.9,
+            "good_count": 12,
+        }
+    }
+
+    applied = trainer.apply_learning_update(
+        config,
+        {"min_required_coverage": 0.82},
+        learned_ranges,
+    )
+
+    assert applied["threshold_updates"] == {"min_required_coverage": 0.82}
+    assert applied["learned_ranges_saved"] is True
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_config["inspection"]["learned_ranges"] == learned_ranges
 
 
 def test_pending_feedback_summary_and_lifecycle(tmp_path) -> None:
@@ -183,7 +239,93 @@ def test_load_training_data_backfills_schema_for_legacy_records(tmp_path) -> Non
     assert trainer.training_data[0]["learning_state"] == "committed"
     assert trainer.training_data[0]["schema_version"] == 2
     assert trainer.training_data[0]["final_class"] == "good"
-    assert trainer.training_data[1]["final_class"] == "reject"
+
+
+def test_record_feedback_stages_candidate_for_approved_good_when_multi_reference_enabled(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(json.dumps({"inspection": {"reference_strategy": "hybrid"}}, indent=2) + "\n", encoding="utf-8")
+
+    trainer = ThresholdTrainer(config_path)
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(b"img")
+    captured = {}
+
+    def fake_stage_reference_candidate_from_image(config, source_image_path, **kwargs):
+        captured['image_path'] = source_image_path
+        return True, {'reference_id': 'candidate_123', 'state': 'pending'}
+
+    monkeypatch.setattr(interactive_training, 'stage_reference_candidate_from_image', fake_stage_reference_candidate_from_image)
+
+    trainer.record_feedback(
+        {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.9,
+        },
+        "approve",
+        image_path=image_path,
+    )
+
+    assert captured['image_path'] == image_path
+    saved_training = json.loads((config_path.parent / "training_data.json").read_text(encoding="utf-8"))
+    assert saved_training[0]["reference_candidate_id"] == "candidate_123"
+    assert saved_training[0]["reference_candidate_state"] == "pending"
+
+
+def test_commit_and_discard_pending_feedback_manage_candidate_reference_state(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(json.dumps({"inspection": {}}, indent=2) + "\n", encoding="utf-8")
+
+    trainer = ThresholdTrainer(config_path)
+    trainer.training_data = [
+        {
+            'schema_version': 2,
+            'record_id': 'feedback_1',
+            'timestamp': 1.0,
+            'feedback': 'approve',
+            'final_class': 'good',
+            'defect_category': None,
+            'classification_reason': None,
+            'learning_state': 'pending',
+            'config_fingerprint': {},
+            'reference_candidate_id': 'candidate_1',
+            'reference_candidate_state': 'pending',
+            'metrics': {'required_coverage': 0.95},
+        },
+        {
+            'schema_version': 2,
+            'record_id': 'feedback_2',
+            'timestamp': 2.0,
+            'feedback': 'approve',
+            'final_class': 'good',
+            'defect_category': None,
+            'classification_reason': None,
+            'learning_state': 'pending',
+            'config_fingerprint': {},
+            'reference_candidate_id': 'candidate_2',
+            'reference_candidate_state': 'pending',
+            'metrics': {'required_coverage': 0.94},
+        },
+    ]
+
+    activated = []
+    discarded = []
+    monkeypatch.setattr(interactive_training, 'activate_reference_candidate', lambda candidate_id: activated.append(candidate_id) or True)
+    monkeypatch.setattr(interactive_training, 'discard_reference_candidate', lambda candidate_id, state='pending': discarded.append((candidate_id, state)) or True)
+
+    committed = trainer.commit_pending_feedback()
+    assert committed == 2
+    assert activated == ['candidate_1', 'candidate_2']
+    assert all(record['reference_candidate_state'] == 'active' for record in trainer.training_data)
+
+    for record in trainer.training_data:
+        record['learning_state'] = 'pending'
+        record['reference_candidate_state'] = 'pending'
+
+    discarded_count = trainer.discard_pending_feedback()
+    assert discarded_count == 2
+    assert discarded == [('candidate_1', 'pending'), ('candidate_2', 'pending')]
+    assert all(record['reference_candidate_state'] == 'discarded' for record in trainer.training_data)
     assert trainer.training_data[1]["defect_category"] is None
 
 

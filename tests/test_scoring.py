@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from scoring_utils import evaluate_metrics, normalize_inspection_mode, resolve_inspection_mode_details, score_sample
+from scoring_utils import (
+    evaluate_metrics,
+    normalize_blend_mode,
+    normalize_inspection_mode,
+    normalize_tolerance_mode,
+    resolve_inspection_mode_details,
+    score_sample,
+)
 
 
 def test_score_sample_computes_expected_metrics() -> None:
@@ -287,3 +294,100 @@ def test_resolve_inspection_mode_details_reports_explicit_gate_combination() -> 
     assert details["ssim_gate_active"] is False
     assert details["mse_gate_active"] is False
     assert details["anomaly_gate_active"] is True
+
+
+def test_normalize_blend_and_tolerance_modes_fall_back_to_defaults() -> None:
+    assert normalize_blend_mode("blend_balanced") == "blend_balanced"
+    assert normalize_blend_mode("unknown") == "hard_only"
+    assert normalize_tolerance_mode("forgiving") == "forgiving"
+    assert normalize_tolerance_mode("unknown") == "balanced"
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_required_coverage() -> None:
+    metrics = {
+        "required_coverage": 0.84,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "learned_ranges": {
+            "required_coverage": {
+                "direction": "higher_is_better",
+                "good_min": 0.8,
+                "good_max": 0.96,
+                "good_mean": 0.9,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["effective_min_required_coverage"] < summary["min_required_coverage"]
+    assert summary["learned_ranges_active"] is True
+
+
+def test_evaluate_metrics_blend_mode_can_activate_optional_gate_from_learned_ranges() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "anomaly_score": 0.2,
+    }
+    inspection_cfg = {
+        "inspection_mode": "mask_and_ml",
+        "blend_mode": "blend_aggressive",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "learned_ranges": {
+            "anomaly_score": {
+                "direction": "higher_is_better",
+                "good_min": 0.3,
+                "good_max": 0.7,
+                "good_mean": 0.5,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["anomaly_gate_active"] is True
+    assert summary["effective_min_anomaly_score"] is not None
+
+
+def test_evaluate_metrics_hard_only_ignores_learned_ranges() -> None:
+    metrics = {
+        "required_coverage": 0.84,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+    }
+    inspection_cfg = {
+        "blend_mode": "hard_only",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "learned_ranges": {
+            "required_coverage": {
+                "direction": "higher_is_better",
+                "good_min": 0.8,
+                "good_max": 0.96,
+                "good_mean": 0.9,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["effective_min_required_coverage"] == summary["min_required_coverage"]

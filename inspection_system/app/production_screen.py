@@ -17,11 +17,11 @@ from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.camera_interface import get_active_runtime_paths, import_cv2_and_numpy
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
-from inspection_system.app.inspection_pipeline import inspect_against_reference
+from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
-from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
 from inspection_system.app.runtime_controller import get_inspection_runtime_warnings, load_anomaly_detector
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
@@ -615,12 +615,14 @@ def _perform_inspection(
         return None, {}, None, stderr_text or "Capture failed."
 
     try:
-        passed, details = inspect_against_reference(
+        reference_candidates = list_runtime_reference_candidates(config, active_paths)
+        if not reference_candidates:
+            return None, {}, None, "No active runtime references are available. Capture a golden reference first."
+        passed, details = inspect_against_references(
             config,
             image_path,
+            reference_candidates,
             make_binary_mask,
-            active_paths["reference_mask"],
-            active_paths["reference_image"],
             align_sample_mask,
             build_reference_regions,
             compute_section_masks,
@@ -644,7 +646,7 @@ def run_production_mode(config: dict, indicator) -> int:
         return 1
 
     active_paths = get_active_runtime_paths()
-    if not active_paths["reference_mask"].exists() or not active_paths["reference_image"].exists():
+    if not list_runtime_reference_candidates(config, active_paths):
         print("Production mode requires an active reference image and mask.")
         print("Capture a reference first from the dashboard.")
         return 1

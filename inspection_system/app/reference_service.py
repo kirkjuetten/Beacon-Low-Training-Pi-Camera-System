@@ -1,12 +1,101 @@
 #!/usr/bin/env python3
 import json
+import shutil
 import time
 from pathlib import Path
+from typing import Optional
 
 from inspection_system.app.camera_interface import get_active_runtime_paths, import_cv2_and_numpy
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
+
+
+REFERENCE_VARIANTS_DIRNAME = "reference_variants"
+REFERENCE_VARIANTS_ACTIVE_DIRNAME = "active"
+REFERENCE_VARIANTS_PENDING_DIRNAME = "pending"
+
+
+def get_reference_variant_directories(active_paths: Optional[dict] = None) -> dict[str, Path]:
+    runtime_paths = active_paths or get_active_runtime_paths()
+    root = runtime_paths["reference_dir"] / REFERENCE_VARIANTS_DIRNAME
+    return {
+        "root": root,
+        "active": root / REFERENCE_VARIANTS_ACTIVE_DIRNAME,
+        "pending": root / REFERENCE_VARIANTS_PENDING_DIRNAME,
+    }
+
+
+def _sanitize_reference_id(value: str) -> str:
+    safe_chars = []
+    for char in str(value or ""):
+        if char.isalnum() or char in {"-", "_"}:
+            safe_chars.append(char)
+        else:
+            safe_chars.append("_")
+    normalized = "".join(safe_chars).strip("_")
+    return normalized or f"ref_{int(time.time() * 1000)}"
+
+
+def _load_reference_metadata_from_path(metadata_path: Path) -> dict | None:
+    if not metadata_path.exists():
+        return None
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _build_reference_metadata(
+    config: dict,
+    *,
+    reference_role: str = "golden",
+    extra_context: Optional[dict] = None,
+) -> dict:
+    inspection_cfg = config.get("inspection", {})
+    alignment_cfg = config.get("alignment", {})
+    roi_x, roi_y, roi_width, roi_height = _extract_roi_tuple(inspection_cfg)
+    metadata = {
+        "created_at": time.time(),
+        "roi": {
+            "x": roi_x,
+            "y": roi_y,
+            "width": roi_width,
+            "height": roi_height,
+        },
+        "threshold": {
+            "type": str(inspection_cfg.get("threshold_mode", "fixed")).lower(),
+            "value": float(inspection_cfg.get("threshold_value", 150.0)),
+            "blur_kernel": int(inspection_cfg.get("blur_kernel", 5)),
+        },
+        "morphology": {
+            "reference_erode_iterations": int(inspection_cfg.get("reference_erode_iterations", 1)),
+            "reference_dilate_iterations": int(inspection_cfg.get("reference_dilate_iterations", 1)),
+        },
+        "inspection_context": {
+            "inspection_mode": str(inspection_cfg.get("inspection_mode", "mask_only")).lower(),
+            "reference_strategy": str(inspection_cfg.get("reference_strategy", "golden_only")).lower(),
+            "blend_mode": str(inspection_cfg.get("blend_mode", "hard_only")).lower(),
+            "tolerance_mode": str(inspection_cfg.get("tolerance_mode", "balanced")).lower(),
+        },
+        "alignment": {
+            "tolerance_profile": str(alignment_cfg.get("tolerance_profile", "balanced")).lower(),
+        },
+        "reference_asset": {
+            "role": str(reference_role).lower(),
+        },
+    }
+    if extra_context:
+        metadata["reference_asset"].update(extra_context)
+    return metadata
+
+
+def _write_reference_metadata(metadata: dict, metadata_path: Path) -> None:
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+        f.write("\n")
 
 
 def _extract_roi_tuple(inspection_cfg: dict) -> tuple[int, int, int, int]:
@@ -54,6 +143,156 @@ def save_debug_outputs(stem: str, aligned_sample_mask, diff_image) -> dict:
     }
 
 
+def list_runtime_reference_candidates(config: dict, active_paths: Optional[dict] = None) -> list[dict]:
+    runtime_paths = active_paths or get_active_runtime_paths()
+    inspection_cfg = config.get("inspection", {}) if isinstance(config, dict) else {}
+    reference_strategy = str(inspection_cfg.get("reference_strategy", "golden_only")).strip().lower()
+    candidates: list[dict] = []
+
+    golden_mask = runtime_paths["reference_mask"]
+    golden_image = runtime_paths["reference_image"]
+    if golden_mask.exists() and golden_image.exists():
+        metadata_path = runtime_paths["reference_dir"] / "ref_meta.json"
+        golden_metadata = _load_reference_metadata_from_path(metadata_path) or {}
+        golden_asset = golden_metadata.get("reference_asset", {})
+        candidates.append(
+            {
+                "reference_id": str(golden_asset.get("reference_id", "golden")),
+                "label": str(golden_asset.get("label", "Golden Reference")),
+                "role": "golden",
+                "reference_mask_path": golden_mask,
+                "reference_image_path": golden_image,
+                "metadata_path": metadata_path,
+                "metadata": golden_metadata,
+            }
+        )
+
+    variant_dirs = get_reference_variant_directories(runtime_paths)
+    active_dir = variant_dirs["active"]
+    variant_candidates: list[dict] = []
+    if active_dir.exists():
+        for candidate_dir in sorted(path for path in active_dir.iterdir() if path.is_dir()):
+            mask_path = candidate_dir / "reference_mask.png"
+            image_path = candidate_dir / "reference_image.png"
+            if not mask_path.exists() or not image_path.exists():
+                continue
+            metadata_path = candidate_dir / "ref_meta.json"
+            metadata = _load_reference_metadata_from_path(metadata_path) or {}
+            asset = metadata.get("reference_asset", {})
+            variant_candidates.append(
+                {
+                    "reference_id": str(asset.get("reference_id", candidate_dir.name)),
+                    "label": str(asset.get("label", candidate_dir.name)),
+                    "role": str(asset.get("role", "candidate")),
+                    "reference_mask_path": mask_path,
+                    "reference_image_path": image_path,
+                    "metadata_path": metadata_path,
+                    "metadata": metadata,
+                }
+            )
+
+    if reference_strategy == "golden_only":
+        return candidates or variant_candidates
+    if reference_strategy == "multi_good_experimental" and variant_candidates:
+        return variant_candidates
+    return candidates + variant_candidates
+
+
+def clear_reference_variants(active_paths: Optional[dict] = None) -> None:
+    variant_dirs = get_reference_variant_directories(active_paths)
+    if variant_dirs["root"].exists():
+        shutil.rmtree(variant_dirs["root"])
+
+
+def stage_reference_candidate_from_image(
+    config: dict,
+    image_path: Path,
+    *,
+    label: Optional[str] = None,
+    source_record_id: Optional[str] = None,
+) -> tuple[bool, dict | str]:
+    roi_image, mask, feature_pixels, error_msg = bake_reference_mask(image_path, config)
+    if error_msg:
+        return False, error_msg
+
+    active_paths = get_active_runtime_paths()
+    variant_dirs = get_reference_variant_directories(active_paths)
+    variant_dirs["pending"].mkdir(parents=True, exist_ok=True)
+
+    reference_id = _sanitize_reference_id(source_record_id or f"candidate_{int(time.time() * 1000)}")
+    candidate_dir = variant_dirs["pending"] / reference_id
+    if candidate_dir.exists():
+        shutil.rmtree(candidate_dir)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+
+    mask_path = candidate_dir / "reference_mask.png"
+    image_output_path = candidate_dir / "reference_image.png"
+    metadata_path = candidate_dir / "ref_meta.json"
+    display_label = label or f"Good Ref {reference_id[-6:]}"
+
+    try:
+        cv2, _ = import_cv2_and_numpy()
+        cv2.imwrite(str(mask_path), mask)
+        cv2.imwrite(str(image_output_path), roi_image)
+        metadata = _build_reference_metadata(
+            config,
+            reference_role="candidate",
+            extra_context={
+                "reference_id": reference_id,
+                "label": display_label,
+                "source": "training_approve",
+                "state": "pending",
+                "source_record_id": source_record_id,
+            },
+        )
+        _write_reference_metadata(metadata, metadata_path)
+    except Exception as exc:
+        shutil.rmtree(candidate_dir, ignore_errors=True)
+        return False, f"Reference candidate save error: {exc}"
+
+    return True, {
+        "reference_id": reference_id,
+        "label": display_label,
+        "reference_dir": str(candidate_dir),
+        "reference_mask_path": str(mask_path),
+        "reference_image_path": str(image_output_path),
+        "metadata_path": str(metadata_path),
+        "feature_pixels": feature_pixels,
+        "state": "pending",
+    }
+
+
+def _set_reference_variant_state(candidate_dir: Path, state: str) -> None:
+    metadata_path = candidate_dir / "ref_meta.json"
+    metadata = _load_reference_metadata_from_path(metadata_path) or {"reference_asset": {}}
+    metadata.setdefault("reference_asset", {})["state"] = state
+    _write_reference_metadata(metadata, metadata_path)
+
+
+def activate_reference_candidate(reference_id: str, active_paths: Optional[dict] = None) -> bool:
+    variant_dirs = get_reference_variant_directories(active_paths)
+    pending_dir = variant_dirs["pending"] / _sanitize_reference_id(reference_id)
+    active_dir = variant_dirs["active"] / _sanitize_reference_id(reference_id)
+    if not pending_dir.exists():
+        return False
+    active_dir.parent.mkdir(parents=True, exist_ok=True)
+    if active_dir.exists():
+        shutil.rmtree(active_dir)
+    shutil.move(str(pending_dir), str(active_dir))
+    _set_reference_variant_state(active_dir, "active")
+    return True
+
+
+def discard_reference_candidate(reference_id: str, active_paths: Optional[dict] = None, *, state: str = "pending") -> bool:
+    variant_dirs = get_reference_variant_directories(active_paths)
+    base_dir = variant_dirs["pending"] if state == "pending" else variant_dirs["active"]
+    candidate_dir = base_dir / _sanitize_reference_id(reference_id)
+    if not candidate_dir.exists():
+        return False
+    shutil.rmtree(candidate_dir)
+    return True
+
+
 def bake_reference_mask(image_path: Path, config: dict) -> tuple[object, object, int, str | None]:
     """
     Pure reference-baking function: process image into reference assets.
@@ -82,58 +321,39 @@ def bake_reference_mask(image_path: Path, config: dict) -> tuple[object, object,
         return None, None, 0, f"Reference baking error: {exc}"
 
 
-def save_reference_metadata(config: dict) -> None:
+def save_reference_metadata(
+    config: dict,
+    metadata_path: Optional[Path] = None,
+    *,
+    reference_role: str = "golden",
+    extra_context: Optional[dict] = None,
+) -> None:
     """Save reference creation settings as fingerprint for later validation."""
     try:
-        inspection_cfg = config.get("inspection", {})
-        alignment_cfg = config.get("alignment", {})
-        roi_x, roi_y, roi_width, roi_height = _extract_roi_tuple(inspection_cfg)
-        metadata = {
-            "created_at": time.time(),
-            "roi": {
-                "x": roi_x,
-                "y": roi_y,
-                "width": roi_width,
-                "height": roi_height,
-            },
-            "threshold": {
-                "type": str(inspection_cfg.get("threshold_mode", "fixed")).lower(),
-                "value": float(inspection_cfg.get("threshold_value", 150.0)),
-                "blur_kernel": int(inspection_cfg.get("blur_kernel", 5)),
-            },
-            "morphology": {
-                "reference_erode_iterations": int(inspection_cfg.get("reference_erode_iterations", 1)),
-                "reference_dilate_iterations": int(inspection_cfg.get("reference_dilate_iterations", 1)),
-            },
-            "inspection_context": {
-                "inspection_mode": str(inspection_cfg.get("inspection_mode", "mask_only")).lower(),
-                "reference_strategy": str(inspection_cfg.get("reference_strategy", "golden_only")).lower(),
-                "blend_mode": str(inspection_cfg.get("blend_mode", "hard_only")).lower(),
-                "tolerance_mode": str(inspection_cfg.get("tolerance_mode", "balanced")).lower(),
-            },
-            "alignment": {
-                "tolerance_profile": str(alignment_cfg.get("tolerance_profile", "balanced")).lower(),
-            },
-        }
-        active_paths = get_active_runtime_paths()
-        meta_path = active_paths["reference_dir"] / "ref_meta.json"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
+        meta_path = metadata_path
+        if meta_path is None:
+            active_paths = get_active_runtime_paths()
+            meta_path = active_paths["reference_dir"] / "ref_meta.json"
+        metadata = _build_reference_metadata(
+            config,
+            reference_role=reference_role,
+            extra_context=extra_context or {"reference_id": "golden", "label": "Golden Reference", "state": "active"},
+        )
+        _write_reference_metadata(metadata, meta_path)
     except Exception as exc:
         # Don't crash on metadata save; just warn
         import sys
         print(f"Warning: Could not save reference metadata: {exc}", file=sys.stderr)
 
 
-def load_reference_metadata() -> dict | None:
+def load_reference_metadata(metadata_path: Optional[Path] = None) -> dict | None:
     """Load reference creation settings; returns None if metadata doesn't exist."""
     try:
-        active_paths = get_active_runtime_paths()
-        meta_path = active_paths["reference_dir"] / "ref_meta.json"
-        if not meta_path.exists():
-            return None
-        with open(meta_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        meta_path = metadata_path
+        if meta_path is None:
+            active_paths = get_active_runtime_paths()
+            meta_path = active_paths["reference_dir"] / "ref_meta.json"
+        return _load_reference_metadata_from_path(meta_path)
     except Exception:
         return None
 
@@ -230,6 +450,7 @@ def set_reference(config: dict) -> int:
         cv2, _ = import_cv2_and_numpy()
         cv2.imwrite(str(ref_mask_path), mask)
         cv2.imwrite(str(ref_image_path), roi_image)
+        clear_reference_variants(active_paths)
         print(f"Saved reference mask: {ref_mask_path}")
         print(f"Saved reference image: {ref_image_path}")
         print(f"Reference feature pixels: {feature_pixels}")

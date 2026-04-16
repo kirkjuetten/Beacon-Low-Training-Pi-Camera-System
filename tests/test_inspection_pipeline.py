@@ -3,7 +3,8 @@ from unittest import mock
 
 import numpy as np
 
-from inspection_pipeline import inspect_against_reference
+import inspection_pipeline
+from inspection_pipeline import inspect_against_reference, inspect_against_references
 
 
 class FakeCv2:
@@ -220,3 +221,70 @@ def test_inspect_against_reference_applies_alignment_profile_defaults() -> None:
     assert seen_alignment_cfg["max_angle_deg"] == 1.8
     assert seen_alignment_cfg["max_shift_x"] == 7
     assert seen_alignment_cfg["max_shift_y"] == 5
+
+
+def test_inspect_against_references_selects_best_passing_reference() -> None:
+    def fake_inspect_against_reference(
+        config,
+        image_path,
+        make_binary_mask,
+        reference_mask_path,
+        reference_image_path,
+        *args,
+        anomaly_detector=None,
+    ):
+        ref_name = Path(reference_mask_path).stem
+        if ref_name == 'candidate_mask':
+            return True, {
+                'required_coverage': 0.96,
+                'outside_allowed_ratio': 0.01,
+                'min_section_coverage': 0.93,
+                'effective_min_required_coverage': 0.9,
+                'effective_max_outside_allowed_ratio': 0.02,
+                'effective_min_section_coverage': 0.85,
+            }
+        return False, {
+            'required_coverage': 0.86,
+            'outside_allowed_ratio': 0.03,
+            'min_section_coverage': 0.81,
+            'effective_min_required_coverage': 0.9,
+            'effective_max_outside_allowed_ratio': 0.02,
+            'effective_min_section_coverage': 0.85,
+        }
+
+    with mock.patch.object(inspection_pipeline, 'inspect_against_reference', side_effect=fake_inspect_against_reference):
+        passed, details = inspect_against_references(
+            {'inspection': {'reference_strategy': 'hybrid'}},
+            Path('sample.jpg'),
+            [
+                {
+                    'reference_id': 'golden',
+                    'label': 'Golden Reference',
+                    'role': 'golden',
+                    'reference_mask_path': Path('golden_mask.png'),
+                    'reference_image_path': Path('golden_image.png'),
+                },
+                {
+                    'reference_id': 'candidate_1',
+                    'label': 'Approved Good 1',
+                    'role': 'candidate',
+                    'reference_mask_path': Path('candidate_mask.png'),
+                    'reference_image_path': Path('candidate_image.png'),
+                },
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+    assert passed is True
+    assert details['reference_id'] == 'candidate_1'
+    assert details['reference_label'] == 'Approved Good 1'

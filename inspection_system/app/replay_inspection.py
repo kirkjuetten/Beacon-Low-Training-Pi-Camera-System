@@ -14,8 +14,8 @@ from inspection_system.app.camera_interface import (
     load_config,
     import_cv2_and_numpy,
 )
-from inspection_system.app.inspection_pipeline import inspect_against_reference
-from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.inspection_pipeline import inspect_against_references
+from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
 from inspection_system.app.runtime_controller import load_anomaly_detector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
@@ -72,8 +72,9 @@ def classify_invalid_capture(config: dict, image_path: Path) -> str | None:
         if x < 0 or y < 0 or x + w > image.shape[1] or y + h > image.shape[0]:
             return "Configured ROI is outside image bounds."
 
-    reference_mask = _get_reference_mask_path()
-    if not reference_mask.exists():
+    active_paths = get_active_runtime_paths()
+    if not list_runtime_reference_candidates(config, active_paths):
+        reference_mask = _get_reference_mask_path()
         return f"Reference mask is missing: {reference_mask}"
 
     return None
@@ -89,17 +90,15 @@ def inspect_file(config: dict, image_path: Path) -> dict:
         }
 
     active_paths = get_active_runtime_paths()
-    reference_mask = Path(active_paths["reference_mask"])
-    reference_image = Path(active_paths["reference_image"])
+    reference_candidates = list_runtime_reference_candidates(config, active_paths)
     anomaly_detector = load_anomaly_detector(active_paths)
 
     try:
-        passed, details = inspect_against_reference(
+        passed, details = inspect_against_references(
             config,
             image_path,
+            reference_candidates,
             make_binary_mask,
-            reference_mask,
-            reference_image,
             align_sample_mask,
             build_reference_regions,
             compute_section_masks,
@@ -171,8 +170,8 @@ def print_usage() -> None:
     print("  python3 inspection_system/app/replay_inspection.py inspect-file <image_path>")
     print("  python3 inspection_system/app/replay_inspection.py inspect-folder <folder_path>")
     print(f"  Config file expected at: {CONFIG_FILE}")
-    print(f"  Reference mask expected at: {_get_reference_mask_path()}")
-    print(f"  Reference image expected at: {_get_reference_image_path()}")
+    print(f"  Golden reference mask expected at: {_get_reference_mask_path()}")
+    print(f"  Golden reference image expected at: {_get_reference_image_path()}")
 
 
 def main() -> int:

@@ -5,11 +5,11 @@ from typing import Optional
 from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
-from inspection_system.app.inspection_pipeline import inspect_against_reference
+from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
-from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
 from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
@@ -78,6 +78,11 @@ def run_production_mode(config: dict, indicator) -> int:
 def print_inspection_result(passed: bool, details: dict) -> None:
     print("Inspection result:", "PASS" if passed else "FAIL")
     print(f"Inspection mode: {details.get('inspection_mode', 'mask_only')}")
+    if details.get("reference_label"):
+        print(
+            f"Selected reference: {details.get('reference_label')}"
+            f" ({details.get('reference_role', 'candidate')})"
+        )
     print(f"ROI: {details['roi']}")
     print(f"Best angle correction: {details.get('best_angle_deg', 0.0):.2f} deg")
     print(f"Best shift correction: x={details.get('best_shift_x', 0)}, y={details.get('best_shift_y', 0)} px")
@@ -144,12 +149,16 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
         active_paths = get_active_runtime_paths()
         anomaly_detector = load_anomaly_detector(active_paths)
         print_inspection_runtime_warnings(config, anomaly_detector)
-        passed, details = inspect_against_reference(
+        reference_candidates = list_runtime_reference_candidates(config, active_paths)
+        if not reference_candidates:
+            print("No active runtime references are available. Capture a golden reference first.")
+            indicator.pulse_fail()
+            return 1
+        passed, details = inspect_against_references(
             config,
             image_path,
+            reference_candidates,
             make_binary_mask,
-            active_paths["reference_mask"],
-            active_paths["reference_image"],
             align_sample_mask,
             build_reference_regions,
             compute_section_masks,

@@ -27,23 +27,42 @@ from inspection_system.app.camera_interface import (
     get_active_runtime_paths,
 )
 from inspection_system.app.frame_acquisition import cleanup_temp_image, capture_to_temp
-from inspection_system.app.inspection_pipeline import inspect_against_reference
+from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
-from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
+from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.reference_service import (
+    activate_reference_candidate,
+    clear_reference_variants,
+    discard_reference_candidate,
+    list_runtime_reference_candidates,
     save_debug_outputs,
     bake_reference_mask,
     save_reference_metadata,
+    stage_reference_candidate_from_image,
     check_reference_settings_match,
 )
 from inspection_system.app.runtime_controller import get_inspection_runtime_warnings, load_anomaly_detector
 
 
 TRAINING_DATA_SCHEMA_VERSION = 2
+LEARNED_RANGE_DIRECTIONS = {
+    'required_coverage': 'higher_is_better',
+    'outside_allowed_ratio': 'lower_is_better',
+    'min_section_coverage': 'higher_is_better',
+    'ssim': 'higher_is_better',
+    'mse': 'lower_is_better',
+    'anomaly_score': 'higher_is_better',
+}
+INSPECTION_MODE_OPTIONAL_METRICS = {
+    'mask_only': set(),
+    'mask_and_ssim': {'ssim', 'mse'},
+    'mask_and_ml': {'anomaly_score'},
+    'full': {'ssim', 'mse', 'anomaly_score'},
+}
 
 
 class InspectionDisplay:
@@ -769,7 +788,13 @@ class InspectionDisplay:
 
         pygame.quit()
 
-    def show_training_checkpoint(self, summary: dict, suggestions: dict, review_warnings: Optional[List[str]] = None) -> str:
+    def show_training_checkpoint(
+        self,
+        summary: dict,
+        suggestions: dict,
+        review_warnings: Optional[List[str]] = None,
+        learned_range_lines: Optional[List[str]] = None,
+    ) -> str:
         """Pause training and ask operator how to handle pending learning data."""
         defer_color = (70, 130, 220)
         discard_color = self.RED
@@ -798,6 +823,10 @@ class InspectionDisplay:
                     lines.append(f"  - {key}: {value:.4f}")
             else:
                 lines.append("No threshold updates suggested yet (need stronger separation/more data).")
+
+            if learned_range_lines:
+                lines.append("Learned range updates:")
+                lines.extend(learned_range_lines)
 
             if review_warnings:
                 lines.append("Review warnings:")
@@ -1040,6 +1069,15 @@ class ThresholdTrainer:
         if 'config_fingerprint' not in record:
             record['config_fingerprint'] = self._build_config_fingerprint()
             changed = True
+        if 'record_id' not in record:
+            record['record_id'] = f"legacy_{int(record.get('timestamp', time.time()) * 1000)}"
+            changed = True
+        if 'reference_candidate_id' not in record:
+            record['reference_candidate_id'] = None
+            changed = True
+        if 'reference_candidate_state' not in record:
+            record['reference_candidate_state'] = None
+            changed = True
         return changed
 
     @staticmethod
@@ -1054,12 +1092,20 @@ class ThresholdTrainer:
             return 'reject'
         return None
 
-    def record_feedback(self, details: dict, feedback: str, label_info: Optional[dict] = None):
+    def record_feedback(
+        self,
+        details: dict,
+        feedback: str,
+        label_info: Optional[dict] = None,
+        image_path: Optional[Path] = None,
+    ):
         """Record human feedback for threshold adjustment."""
         label_info = label_info or {}
         final_class = label_info.get('final_class', self._default_final_class(feedback))
+        record_id = f"feedback_{int(time.time() * 1000)}_{len(self.training_data) + 1}"
         record = {
             'schema_version': TRAINING_DATA_SCHEMA_VERSION,
+            'record_id': record_id,
             'timestamp': time.time(),
             'feedback': feedback,
             'final_class': final_class,
@@ -1067,6 +1113,8 @@ class ThresholdTrainer:
             'classification_reason': label_info.get('classification_reason'),
             'learning_state': 'pending',
             'config_fingerprint': self._build_config_fingerprint(),
+            'reference_candidate_id': None,
+            'reference_candidate_state': None,
             'metrics': {
                 'required_coverage': details.get('required_coverage', 0),
                 'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
@@ -1081,6 +1129,24 @@ class ThresholdTrainer:
                 'inspection_mode': details.get('inspection_mode', 'mask_only'),
             }
         }
+
+        current_config = self._load_current_config()
+        inspection_cfg = current_config.get('inspection', {})
+        reference_strategy = str(inspection_cfg.get('reference_strategy', 'golden_only')).strip().lower()
+        if (
+            final_class == 'good'
+            and image_path is not None
+            and reference_strategy in {'hybrid', 'multi_good_experimental'}
+        ):
+            staged_ok, staged_result = stage_reference_candidate_from_image(
+                current_config,
+                image_path,
+                label=f"Approved Good {len(self.training_data) + 1}",
+                source_record_id=record_id,
+            )
+            if staged_ok:
+                record['reference_candidate_id'] = staged_result['reference_id']
+                record['reference_candidate_state'] = staged_result['state']
         self.training_data.append(record)
         self.save_training_data()
 
@@ -1096,6 +1162,90 @@ class ThresholdTrainer:
 
     def get_pending_records(self) -> list[dict]:
         return [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+
+    @staticmethod
+    def _round_learning_value(value) -> float:
+        return round(float(value), 4)
+
+    def extract_learned_ranges(self, records: Optional[list[dict]] = None) -> dict:
+        source_records = records if records is not None else self.get_pending_records()
+        good_records = [r for r in source_records if self._resolve_learning_class(r) == 'good']
+        reject_records = [r for r in source_records if self._resolve_learning_class(r) == 'reject']
+        learned_ranges: dict[str, dict] = {}
+
+        for metric_name, direction in LEARNED_RANGE_DIRECTIONS.items():
+            good_values = [r.get('metrics', {}).get(metric_name) for r in good_records]
+            good_values = [float(value) for value in good_values if value is not None]
+            if not good_values:
+                continue
+
+            learned_metric = {
+                'direction': direction,
+                'good_min': self._round_learning_value(min(good_values)),
+                'good_max': self._round_learning_value(max(good_values)),
+                'good_mean': self._round_learning_value(sum(good_values) / len(good_values)),
+                'good_count': len(good_values),
+            }
+
+            reject_values = [r.get('metrics', {}).get(metric_name) for r in reject_records]
+            reject_values = [float(value) for value in reject_values if value is not None]
+            if reject_values:
+                learned_metric.update(
+                    {
+                        'reject_min': self._round_learning_value(min(reject_values)),
+                        'reject_max': self._round_learning_value(max(reject_values)),
+                        'reject_mean': self._round_learning_value(sum(reject_values) / len(reject_values)),
+                        'reject_count': len(reject_values),
+                    }
+                )
+
+            learned_ranges[metric_name] = learned_metric
+
+        return learned_ranges
+
+    def summarize_learned_ranges(self, learned_ranges: dict) -> list[str]:
+        lines: list[str] = []
+        for metric_name in [
+            'required_coverage',
+            'outside_allowed_ratio',
+            'min_section_coverage',
+            'ssim',
+            'mse',
+            'anomaly_score',
+        ]:
+            learned_metric = learned_ranges.get(metric_name)
+            if not learned_metric:
+                continue
+            lines.append(
+                f"  - {metric_name}: good {learned_metric['good_min']:.4f} to {learned_metric['good_max']:.4f}"
+            )
+        return lines
+
+    def _threshold_suggestion_from_range(
+        self,
+        learned_metric: dict,
+        current_value,
+        direction: str,
+    ):
+        suggested = None
+        if direction == 'higher_is_better':
+            good_floor = float(learned_metric['good_min'])
+            reject_max = learned_metric.get('reject_max')
+            if reject_max is not None and good_floor > float(reject_max):
+                suggested = (good_floor + float(reject_max)) / 2.0
+            elif current_value is None or float(current_value) > good_floor:
+                suggested = good_floor
+        else:
+            good_ceiling = float(learned_metric['good_max'])
+            reject_min = learned_metric.get('reject_min')
+            if reject_min is not None and good_ceiling < float(reject_min):
+                suggested = (good_ceiling + float(reject_min)) / 2.0
+            elif current_value is None or float(current_value) < good_ceiling:
+                suggested = good_ceiling
+
+        if suggested is None:
+            return None
+        return self._round_learning_value(suggested)
 
     def _record_passes_current_thresholds(self, record: dict, inspection_cfg: dict) -> bool:
         metrics = record.get('metrics', {})
@@ -1177,6 +1327,13 @@ class ThresholdTrainer:
         updated = 0
         for record in self.training_data:
             if record.get('learning_state', 'committed') == 'pending':
+                candidate_id = record.get('reference_candidate_id')
+                candidate_state = record.get('reference_candidate_state')
+                learning_class = self._resolve_learning_class(record)
+                if candidate_id and candidate_state == 'pending' and learning_class == 'good':
+                    if not activate_reference_candidate(candidate_id):
+                        continue
+                    record['reference_candidate_state'] = 'active'
                 record['learning_state'] = 'committed'
                 updated += 1
         if updated:
@@ -1188,6 +1345,11 @@ class ThresholdTrainer:
         updated = 0
         for record in self.training_data:
             if record.get('learning_state', 'committed') == 'pending':
+                candidate_id = record.get('reference_candidate_id')
+                candidate_state = record.get('reference_candidate_state')
+                if candidate_id and candidate_state == 'pending':
+                    discard_reference_candidate(candidate_id, state='pending')
+                    record['reference_candidate_state'] = 'discarded'
                 record['learning_state'] = 'discarded'
                 updated += 1
         if updated:
@@ -1200,38 +1362,82 @@ class ThresholdTrainer:
         if len(learning_records) < 10:
             return {}  # Need more data
 
-        approved = [r for r in learning_records if self._resolve_learning_class(r) == 'good']
-        rejected = [r for r in learning_records if self._resolve_learning_class(r) == 'reject']
-
-        if not approved or not rejected:
+        learned_ranges = self.extract_learned_ranges(learning_records)
+        if not learned_ranges:
             return {}
 
+        inspection_cfg = self._load_current_config().get('inspection', {})
+        inspection_mode = normalize_inspection_mode(inspection_cfg.get('inspection_mode', 'mask_only'))
         suggestions = {}
 
-        # Adjust required coverage threshold
-        approved_cov = [r['metrics']['required_coverage'] for r in approved]
-        rejected_cov = [r['metrics']['required_coverage'] for r in rejected]
+        metric_map = [
+            ('required_coverage', 'min_required_coverage'),
+            ('outside_allowed_ratio', 'max_outside_allowed_ratio'),
+            ('min_section_coverage', 'min_section_coverage'),
+        ]
+        for metric_name, config_key in metric_map:
+            learned_metric = learned_ranges.get(metric_name)
+            if not learned_metric:
+                continue
+            suggestion = self._threshold_suggestion_from_range(
+                learned_metric,
+                inspection_cfg.get(config_key),
+                LEARNED_RANGE_DIRECTIONS[metric_name],
+            )
+            if suggestion is not None:
+                suggestions[config_key] = suggestion
 
-        if approved_cov and rejected_cov:
-            min_approved = min(approved_cov)
-            max_rejected = max(rejected_cov)
-            if min_approved > max_rejected:
-                suggestions['min_required_coverage'] = (min_approved + max_rejected) / 2
-
-        # Adjust outside allowed ratio threshold
-        approved_ratio = [r['metrics']['outside_allowed_ratio'] for r in approved]
-        rejected_ratio = [r['metrics']['outside_allowed_ratio'] for r in rejected]
-
-        if approved_ratio and rejected_ratio:
-            max_approved = max(approved_ratio)
-            min_rejected = min(rejected_ratio)
-            if max_approved < min_rejected:
-                suggestions['max_outside_allowed_ratio'] = (max_approved + min_rejected) / 2
+        optional_metric_map = [
+            ('ssim', 'min_ssim'),
+            ('mse', 'max_mse'),
+            ('anomaly_score', 'min_anomaly_score'),
+        ]
+        active_optional_metrics = INSPECTION_MODE_OPTIONAL_METRICS[inspection_mode]
+        for metric_name, config_key in optional_metric_map:
+            learned_metric = learned_ranges.get(metric_name)
+            if not learned_metric:
+                continue
+            if metric_name not in active_optional_metrics:
+                continue
+            suggestion = self._threshold_suggestion_from_range(
+                learned_metric,
+                inspection_cfg.get(config_key),
+                LEARNED_RANGE_DIRECTIONS[metric_name],
+            )
+            if suggestion is not None:
+                suggestions[config_key] = suggestion
 
         if self.logger and suggestions:
             self.logger.log_threshold_suggestion(suggestions)
 
         return suggestions
+
+    def apply_learning_update(self, config: dict, suggestions: dict, learned_ranges: dict) -> dict:
+        threshold_updates = self.apply_suggestions(config, suggestions)
+
+        inspection_cfg = config.setdefault('inspection', {})
+        if self.config_path.exists():
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+        else:
+            file_config = config.copy()
+
+        file_inspection_cfg = file_config.setdefault('inspection', {})
+        learned_ranges_changed = file_inspection_cfg.get('learned_ranges') != learned_ranges
+        if learned_ranges:
+            inspection_cfg['learned_ranges'] = learned_ranges
+            file_inspection_cfg['learned_ranges'] = learned_ranges
+
+        if learned_ranges_changed and learned_ranges:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(file_config, f, indent=2)
+                f.write('\n')
+
+        return {
+            'threshold_updates': threshold_updates,
+            'learned_ranges_saved': bool(learned_ranges),
+            'learned_ranges_changed': learned_ranges_changed and bool(learned_ranges),
+        }
 
     def apply_suggestions(self, config: dict, suggestions: dict) -> dict:
         """Persist suggested threshold changes and update the in-memory config."""
@@ -1251,7 +1457,8 @@ class ThresholdTrainer:
 
         for key, value in suggestions.items():
             normalized_value = round(float(value), 4)
-            if float(inspection_cfg.get(key, normalized_value)) == normalized_value:
+            current_value = inspection_cfg.get(key)
+            if current_value not in {None, ''} and float(current_value) == normalized_value:
                 continue
             inspection_cfg[key] = normalized_value
             file_inspection_cfg[key] = normalized_value
@@ -1279,6 +1486,7 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         ref_mask_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(ref_mask_path), mask)
         cv2.imwrite(str(ref_image_path), roi_image)
+        clear_reference_variants(active_paths)
         save_reference_metadata(config)
         return True, f"Reference saved ({feature_pixels} feature pixels)"
     except Exception as exc:
@@ -1334,6 +1542,7 @@ def run_interactive_training(config: dict) -> int:
         return 1
 
     active_paths = get_active_runtime_paths()
+    reference_candidates = list_runtime_reference_candidates(config, active_paths)
 
     anomaly_detector = load_anomaly_detector(active_paths)
     for warning in get_inspection_runtime_warnings(config, anomaly_detector):
@@ -1400,7 +1609,7 @@ def run_interactive_training(config: dict) -> int:
         session_count = 0
 
         # If no reference exists yet, show live preview until the operator captures one.
-        if not active_paths["reference_mask"].exists():
+        if not reference_candidates:
             print("No reference mask found. Prompting operator to capture reference.")
             while True:
                 action = display.run_reference_preview(config, has_reference=False)
@@ -1418,6 +1627,7 @@ def run_interactive_training(config: dict) -> int:
                 cleanup_temp_image()
                 print(msg)
                 active_paths = get_active_runtime_paths()
+                reference_candidates = list_runtime_reference_candidates(config, active_paths)
                 if success:
                     display.show_message("Reference saved. Starting training...", display.GREEN)
                     time.sleep(1)
@@ -1436,12 +1646,12 @@ def run_interactive_training(config: dict) -> int:
             try:
                 # Run inspection
                 try:
-                    passed, details = inspect_against_reference(
+                    reference_candidates = list_runtime_reference_candidates(config, active_paths)
+                    passed, details = inspect_against_references(
                         config,
                         image_path,
+                        reference_candidates,
                         make_binary_mask,
-                        active_paths["reference_mask"],
-                        active_paths["reference_image"],
                         align_sample_mask,
                         build_reference_regions,
                         compute_section_masks,
@@ -1533,7 +1743,7 @@ def run_interactive_training(config: dict) -> int:
                         print(f"Warning: Got feedback but not ready to capture. Continuing...")
                         continue
                     
-                    trainer.record_feedback(details, feedback)
+                    trainer.record_feedback(details, feedback, image_path=image_path)
                     session_count += 1
 
                     # Update indicators
@@ -1547,10 +1757,17 @@ def run_interactive_training(config: dict) -> int:
                     if should_review_training(session_count):
                         summary = trainer.get_pending_summary()
                         suggestions = trainer.suggest_thresholds()
+                        learned_ranges = trainer.extract_learned_ranges()
+                        learned_range_lines = trainer.summarize_learned_ranges(learned_ranges)
                         review_warnings = build_review_warnings()
                         if review_warnings:
                             logger.log_review_findings(review_warnings)
-                        action = display.show_training_checkpoint(summary, suggestions, review_warnings)
+                        action = display.show_training_checkpoint(
+                            summary,
+                            suggestions,
+                            review_warnings,
+                            learned_range_lines,
+                        )
                         if action in {'quit', 'home'}:
                             print("Returning to dashboard/home.")
                             break
@@ -1560,18 +1777,21 @@ def run_interactive_training(config: dict) -> int:
                             discarded = trainer.discard_pending_feedback()
                             print(f"Discarded {discarded} pending training records.")
                         elif action == 'update':
-                            if not suggestions:
-                                print("No suggestions to apply yet; continuing with current settings.")
+                            if not suggestions and not learned_ranges:
+                                print("No learned updates to apply yet; continuing with current settings.")
                             else:
-                                applied = trainer.apply_suggestions(config, suggestions)
-                                if applied:
+                                applied = trainer.apply_learning_update(config, suggestions, learned_ranges)
+                                if applied['threshold_updates'] or applied['learned_ranges_changed']:
                                     committed = trainer.commit_pending_feedback()
-                                    print("Applied threshold updates:")
-                                    for key, value in applied.items():
+                                    if applied['threshold_updates']:
+                                        print("Applied threshold updates:")
+                                    for key, value in applied['threshold_updates'].items():
                                         print(f"  {key}: {value:.4f}")
+                                    if applied['learned_ranges_saved']:
+                                        print(f"Saved learned ranges for {len(learned_ranges)} metrics.")
                                     print(f"Committed {committed} training records.")
                                 else:
-                                    print("No threshold changes were applied.")
+                                    print("No learning changes were applied.")
 
             finally:
                 cleanup_temp_image()
