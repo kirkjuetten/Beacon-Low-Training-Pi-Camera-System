@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 
+INSPECTION_MODE_GATES = {
+    "mask_only": frozenset(),
+    "mask_and_ssim": frozenset({"ssim", "mse"}),
+    "mask_and_ml": frozenset({"anomaly"}),
+    "full": frozenset({"ssim", "mse", "anomaly"}),
+}
+
+
 def _optional_float(value):
     if value is None:
         return None
@@ -10,6 +18,33 @@ def _optional_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def normalize_inspection_mode(value) -> str:
+    normalized = str(value or "mask_only").strip().lower()
+    if normalized not in INSPECTION_MODE_GATES:
+        return "mask_only"
+    return normalized
+
+
+def resolve_inspection_mode_details(inspection_cfg: dict) -> dict:
+    inspection_mode = normalize_inspection_mode(inspection_cfg.get("inspection_mode", "mask_only"))
+    included_gates = INSPECTION_MODE_GATES[inspection_mode]
+
+    min_ssim = _optional_float(inspection_cfg.get("min_ssim"))
+    max_mse = _optional_float(inspection_cfg.get("max_mse"))
+    min_anomaly_score = _optional_float(inspection_cfg.get("min_anomaly_score"))
+
+    return {
+        "inspection_mode": inspection_mode,
+        "included_gates": included_gates,
+        "min_ssim": min_ssim,
+        "max_mse": max_mse,
+        "min_anomaly_score": min_anomaly_score,
+        "ssim_gate_active": "ssim" in included_gates and min_ssim is not None,
+        "mse_gate_active": "mse" in included_gates and max_mse is not None,
+        "anomaly_gate_active": "anomaly" in included_gates and min_anomaly_score is not None,
+    }
 
 
 def score_sample(reference_allowed, reference_required, sample_mask, section_masks):
@@ -62,19 +97,14 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     max_outside_allowed_ratio = float(inspection_cfg.get("max_outside_allowed_ratio", 0.02))
     min_section_coverage_limit = float(inspection_cfg.get("min_section_coverage", 0.85))
 
-    inspection_mode = str(inspection_cfg.get("inspection_mode", "mask_only")).strip().lower()
-    valid_modes = {"mask_only", "mask_and_ssim", "mask_and_ml", "full"}
-    if inspection_mode not in valid_modes:
-        inspection_mode = "mask_only"
-
-    # Tier 2 optional gates: enabled only if project config provides threshold values.
-    min_ssim = _optional_float(inspection_cfg.get("min_ssim"))
-    max_mse = _optional_float(inspection_cfg.get("max_mse"))
-    min_anomaly_score = _optional_float(inspection_cfg.get("min_anomaly_score"))
-
-    ssim_gate_active = inspection_mode in {"mask_and_ssim", "full"} and min_ssim is not None
-    mse_gate_active = inspection_mode in {"mask_and_ssim", "full"} and max_mse is not None
-    anomaly_gate_active = inspection_mode in {"mask_and_ml", "full"} and min_anomaly_score is not None
+    mode_details = resolve_inspection_mode_details(inspection_cfg)
+    inspection_mode = mode_details["inspection_mode"]
+    min_ssim = mode_details["min_ssim"]
+    max_mse = mode_details["max_mse"]
+    min_anomaly_score = mode_details["min_anomaly_score"]
+    ssim_gate_active = mode_details["ssim_gate_active"]
+    mse_gate_active = mode_details["mse_gate_active"]
+    anomaly_gate_active = mode_details["anomaly_gate_active"]
 
     ssim_pass = True if not ssim_gate_active else (ssim_value is not None and ssim_value >= min_ssim)
     mse_pass = True if not mse_gate_active else (mse_value is not None and mse_value <= max_mse)

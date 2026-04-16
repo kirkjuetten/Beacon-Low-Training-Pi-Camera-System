@@ -49,6 +49,51 @@ def test_load_and_write_default_config_creates_file(monkeypatch, tmp_path) -> No
     config = camera_interface.load_config()
     assert isinstance(config, dict)
     assert (tmp_path / "config" / "camera_config.json").exists()
+    assert config["inspection"]["reference_strategy"] == "golden_only"
+    assert config["inspection"]["blend_mode"] == "hard_only"
+    assert config["inspection"]["tolerance_mode"] == "balanced"
+
+
+def test_load_config_merges_new_defaults_into_legacy_project_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+
+    camera_interface.ensure_directories()
+
+    project_dir = tmp_path / "projects" / "legacy"
+    project_config = project_dir / "config" / "camera_config.json"
+    project_config.parent.mkdir(parents=True, exist_ok=True)
+    project_config.write_text(
+        '{\n  "inspection": {\n    "inspection_mode": "mask_only"\n  }\n}\n',
+        encoding="utf-8",
+    )
+
+    registry = {
+        "current_project": "legacy",
+        "projects": {
+            "legacy": {
+                "config_file": str(project_config),
+                "reference_dir": str(project_dir / "reference"),
+                "log_dir": str(project_dir / "logs"),
+            }
+        },
+    }
+    (tmp_path / "config" / "projects.json").write_text(
+        __import__("json").dumps(registry, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    config = camera_interface.load_config()
+
+    assert config["inspection"]["inspection_mode"] == "mask_only"
+    assert config["inspection"]["reference_strategy"] == "golden_only"
+    assert config["inspection"]["blend_mode"] == "hard_only"
+    assert config["inspection"]["tolerance_mode"] == "balanced"
 
 
 def test_get_active_runtime_paths_uses_current_project_registry(monkeypatch, tmp_path) -> None:

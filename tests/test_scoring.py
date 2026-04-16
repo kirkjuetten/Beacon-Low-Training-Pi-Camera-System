@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from scoring_utils import evaluate_metrics, score_sample
+from scoring_utils import evaluate_metrics, normalize_inspection_mode, resolve_inspection_mode_details, score_sample
 
 
 def test_score_sample_computes_expected_metrics() -> None:
@@ -187,6 +187,58 @@ def test_evaluate_metrics_mask_and_ssim_applies_only_ssim_mse_gates() -> None:
     assert summary["anomaly_gate_active"] is False
 
 
+def test_evaluate_metrics_mask_and_ml_applies_only_anomaly_gate() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.1,
+        "mse": 999.0,
+        "anomaly_score": 0.25,
+    }
+    inspection_cfg = {
+        "inspection_mode": "mask_and_ml",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["ssim_gate_active"] is False
+    assert summary["mse_gate_active"] is False
+    assert summary["anomaly_gate_active"] is True
+
+
+def test_evaluate_metrics_full_only_activates_optional_gates_with_thresholds() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.1,
+        "mse": 999.0,
+        "anomaly_score": 0.25,
+    }
+    inspection_cfg = {
+        "inspection_mode": "full",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["ssim_gate_active"] is False
+    assert summary["mse_gate_active"] is False
+    assert summary["anomaly_gate_active"] is True
+
+
 def test_evaluate_metrics_full_applies_all_optional_gates() -> None:
     metrics = {
         "required_coverage": 0.95,
@@ -212,3 +264,26 @@ def test_evaluate_metrics_full_applies_all_optional_gates() -> None:
     assert summary["ssim_gate_active"] is True
     assert summary["mse_gate_active"] is True
     assert summary["anomaly_gate_active"] is True
+
+
+def test_normalize_inspection_mode_falls_back_to_mask_only() -> None:
+    assert normalize_inspection_mode("full") == "full"
+    assert normalize_inspection_mode("MASK_AND_ML") == "mask_and_ml"
+    assert normalize_inspection_mode("unknown") == "mask_only"
+
+
+def test_resolve_inspection_mode_details_reports_explicit_gate_combination() -> None:
+    details = resolve_inspection_mode_details(
+        {
+            "inspection_mode": "mask_and_ml",
+            "min_ssim": 0.9,
+            "max_mse": 5.0,
+            "min_anomaly_score": 0.1,
+        }
+    )
+
+    assert details["inspection_mode"] == "mask_and_ml"
+    assert details["included_gates"] == {"anomaly"}
+    assert details["ssim_gate_active"] is False
+    assert details["mse_gate_active"] is False
+    assert details["anomaly_gate_active"] is True

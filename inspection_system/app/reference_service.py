@@ -9,6 +9,38 @@ from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 
 
+def _extract_roi_tuple(inspection_cfg: dict) -> tuple[int, int, int, int]:
+    roi_cfg = inspection_cfg.get("roi")
+    if isinstance(roi_cfg, dict):
+        x = int(roi_cfg.get("x", 0))
+        y = int(roi_cfg.get("y", 0))
+        width = int(roi_cfg.get("width", 640) or 640)
+        height = int(roi_cfg.get("height", 480) or 480)
+        return x, y, width, height
+
+    x1 = int(inspection_cfg.get("roi_x1", 0))
+    y1 = int(inspection_cfg.get("roi_y1", 0))
+    x2 = int(inspection_cfg.get("roi_x2", 640))
+    y2 = int(inspection_cfg.get("roi_y2", 480))
+    return x1, y1, max(0, x2 - x1), max(0, y2 - y1)
+
+
+def _extract_meta_roi_tuple(meta: dict) -> tuple[int, int, int, int]:
+    roi_meta = meta.get("roi", {})
+    if {"x", "y", "width", "height"}.issubset(roi_meta):
+        return (
+            int(roi_meta.get("x", 0)),
+            int(roi_meta.get("y", 0)),
+            int(roi_meta.get("width", 640)),
+            int(roi_meta.get("height", 480)),
+        )
+    x1 = int(roi_meta.get("x1", 0))
+    y1 = int(roi_meta.get("y1", 0))
+    x2 = int(roi_meta.get("x2", 640))
+    y2 = int(roi_meta.get("y2", 480))
+    return x1, y1, max(0, x2 - x1), max(0, y2 - y1)
+
+
 def save_debug_outputs(stem: str, aligned_sample_mask, diff_image) -> dict:
     cv2, _ = import_cv2_and_numpy()
     active_paths = get_active_runtime_paths()
@@ -54,13 +86,15 @@ def save_reference_metadata(config: dict) -> None:
     """Save reference creation settings as fingerprint for later validation."""
     try:
         inspection_cfg = config.get("inspection", {})
+        alignment_cfg = config.get("alignment", {})
+        roi_x, roi_y, roi_width, roi_height = _extract_roi_tuple(inspection_cfg)
         metadata = {
             "created_at": time.time(),
             "roi": {
-                "x1": int(inspection_cfg.get("roi_x1", 0)),
-                "y1": int(inspection_cfg.get("roi_y1", 0)),
-                "x2": int(inspection_cfg.get("roi_x2", 640)),
-                "y2": int(inspection_cfg.get("roi_y2", 480)),
+                "x": roi_x,
+                "y": roi_y,
+                "width": roi_width,
+                "height": roi_height,
             },
             "threshold": {
                 "type": str(inspection_cfg.get("threshold_mode", "fixed")).lower(),
@@ -70,6 +104,15 @@ def save_reference_metadata(config: dict) -> None:
             "morphology": {
                 "reference_erode_iterations": int(inspection_cfg.get("reference_erode_iterations", 1)),
                 "reference_dilate_iterations": int(inspection_cfg.get("reference_dilate_iterations", 1)),
+            },
+            "inspection_context": {
+                "inspection_mode": str(inspection_cfg.get("inspection_mode", "mask_only")).lower(),
+                "reference_strategy": str(inspection_cfg.get("reference_strategy", "golden_only")).lower(),
+                "blend_mode": str(inspection_cfg.get("blend_mode", "hard_only")).lower(),
+                "tolerance_mode": str(inspection_cfg.get("tolerance_mode", "balanced")).lower(),
+            },
+            "alignment": {
+                "tolerance_profile": str(alignment_cfg.get("tolerance_profile", "balanced")).lower(),
             },
         }
         active_paths = get_active_runtime_paths()
@@ -102,43 +145,65 @@ def check_reference_settings_match(config: dict) -> tuple[bool, str | None]:
         return True, None  # No metadata to compare
     
     inspection_cfg = config.get("inspection", {})
+    alignment_cfg = config.get("alignment", {})
+    mismatches: list[str] = []
     
     # Check ROI
-    roi_meta = meta.get("roi", {})
-    current_roi = (
-        int(inspection_cfg.get("roi_x1", 0)),
-        int(inspection_cfg.get("roi_y1", 0)),
-        int(inspection_cfg.get("roi_x2", 640)),
-        int(inspection_cfg.get("roi_y2", 480)),
-    )
-    meta_roi = (roi_meta.get("x1", 0), roi_meta.get("y1", 0), roi_meta.get("x2", 640), roi_meta.get("y2", 480))
+    current_roi = _extract_roi_tuple(inspection_cfg)
+    meta_roi = _extract_meta_roi_tuple(meta)
     if current_roi != meta_roi:
-        return False, f"ROI mismatch: reference was {meta_roi}; current is {current_roi}"
+        mismatches.append(f"ROI mismatch: reference was {meta_roi}; current is {current_roi}")
     
     # Check threshold
     thresh_meta = meta.get("threshold", {})
     current_thresh_type = str(inspection_cfg.get("threshold_mode", "fixed")).lower()
     meta_thresh_type = str(thresh_meta.get("type", "fixed")).lower()
     if current_thresh_type != meta_thresh_type:
-        return False, f"Threshold type mismatch: reference was {meta_thresh_type}; current is {current_thresh_type}"
+        mismatches.append(
+            f"Threshold type mismatch: reference was {meta_thresh_type}; current is {current_thresh_type}"
+        )
     
     current_thresh_val = float(inspection_cfg.get("threshold_value", 150.0))
     meta_thresh_val = float(thresh_meta.get("value", 150.0))
     if abs(current_thresh_val - meta_thresh_val) > 0.1:
-        return False, f"Threshold value mismatch: reference was {meta_thresh_val}; current is {current_thresh_val}"
+        mismatches.append(
+            f"Threshold value mismatch: reference was {meta_thresh_val}; current is {current_thresh_val}"
+        )
     
     # Check morphology
     morph_meta = meta.get("morphology", {})
     current_ref_erode = int(inspection_cfg.get("reference_erode_iterations", 1))
     meta_ref_erode = int(morph_meta.get("reference_erode_iterations", 1))
     if current_ref_erode != meta_ref_erode:
-        return False, f"Reference erode iterations mismatch: {meta_ref_erode} -> {current_ref_erode}"
+        mismatches.append(f"Reference erode iterations mismatch: {meta_ref_erode} -> {current_ref_erode}")
     
     current_ref_dilate = int(inspection_cfg.get("reference_dilate_iterations", 1))
     meta_ref_dilate = int(morph_meta.get("reference_dilate_iterations", 1))
     if current_ref_dilate != meta_ref_dilate:
-        return False, f"Reference dilate iterations mismatch: {meta_ref_dilate} -> {current_ref_dilate}"
-    
+        mismatches.append(f"Reference dilate iterations mismatch: {meta_ref_dilate} -> {current_ref_dilate}")
+
+    inspection_context = meta.get("inspection_context", {})
+    inspection_checks = {
+        "inspection_mode": str(inspection_cfg.get("inspection_mode", "mask_only")).lower(),
+        "reference_strategy": str(inspection_cfg.get("reference_strategy", "golden_only")).lower(),
+        "blend_mode": str(inspection_cfg.get("blend_mode", "hard_only")).lower(),
+        "tolerance_mode": str(inspection_cfg.get("tolerance_mode", "balanced")).lower(),
+    }
+    for key, current_value in inspection_checks.items():
+        meta_value = inspection_context.get(key)
+        if meta_value is not None and str(meta_value).lower() != current_value:
+            mismatches.append(f"{key.replace('_', ' ')} mismatch: reference was {meta_value}; current is {current_value}")
+
+    alignment_meta = meta.get("alignment", {})
+    current_profile = str(alignment_cfg.get("tolerance_profile", "balanced")).lower()
+    meta_profile = alignment_meta.get("tolerance_profile")
+    if meta_profile is not None and str(meta_profile).lower() != current_profile:
+        mismatches.append(
+            f"alignment tolerance profile mismatch: reference was {meta_profile}; current is {current_profile}"
+        )
+
+    if mismatches:
+        return False, "; ".join(mismatches)
     return True, None
 
 

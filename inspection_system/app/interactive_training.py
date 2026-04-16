@@ -34,8 +34,16 @@ from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
-from inspection_system.app.reference_service import save_debug_outputs, bake_reference_mask, save_reference_metadata
-from inspection_system.app.anomaly_detection_utils import AnomalyDetector
+from inspection_system.app.reference_service import (
+    save_debug_outputs,
+    bake_reference_mask,
+    save_reference_metadata,
+    check_reference_settings_match,
+)
+from inspection_system.app.runtime_controller import get_inspection_runtime_warnings, load_anomaly_detector
+
+
+TRAINING_DATA_SCHEMA_VERSION = 2
 
 
 class InspectionDisplay:
@@ -761,7 +769,7 @@ class InspectionDisplay:
 
         pygame.quit()
 
-    def show_training_checkpoint(self, summary: dict, suggestions: dict) -> str:
+    def show_training_checkpoint(self, summary: dict, suggestions: dict, review_warnings: Optional[List[str]] = None) -> str:
         """Pause training and ask operator how to handle pending learning data."""
         defer_color = (70, 130, 220)
         discard_color = self.RED
@@ -790,6 +798,11 @@ class InspectionDisplay:
                     lines.append(f"  - {key}: {value:.4f}")
             else:
                 lines.append("No threshold updates suggested yet (need stronger separation/more data).")
+
+            if review_warnings:
+                lines.append("Review warnings:")
+                for warning in review_warnings:
+                    lines.append(f"  - {warning}")
 
             lines.append("Choose action: Defer keeps collecting, Discard drops pending learning data, Update applies now.")
 
@@ -897,6 +910,14 @@ class TrainingLogger:
                 self._log(f"Suggested {key}: {value:.4f}")
             self._log("=" * 30)
 
+    def log_review_findings(self, warnings: list[str]):
+        """Log review-stage warnings about config fit and prerequisites."""
+        if warnings:
+            self._log("=== REVIEW WARNINGS ===")
+            for warning in warnings:
+                self._log(warning)
+            self._log("=" * 30)
+
     def end_session(self):
         """End the current training session."""
         if self.current_session:
@@ -956,6 +977,8 @@ class ThresholdTrainer:
                 if "learning_state" not in record:
                     record["learning_state"] = "committed"
                     changed = True
+                if self._normalize_record_schema(record):
+                    changed = True
             if changed:
                 self.save_training_data()
 
@@ -965,18 +988,97 @@ class ThresholdTrainer:
         with open(training_file, 'w', encoding='utf-8') as f:
             json.dump(self.training_data, f, indent=2)
 
-    def record_feedback(self, details: dict, feedback: str):
+    def _load_current_config(self) -> dict:
+        if not self.config_path.exists():
+            return {}
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    @staticmethod
+    def _default_final_class(feedback: str) -> str | None:
+        normalized = str(feedback).strip().lower()
+        if normalized == 'approve':
+            return 'good'
+        if normalized == 'reject':
+            return 'reject'
+        return None
+
+    def _build_config_fingerprint(self, config: dict | None = None) -> dict:
+        source = config or self._load_current_config()
+        inspection_cfg = source.get('inspection', {}) if isinstance(source, dict) else {}
+        alignment_cfg = source.get('alignment', {}) if isinstance(source, dict) else {}
+        return {
+            'inspection_mode': inspection_cfg.get('inspection_mode', 'mask_only'),
+            'reference_strategy': inspection_cfg.get('reference_strategy', 'golden_only'),
+            'blend_mode': inspection_cfg.get('blend_mode', 'hard_only'),
+            'tolerance_mode': inspection_cfg.get('tolerance_mode', 'balanced'),
+            'threshold_mode': inspection_cfg.get('threshold_mode'),
+            'threshold_value': inspection_cfg.get('threshold_value'),
+            'min_required_coverage': inspection_cfg.get('min_required_coverage'),
+            'max_outside_allowed_ratio': inspection_cfg.get('max_outside_allowed_ratio'),
+            'min_section_coverage': inspection_cfg.get('min_section_coverage'),
+            'min_ssim': inspection_cfg.get('min_ssim'),
+            'max_mse': inspection_cfg.get('max_mse'),
+            'min_anomaly_score': inspection_cfg.get('min_anomaly_score'),
+            'alignment_profile': alignment_cfg.get('tolerance_profile', 'balanced'),
+        }
+
+    def _normalize_record_schema(self, record: dict) -> bool:
+        changed = False
+        if record.get('schema_version') != TRAINING_DATA_SCHEMA_VERSION:
+            record['schema_version'] = TRAINING_DATA_SCHEMA_VERSION
+            changed = True
+        if 'final_class' not in record:
+            record['final_class'] = self._default_final_class(record.get('feedback', ''))
+            changed = True
+        if 'defect_category' not in record:
+            record['defect_category'] = None
+            changed = True
+        if 'classification_reason' not in record:
+            record['classification_reason'] = None
+            changed = True
+        if 'config_fingerprint' not in record:
+            record['config_fingerprint'] = self._build_config_fingerprint()
+            changed = True
+        return changed
+
+    @staticmethod
+    def _resolve_learning_class(record: dict) -> str | None:
+        final_class = record.get('final_class')
+        if final_class in {'good', 'reject'}:
+            return final_class
+        feedback = str(record.get('feedback', '')).strip().lower()
+        if feedback == 'approve':
+            return 'good'
+        if feedback == 'reject':
+            return 'reject'
+        return None
+
+    def record_feedback(self, details: dict, feedback: str, label_info: Optional[dict] = None):
         """Record human feedback for threshold adjustment."""
+        label_info = label_info or {}
+        final_class = label_info.get('final_class', self._default_final_class(feedback))
         record = {
+            'schema_version': TRAINING_DATA_SCHEMA_VERSION,
             'timestamp': time.time(),
             'feedback': feedback,
+            'final_class': final_class,
+            'defect_category': label_info.get('defect_category'),
+            'classification_reason': label_info.get('classification_reason'),
             'learning_state': 'pending',
+            'config_fingerprint': self._build_config_fingerprint(),
             'metrics': {
                 'required_coverage': details.get('required_coverage', 0),
                 'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
                 'min_section_coverage': details.get('min_section_coverage', 0),
                 'ssim': details.get('ssim'),
+                'mse': details.get('mse'),
                 'anomaly_score': details.get('anomaly_score'),
+                'histogram_similarity': details.get('histogram_similarity'),
+                'best_angle_deg': details.get('best_angle_deg', 0),
+                'best_shift_x': details.get('best_shift_x', 0),
+                'best_shift_y': details.get('best_shift_y', 0),
+                'inspection_mode': details.get('inspection_mode', 'mask_only'),
             }
         }
         self.training_data.append(record)
@@ -984,13 +1086,91 @@ class ThresholdTrainer:
 
     def get_pending_summary(self) -> dict:
         """Get summary of pending (not yet committed/discarded) training records."""
-        pending = [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+        pending = self.get_pending_records()
         summary = {'approve': 0, 'reject': 0, 'review': 0, 'total': len(pending)}
         for record in pending:
             feedback = str(record.get('feedback', '')).lower()
             if feedback in summary:
                 summary[feedback] += 1
         return summary
+
+    def get_pending_records(self) -> list[dict]:
+        return [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+
+    def _record_passes_current_thresholds(self, record: dict, inspection_cfg: dict) -> bool:
+        metrics = record.get('metrics', {})
+        required_coverage = float(metrics.get('required_coverage', 0.0))
+        outside_allowed_ratio = float(metrics.get('outside_allowed_ratio', 1.0))
+        min_section_coverage = float(metrics.get('min_section_coverage', 0.0))
+
+        if required_coverage < float(inspection_cfg.get('min_required_coverage', 0.92)):
+            return False
+        if outside_allowed_ratio > float(inspection_cfg.get('max_outside_allowed_ratio', 0.02)):
+            return False
+        if min_section_coverage < float(inspection_cfg.get('min_section_coverage', 0.85)):
+            return False
+
+        min_ssim = inspection_cfg.get('min_ssim')
+        if min_ssim not in {None, ''}:
+            ssim_value = metrics.get('ssim')
+            if ssim_value is None or float(ssim_value) < float(min_ssim):
+                return False
+
+        max_mse = inspection_cfg.get('max_mse')
+        if max_mse not in {None, ''}:
+            mse_value = metrics.get('mse')
+            if mse_value is None or float(mse_value) > float(max_mse):
+                return False
+
+        min_anomaly_score = inspection_cfg.get('min_anomaly_score')
+        if min_anomaly_score not in {None, ''}:
+            anomaly_score = metrics.get('anomaly_score')
+            if anomaly_score is None or float(anomaly_score) < float(min_anomaly_score):
+                return False
+
+        return True
+
+    def get_training_review_warnings(
+        self,
+        config: dict,
+        runtime_warnings: Optional[list[str]] = None,
+        reference_warning: Optional[str] = None,
+    ) -> list[str]:
+        warnings: list[str] = []
+        if reference_warning:
+            warnings.append(reference_warning)
+        for warning in runtime_warnings or []:
+            if warning not in warnings:
+                warnings.append(warning)
+
+        pending = self.get_pending_records()
+        if not pending:
+            return warnings
+
+        current_fingerprint = self._build_config_fingerprint(config)
+        config_mismatch_count = sum(1 for record in pending if record.get('config_fingerprint') != current_fingerprint)
+        if config_mismatch_count:
+            warnings.append(
+                f"{config_mismatch_count} pending examples were collected under different config settings than the current project config."
+            )
+
+        inspection_cfg = config.get('inspection', {})
+        good_records = [r for r in pending if self._resolve_learning_class(r) == 'good']
+        reject_records = [r for r in pending if self._resolve_learning_class(r) == 'reject']
+
+        approved_failures = sum(1 for record in good_records if not self._record_passes_current_thresholds(record, inspection_cfg))
+        if approved_failures:
+            warnings.append(
+                f"{approved_failures} approved-good pending examples fail the current thresholds. Config may be too strict for this project."
+            )
+
+        reject_passes = sum(1 for record in reject_records if self._record_passes_current_thresholds(record, inspection_cfg))
+        if reject_passes:
+            warnings.append(
+                f"{reject_passes} reject-labeled pending examples still pass the current thresholds. Config may be too loose or the reference may not fit the project."
+            )
+
+        return warnings
 
     def commit_pending_feedback(self) -> int:
         """Mark pending records as committed after applying threshold updates."""
@@ -1016,12 +1196,12 @@ class ThresholdTrainer:
 
     def suggest_thresholds(self) -> dict:
         """Analyze training data and suggest new thresholds."""
-        learning_records = [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+        learning_records = self.get_pending_records()
         if len(learning_records) < 10:
             return {}  # Need more data
 
-        approved = [r for r in learning_records if r['feedback'] == 'approve']
-        rejected = [r for r in learning_records if r['feedback'] == 'reject']
+        approved = [r for r in learning_records if self._resolve_learning_class(r) == 'good']
+        rejected = [r for r in learning_records if self._resolve_learning_class(r) == 'reject']
 
         if not approved or not rejected:
             return {}
@@ -1155,15 +1335,9 @@ def run_interactive_training(config: dict) -> int:
 
     active_paths = get_active_runtime_paths()
 
-    model_path = active_paths["reference_dir"] / "anomaly_model.pkl"
-    anomaly_detector = None
-    if model_path.exists():
-        try:
-            anomaly_detector = AnomalyDetector(model_path=model_path)
-            anomaly_detector.load_model()
-            print(f"Loaded anomaly model: {model_path}")
-        except Exception as exc:
-            print(f"Warning: failed to load anomaly model from {model_path}: {exc}")
+    anomaly_detector = load_anomaly_detector(active_paths)
+    for warning in get_inspection_runtime_warnings(config, anomaly_detector):
+        print(f"Warning: {warning}")
 
     # Initialize logger
     log_dir = active_paths["log_dir"]
@@ -1173,6 +1347,18 @@ def run_interactive_training(config: dict) -> int:
     display = InspectionDisplay()
     trainer = ThresholdTrainer(active_paths["config_file"], logger)
     display.set_alignment_profile_label(config.get("alignment", {}).get("tolerance_profile", "balanced"))
+    mode_warnings = get_inspection_runtime_warnings(config, anomaly_detector)
+
+    def build_review_warnings() -> list[str]:
+        settings_match, reference_warning = check_reference_settings_match(config)
+        if settings_match:
+            reference_warning = None
+        warnings = trainer.get_training_review_warnings(
+            config,
+            runtime_warnings=mode_warnings,
+            reference_warning=reference_warning,
+        )
+        return warnings
 
     led_cfg = config.get("indicator_led", {})
     indicator = IndicatorLED(
@@ -1203,6 +1389,13 @@ def run_interactive_training(config: dict) -> int:
         print("- Blue SET REF button: Capture a new golden reference")
         print("- Close window or Esc to exit")
         print("\nDetailed descriptions will appear on screen for each inspection.")
+        initial_review_warnings = build_review_warnings()
+        if initial_review_warnings:
+            logger.log_review_findings(initial_review_warnings)
+            for warning in initial_review_warnings:
+                print(f"Warning: {warning}")
+            display.show_message(initial_review_warnings[0], display.YELLOW)
+            time.sleep(1.2)
 
         session_count = 0
 
@@ -1354,7 +1547,10 @@ def run_interactive_training(config: dict) -> int:
                     if should_review_training(session_count):
                         summary = trainer.get_pending_summary()
                         suggestions = trainer.suggest_thresholds()
-                        action = display.show_training_checkpoint(summary, suggestions)
+                        review_warnings = build_review_warnings()
+                        if review_warnings:
+                            logger.log_review_findings(review_warnings)
+                        action = display.show_training_checkpoint(summary, suggestions, review_warnings)
                         if action in {'quit', 'home'}:
                             print("Returning to dashboard/home.")
                             break

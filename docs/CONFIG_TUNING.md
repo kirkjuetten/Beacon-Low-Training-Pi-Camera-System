@@ -17,12 +17,12 @@ This guide explains each setting shown on the Config + Preview page.
 ## Inspection Mode and Gates
 
 ### Inspection Mode (`inspection.inspection_mode`)
-- `mask_only`: Uses mask-based coverage checks only.
-- `mask_and_ssim`: Adds SSIM and MSE gates.
-- `mask_and_ml`: Adds anomaly score gate.
-- `full`: Enables all gates.
+- `mask_only`: Mask coverage gates only. No SSIM, MSE, or anomaly gate is enforced.
+- `mask_and_ssim`: Mask coverage plus SSIM and MSE gates. Anomaly score remains informational.
+- `mask_and_ml`: Mask coverage plus anomaly gate. SSIM and MSE remain informational.
+- `full`: Mask coverage plus all optional gates that have threshold values configured.
 
-Choose `mask_only` for baseline setup and move to richer modes after baseline is stable.
+These are explicit gate combinations, not maturity levels. `full` only enforces optional gates that have threshold values configured. If a threshold such as `min_anomaly_score` is blank, that gate stays inactive even in `full`.
 
 ## Mask / Coverage Thresholds
 
@@ -62,7 +62,7 @@ Start with `otsu` if lighting is variable. Use `fixed` or `fixed_inv` when light
 
 ## Optional Quality Gates
 
-These are active only if the selected mode includes them and a value is set.
+These are active only if the selected inspection mode includes them and a value is set.
 
 ### Min SSIM (optional) (`inspection.min_ssim`)
 - Purpose: Minimum structural similarity score.
@@ -75,6 +75,7 @@ These are active only if the selected mode includes them and a value is set.
 ### Min Anomaly Score (optional) (`inspection.min_anomaly_score`)
 - Purpose: Minimum anomaly model score.
 - Higher value: Stricter anomaly acceptance.
+- Requires: a trained `anomaly_model.pkl` for the active project. If no model exists, ML-backed modes warn and the anomaly gate cannot be enforced.
 
 ## Workflow / Diagnostics
 
@@ -99,7 +100,9 @@ These are active only if the selected mode includes them and a value is set.
 3. Set `threshold_value` so mask shape matches real feature.
 4. Tune `min_required_coverage` and `max_outside_allowed_ratio`.
 5. Tune `min_section_coverage` for local defect sensitivity.
-6. Enable optional SSIM/MSE/ML gates only after mask baseline is stable.
+6. Enable `mask_and_ssim` when appearance similarity should be part of the pass/fail decision.
+7. Enable `mask_and_ml` only after the project has a trained anomaly model and a configured `min_anomaly_score`.
+8. Use `full` when you want both appearance gates and anomaly gating together.
 
 ## Quick Symptoms and Fixes
 

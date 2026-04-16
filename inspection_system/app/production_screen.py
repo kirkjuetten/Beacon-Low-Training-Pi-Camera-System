@@ -22,6 +22,7 @@ from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.runtime_controller import get_inspection_runtime_warnings, load_anomaly_detector
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 
@@ -257,21 +258,6 @@ def determine_operator_outcome(passed: bool, details: dict) -> ProductionOutcome
         primary_reason,
         _make_summary_lines(REJECT, primary_reason, details),
     )
-
-
-def load_anomaly_detector(active_paths: dict):
-    model_path = Path(active_paths["reference_dir"]) / "anomaly_model.pkl"
-    if not model_path.exists():
-        return None
-
-    detector = AnomalyDetector(model_path=model_path)
-    try:
-        detector.load_model()
-        return detector
-    except Exception as exc:
-        print(f"Warning: failed to load anomaly model from {model_path}: {exc}")
-        return None
-
 
 class ProductionDisplay:
     MIN_WIDTH = 640
@@ -670,6 +656,11 @@ def run_production_mode(config: dict, indicator) -> int:
     status_message = "Ready. Press MANUAL INSPECT to inspect the next part."
     session.display_mode = str(config.get("inspection", {}).get("image_display_mode", "raw")).strip().lower() or "raw"
     anomaly_detector = load_anomaly_detector(active_paths)
+    mode_warnings = get_inspection_runtime_warnings(config, anomaly_detector)
+    if mode_warnings:
+        for warning in mode_warnings:
+            print(f"Warning: {warning}")
+        status_message = f"Warning: {mode_warnings[0]}"
 
     try:
         display.render(session, source_surface, processed_surface, status_message)

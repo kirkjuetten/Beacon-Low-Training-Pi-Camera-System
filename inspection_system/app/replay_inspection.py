@@ -10,11 +10,13 @@ from inspection_system.app.camera_interface import (
     CONFIG_FILE,
     REFERENCE_MASK,
     REFERENCE_IMAGE,
+    get_active_runtime_paths,
     load_config,
     import_cv2_and_numpy,
 )
 from inspection_system.app.inspection_pipeline import inspect_against_reference
 from inspection_system.app.reference_service import save_debug_outputs
+from inspection_system.app.runtime_controller import load_anomaly_detector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
@@ -37,6 +39,14 @@ def _get_reference_mask_path() -> Path:
         return Path(local_mask)
 
     return Path(module_mask if module_mask is not None else local_mask)
+
+
+def _get_reference_image_path() -> Path:
+    active_paths = get_active_runtime_paths()
+    runtime_image = active_paths.get("reference_image")
+    if runtime_image is not None:
+        return Path(runtime_image)
+    return Path(REFERENCE_IMAGE)
 
 
 def classify_invalid_capture(config: dict, image_path: Path) -> str | None:
@@ -78,7 +88,10 @@ def inspect_file(config: dict, image_path: Path) -> dict:
             "reason": invalid_reason,
         }
 
-    reference_mask = _get_reference_mask_path()
+    active_paths = get_active_runtime_paths()
+    reference_mask = Path(active_paths["reference_mask"])
+    reference_image = Path(active_paths["reference_image"])
+    anomaly_detector = load_anomaly_detector(active_paths)
 
     try:
         passed, details = inspect_against_reference(
@@ -86,7 +99,7 @@ def inspect_file(config: dict, image_path: Path) -> dict:
             image_path,
             make_binary_mask,
             reference_mask,
-            REFERENCE_IMAGE,
+            reference_image,
             align_sample_mask,
             build_reference_regions,
             compute_section_masks,
@@ -96,7 +109,7 @@ def inspect_file(config: dict, image_path: Path) -> dict:
             import_cv2_and_numpy,
             dilate_mask,
             erode_mask,
-            anomaly_detector=None,
+            anomaly_detector=anomaly_detector,
         )
     except FileNotFoundError as exc:
         return {
@@ -159,6 +172,7 @@ def print_usage() -> None:
     print("  python3 inspection_system/app/replay_inspection.py inspect-folder <folder_path>")
     print(f"  Config file expected at: {CONFIG_FILE}")
     print(f"  Reference mask expected at: {_get_reference_mask_path()}")
+    print(f"  Reference image expected at: {_get_reference_image_path()}")
 
 
 def main() -> int:

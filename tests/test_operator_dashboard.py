@@ -48,6 +48,9 @@ def test_apply_config_updates_updates_nested_fields() -> None:
         {
             "capture.timeout_ms": "350",
             "inspection.inspection_mode": "full",
+            "inspection.reference_strategy": "hybrid",
+            "inspection.blend_mode": "blend_balanced",
+            "inspection.tolerance_mode": "forgiving",
             "inspection.threshold_mode": "fixed_inv",
             "inspection.min_required_coverage": "0.975",
             "inspection.save_debug_images": "false",
@@ -57,6 +60,9 @@ def test_apply_config_updates_updates_nested_fields() -> None:
 
     assert get_nested_config_value(updated, "capture.timeout_ms") == 350
     assert get_nested_config_value(updated, "inspection.inspection_mode") == "full"
+    assert get_nested_config_value(updated, "inspection.reference_strategy") == "hybrid"
+    assert get_nested_config_value(updated, "inspection.blend_mode") == "blend_balanced"
+    assert get_nested_config_value(updated, "inspection.tolerance_mode") == "forgiving"
     assert get_nested_config_value(updated, "inspection.threshold_mode") == "fixed_inv"
     assert get_nested_config_value(updated, "inspection.min_required_coverage") == 0.975
     assert get_nested_config_value(updated, "inspection.save_debug_images") is False
@@ -93,7 +99,14 @@ def test_apply_config_updates_ignores_blank_non_optional_values() -> None:
 def test_build_config_editor_values_returns_string_values() -> None:
     config = {
         "capture": {"timeout_ms": 200},
-        "inspection": {"inspection_mode": "mask_only", "threshold_mode": "otsu", "min_required_coverage": 0.92},
+        "inspection": {
+            "inspection_mode": "mask_only",
+            "reference_strategy": "golden_only",
+            "blend_mode": "hard_only",
+            "tolerance_mode": "balanced",
+            "threshold_mode": "otsu",
+            "min_required_coverage": 0.92,
+        },
         "alignment": {"enabled": True},
         "indicator_led": {"enabled": False},
     }
@@ -102,6 +115,9 @@ def test_build_config_editor_values_returns_string_values() -> None:
 
     assert values["capture.timeout_ms"] == "200"
     assert values["inspection.inspection_mode"] == "mask_only"
+    assert values["inspection.reference_strategy"] == "golden_only"
+    assert values["inspection.blend_mode"] == "hard_only"
+    assert values["inspection.tolerance_mode"] == "balanced"
     assert values["inspection.threshold_mode"] == "otsu"
     assert values["inspection.min_required_coverage"] == "0.92"
     assert values["alignment.enabled"] == "True"
@@ -112,6 +128,9 @@ def test_dropdown_options_cover_expected_fixed_choice_fields() -> None:
     field_paths = {field for field, _, _ in CONFIG_FIELD_SPECS}
 
     assert "inspection.inspection_mode" in CONFIG_DROPDOWN_OPTIONS
+    assert "inspection.reference_strategy" in CONFIG_DROPDOWN_OPTIONS
+    assert "inspection.blend_mode" in CONFIG_DROPDOWN_OPTIONS
+    assert "inspection.tolerance_mode" in CONFIG_DROPDOWN_OPTIONS
     assert "inspection.threshold_mode" in CONFIG_DROPDOWN_OPTIONS
     assert "inspection.save_debug_images" in CONFIG_DROPDOWN_OPTIONS
     assert "alignment.enabled" in CONFIG_DROPDOWN_OPTIONS

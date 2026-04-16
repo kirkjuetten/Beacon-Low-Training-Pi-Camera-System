@@ -16,6 +16,21 @@ REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
 REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
 TEMP_IMAGE = BASE_DIR / "temp_capture.png"
 
+
+def _deep_merge_defaults(defaults, config):
+    if isinstance(defaults, dict) and isinstance(config, dict):
+        merged = {}
+        for key, value in defaults.items():
+            if key in config:
+                merged[key] = _deep_merge_defaults(value, config[key])
+            else:
+                merged[key] = value
+        for key, value in config.items():
+            if key not in merged:
+                merged[key] = value
+        return merged
+    return config
+
 DEFAULT_CONFIG = {
     "capture": {
         "timeout_ms": 200,
@@ -32,6 +47,9 @@ DEFAULT_CONFIG = {
     "inspection": {
         "enabled": True,
         "inspection_mode": "mask_only",
+        "reference_strategy": "golden_only",
+        "blend_mode": "hard_only",
+        "tolerance_mode": "balanced",
         "roi": {
             "x": 0,
             "y": 0,
@@ -95,7 +113,7 @@ def load_config() -> dict:
             project_config_file = Path(project_info["config_file"])
             if project_config_file.exists():
                 with project_config_file.open("r", encoding="utf-8") as f:
-                    return json.load(f)
+                    return _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
 
     # Fall back to global config
     if not CONFIG_FILE.exists():
@@ -103,7 +121,7 @@ def load_config() -> dict:
         print(f"Created default config: {CONFIG_FILE}")
 
     with CONFIG_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        return _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
 
 
 def import_cv2_and_numpy():

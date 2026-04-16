@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+from typing import Optional
 
 from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
@@ -9,7 +10,7 @@ from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import save_debug_outputs
-from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
+from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
 
@@ -26,6 +27,31 @@ def load_anomaly_detector(active_paths: dict):
     except Exception as exc:
         print(f"Warning: failed to load anomaly model from {model_path}: {exc}")
         return None
+
+
+def get_inspection_runtime_warnings(config: dict, anomaly_detector: Optional[AnomalyDetector]) -> list[str]:
+    inspection_cfg = config.get("inspection", {})
+    inspection_mode = normalize_inspection_mode(inspection_cfg.get("inspection_mode", "mask_only"))
+    warnings: list[str] = []
+
+    if inspection_mode in {"mask_and_ml", "full"}:
+        if anomaly_detector is None:
+            warnings.append(
+                "ML-backed mode is selected but no trained anomaly model is available. The anomaly check will not be enforced."
+            )
+        if inspection_cfg.get("min_anomaly_score") in {None, ""}:
+            warnings.append(
+                "ML-backed mode is selected but Min Anomaly Score is not set. The anomaly gate is inactive."
+            )
+
+    return warnings
+
+
+def print_inspection_runtime_warnings(config: dict, anomaly_detector: Optional[AnomalyDetector]) -> list[str]:
+    warnings = get_inspection_runtime_warnings(config, anomaly_detector)
+    for warning in warnings:
+        print(f"Warning: {warning}")
+    return warnings
 
 
 def run_interactive_training(config: dict) -> int:
@@ -117,6 +143,7 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
     try:
         active_paths = get_active_runtime_paths()
         anomaly_detector = load_anomaly_detector(active_paths)
+        print_inspection_runtime_warnings(config, anomaly_detector)
         passed, details = inspect_against_reference(
             config,
             image_path,

@@ -42,6 +42,9 @@ CONFIG_FIELD_SPECS = [
     ("capture.timeout_ms", "Capture Timeout (ms)", int),
     ("capture.shutter_us", "Shutter (us)", int),
     ("inspection.inspection_mode", "Inspection Mode", str),
+    ("inspection.reference_strategy", "Reference Strategy", str),
+    ("inspection.blend_mode", "Blend Mode", str),
+    ("inspection.tolerance_mode", "Tolerance Mode", str),
     ("inspection.threshold_mode", "Threshold Mode", str),
     ("inspection.threshold_value", "Threshold Value", int),
     ("inspection.blur_kernel", "Blur Kernel (pixels)", int),
@@ -65,6 +68,9 @@ CONFIG_FIELD_SPECS = [
 
 CONFIG_DROPDOWN_OPTIONS = {
     "inspection.inspection_mode": ["mask_only", "mask_and_ssim", "mask_and_ml", "full"],
+    "inspection.reference_strategy": ["golden_only", "hybrid", "multi_good_experimental"],
+    "inspection.blend_mode": ["hard_only", "blend_conservative", "blend_balanced", "blend_aggressive"],
+    "inspection.tolerance_mode": ["strict", "balanced", "forgiving", "custom"],
     "inspection.threshold_mode": ["fixed", "fixed_inv", "otsu", "otsu_inv"],
     "inspection.image_display_mode": ["raw", "processed", "split"],
     "inspection.save_debug_images": ["True", "False"],
