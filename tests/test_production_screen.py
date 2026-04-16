@@ -1,0 +1,120 @@
+from inspection_system.app.production_screen import (
+    GOOD,
+    REASON_EXTRA_PRINT,
+    REASON_MISSING_PRINT,
+    REASON_REFERENCE_MISMATCH,
+    REASON_UNEVEN_PRINT,
+    REJECT,
+    REVIEW,
+    CounterScope,
+    determine_operator_outcome,
+)
+
+
+def _base_details() -> dict:
+    return {
+        "required_coverage": 0.98,
+        "min_required_coverage": 0.92,
+        "outside_allowed_ratio": 0.002,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.94,
+        "min_section_coverage_limit": 0.85,
+        "ssim_gate_active": False,
+        "mse_gate_active": False,
+        "anomaly_gate_active": False,
+    }
+
+
+def test_determine_operator_outcome_marks_good_parts_good() -> None:
+    outcome = determine_operator_outcome(True, _base_details())
+
+    assert outcome.status == GOOD
+    assert outcome.banner_text == "GOOD"
+    assert outcome.primary_reason is None
+
+
+def test_determine_operator_outcome_uses_missing_print_precedence() -> None:
+    details = _base_details()
+    details.update(
+        {
+            "required_coverage": 0.74,
+            "outside_allowed_ratio": 0.18,
+            "min_section_coverage": 0.40,
+        }
+    )
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_MISSING_PRINT
+
+
+def test_determine_operator_outcome_routes_borderline_single_failure_to_review() -> None:
+    details = _base_details()
+    details.update({"required_coverage": 0.89})
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REVIEW
+    assert outcome.primary_reason == REASON_MISSING_PRINT
+
+
+def test_determine_operator_outcome_uses_extra_print_reason() -> None:
+    details = _base_details()
+    details.update({"outside_allowed_ratio": 0.08})
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_EXTRA_PRINT
+
+
+def test_determine_operator_outcome_uses_uneven_print_reason() -> None:
+    details = _base_details()
+    details.update({"min_section_coverage": 0.42})
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_UNEVEN_PRINT
+
+
+def test_determine_operator_outcome_uses_reference_mismatch_when_gate_fails() -> None:
+    details = _base_details()
+    details.update(
+        {
+            "ssim_gate_active": True,
+            "min_ssim": 0.90,
+            "ssim": 0.72,
+        }
+    )
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_REFERENCE_MISMATCH
+
+
+def test_counter_scope_records_and_resets() -> None:
+    scope = CounterScope()
+    good_outcome = determine_operator_outcome(True, _base_details())
+    review_outcome = determine_operator_outcome(False, {**_base_details(), "required_coverage": 0.89})
+    reject_outcome = determine_operator_outcome(False, {**_base_details(), "outside_allowed_ratio": 0.09})
+
+    scope.record(good_outcome)
+    scope.record(review_outcome)
+    scope.record(reject_outcome)
+
+    assert scope.total == 3
+    assert scope.good == 1
+    assert scope.review == 1
+    assert scope.reject == 1
+    assert scope.reject_reasons[REASON_EXTRA_PRINT] == 1
+
+    scope.reset()
+
+    assert scope.total == 0
+    assert scope.good == 0
+    assert scope.review == 0
+    assert scope.reject == 0
+    assert all(count == 0 for count in scope.reject_reasons.values())

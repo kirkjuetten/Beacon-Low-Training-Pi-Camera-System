@@ -38,6 +38,17 @@ def run_interactive_training(config: dict) -> int:
         return 1
 
 
+def run_production_mode(config: dict, indicator) -> int:
+    """Import and run production inspection mode."""
+    try:
+        from inspection_system.app.production_screen import run_production_mode as production_func
+
+        return production_func(config, indicator)
+    except ImportError as exc:
+        print(f"Production mode not available: {exc}")
+        return 1
+
+
 def print_inspection_result(passed: bool, details: dict) -> None:
     print("Inspection result:", "PASS" if passed else "FAIL")
     print(f"Inspection mode: {details.get('inspection_mode', 'mask_only')}")

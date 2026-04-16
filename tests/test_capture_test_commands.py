@@ -7,3 +7,7 @@ def test_quick_check_command_registered() -> None:
 
 def test_config_editor_command_registered() -> None:
     assert "config-editor" in COMMAND_HANDLERS
+
+
+def test_production_command_registered() -> None:
+    assert "production" in COMMAND_HANDLERS

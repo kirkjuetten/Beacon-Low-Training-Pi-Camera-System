@@ -317,16 +317,18 @@ class OperatorDashboard:
         self.reference_button.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.inspect_button = ttk.Button(parent, text="Inspect Part", command=lambda: self.run_command("inspect"))
         self.inspect_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.production_button = ttk.Button(parent, text="Launch Production", command=self.launch_production)
+        self.production_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.training_button = ttk.Button(parent, text="Launch Training", command=self.launch_training)
-        self.training_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
-        self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
-        self.project_manager_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.training_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.config_editor_button = ttk.Button(parent, text="Open Config + Preview", command=self.launch_config_editor)
         self.config_editor_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
+        self.project_manager_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
-        self.refresh_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.refresh_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
-        self.exit_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.exit_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=6)
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -410,6 +412,7 @@ class OperatorDashboard:
             self.capture_button,
             self.reference_button,
             self.inspect_button,
+            self.production_button,
             self.training_button,
             self.project_manager_button,
             self.config_editor_button,
@@ -458,6 +461,9 @@ class OperatorDashboard:
 
     def launch_training(self) -> None:
         self._launch_tool("train", "training GUI")
+
+    def launch_production(self) -> None:
+        self._launch_tool("production", "production mode")
 
     def launch_project_manager(self) -> None:
         self._launch_tool("project-manager", "project manager")

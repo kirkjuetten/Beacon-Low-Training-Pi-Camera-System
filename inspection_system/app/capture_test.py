@@ -17,6 +17,7 @@ from inspection_system.app.runtime_controller import (
     run_capture_and_inspect,
     run_capture_only,
     run_interactive_training,
+    run_production_mode,
 )
 from inspection_system.app.ui_launcher import launch_config_editor, launch_dashboard, launch_project_manager
 
@@ -29,6 +30,7 @@ def print_usage() -> None:
     print("  python3 capture_test.py set-reference    # Set reference image")
     print("  python3 capture_test.py inspect          # Run inspection on new part")
     print("  python3 capture_test.py train            # Launch training workflow")
+    print("  python3 capture_test.py production       # Launch production inspection screen")
     print("  python3 capture_test.py create-project <name> [description]")
     print("  python3 capture_test.py switch-project <name>")
     print("  python3 capture_test.py list-projects")
@@ -50,6 +52,10 @@ def command_inspect(config: dict, indicator: IndicatorLED, _argv: list[str]) -> 
 
 def command_train(config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
     return run_interactive_training(config)
+
+
+def command_production(config: dict, indicator: IndicatorLED, _argv: list[str]) -> int:
+    return run_production_mode(config, indicator)
 
 
 def command_create_project(_config: dict, _indicator: IndicatorLED, argv: list[str]) -> int:
@@ -110,6 +116,7 @@ COMMAND_HANDLERS = {
     "set-reference": command_set_reference,
     "inspect": command_inspect,
     "train": command_train,
+    "production": command_production,
     "create-project": command_create_project,
     "switch-project": command_switch_project,
     "list-projects": command_list_projects,
