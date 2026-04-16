@@ -79,6 +79,9 @@ OPTIONAL_FLOAT_FIELDS = {
     "inspection.min_anomaly_score",
 }
 
+COMPACT_LAYOUT_MAX_WIDTH = 1100
+COMPACT_LAYOUT_MAX_HEIGHT = 700
+
 
 def read_json_file(file_path: Path) -> dict:
     if not file_path.exists():
@@ -217,6 +220,11 @@ def describe_preview_image(preview_path: Path) -> str:
     return "latest sample"
 
 
+def should_use_compact_layout(screen_width: int, screen_height: int) -> bool:
+    """Return True when the screen is too small for the full dashboard layout."""
+    return screen_width < COMPACT_LAYOUT_MAX_WIDTH or screen_height < COMPACT_LAYOUT_MAX_HEIGHT
+
+
 def should_close_dashboard_on_launch(mode: str) -> bool:
     """Return whether dashboard should close after launching a tool."""
     return mode in {"project-manager"}
@@ -228,6 +236,7 @@ class OperatorDashboard:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Beacon Inspection Dashboard")
+        self.compact_layout = should_use_compact_layout(self.root.winfo_screenwidth(), self.root.winfo_screenheight())
         self._configure_window_size()
 
         self.operation_running = False
@@ -260,20 +269,35 @@ class OperatorDashboard:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        main = ttk.Frame(self.root, padding=14)
+        main_padding = 10 if self.compact_layout else 14
+        main = ttk.Frame(self.root, padding=main_padding)
         main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=5, uniform="top_panels")
-        main.columnconfigure(1, weight=4, uniform="top_panels")
-        main.rowconfigure(1, weight=1)
-        main.rowconfigure(2, weight=2)
+        main.columnconfigure(0, weight=1)
+        if not self.compact_layout:
+            main.columnconfigure(1, weight=4, uniform="top_panels")
+            main.columnconfigure(0, weight=5, uniform="top_panels")
+            main.rowconfigure(1, weight=1)
+            main.rowconfigure(2, weight=2)
+        else:
+            main.rowconfigure(2, weight=1)
 
         header = ttk.Frame(main)
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         header.columnconfigure(0, weight=1)
 
-        ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        header_font = ("Segoe UI", 15 if self.compact_layout else 18, "bold")
+        ttk.Label(header, text="Beacon Operator Dashboard", font=header_font).grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
 
+        if self.compact_layout:
+            self._build_compact_layout(main)
+        else:
+            self._build_standard_layout(main)
+
+        status_bar = ttk.Label(self.root, textvariable=self.current_project_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.grid(row=1, column=0, sticky="ew")
+
+    def _build_standard_layout(self, main: ttk.Frame) -> None:
         ops_frame = ttk.LabelFrame(main, text="Operations", padding=12)
         ops_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
         ops_frame.columnconfigure(0, weight=1)
@@ -299,17 +323,43 @@ class OperatorDashboard:
         self._build_console(output_frame)
         self._build_insights_panel(insights_frame)
 
-        status_bar = ttk.Label(self.root, textvariable=self.current_project_var, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.grid(row=1, column=0, sticky="ew")
+    def _build_compact_layout(self, main: ttk.Frame) -> None:
+        ops_frame = ttk.LabelFrame(main, text="Operations", padding=10)
+        ops_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        ops_frame.columnconfigure(0, weight=1)
+        ops_frame.columnconfigure(1, weight=1)
+        self._build_operations_panel(ops_frame)
+
+        notebook = ttk.Notebook(main)
+        notebook.grid(row=2, column=0, sticky="nsew")
+
+        project_frame = ttk.Frame(notebook, padding=8)
+        project_frame.columnconfigure(0, weight=1)
+        project_frame.columnconfigure(1, weight=1)
+        self._build_project_panel(project_frame)
+
+        output_frame = ttk.Frame(notebook, padding=8)
+        output_frame.columnconfigure(0, weight=1)
+        output_frame.rowconfigure(0, weight=1)
+        self._build_console(output_frame)
+
+        insights_frame = ttk.Frame(notebook, padding=8)
+        insights_frame.columnconfigure(0, weight=1)
+        insights_frame.rowconfigure(2, weight=1)
+        self._build_insights_panel(insights_frame)
+
+        notebook.add(project_frame, text="Projects")
+        notebook.add(output_frame, text="Console")
+        notebook.add(insights_frame, text="Insights")
 
     def _build_operations_panel(self, parent: ttk.LabelFrame) -> None:
         info = ttk.Frame(parent)
-        info.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        info.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8 if self.compact_layout else 12))
         info.columnconfigure(0, weight=1)
 
-        ttk.Label(info, textvariable=self.active_config_var).grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_reference_var).grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_log_var).grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(info, textvariable=self.active_config_var).grid(row=0, column=0, sticky="w", pady=1)
+        ttk.Label(info, textvariable=self.active_reference_var).grid(row=1, column=0, sticky="w", pady=1)
+        ttk.Label(info, textvariable=self.active_log_var).grid(row=2, column=0, sticky="w", pady=1)
 
         self.capture_button = ttk.Button(parent, text="Capture Only", command=lambda: self.run_command("capture"))
         self.capture_button.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=6)
@@ -340,12 +390,13 @@ class OperatorDashboard:
         ttk.Label(
             parent,
             text="Project creation, rename, delete, export, and import live in Project Manager.",
-            wraplength=320,
+            wraplength=520 if self.compact_layout else 320,
             justify="left",
         ).grid(row=4, column=0, sticky="w")
 
     def _build_console(self, parent: ttk.LabelFrame) -> None:
-        self.console = tk.Text(parent, wrap="word", height=18, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
+        console_height = 12 if self.compact_layout else 18
+        self.console = tk.Text(parent, wrap="word", height=console_height, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
         self.console.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.console.yview)
@@ -376,7 +427,7 @@ class OperatorDashboard:
             ttk.Label(metrics, textvariable=self.summary_vars[key]).grid(row=row, column=column + 1, sticky="w", pady=2)
 
         ttk.Label(parent, text="Recent log activity").grid(row=1, column=0, sticky="w", pady=(12, 6))
-        self.recent_logs = tk.Listbox(parent, height=12)
+        self.recent_logs = tk.Listbox(parent, height=8 if self.compact_layout else 12)
         self.recent_logs.grid(row=2, column=0, sticky="nsew")
 
         buttons = ttk.Frame(parent)

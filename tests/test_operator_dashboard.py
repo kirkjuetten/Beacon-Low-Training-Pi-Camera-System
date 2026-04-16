@@ -12,6 +12,7 @@ from inspection_system.app.operator_dashboard import (
     find_preview_image,
     get_nested_config_value,
     parse_config_value,
+    should_use_compact_layout,
     should_close_dashboard_on_launch,
 )
 
@@ -234,6 +235,12 @@ def test_should_close_dashboard_on_launch_policy() -> None:
     assert should_close_dashboard_on_launch("config-editor") is False
     assert should_close_dashboard_on_launch("train") is False
     assert should_close_dashboard_on_launch("capture") is False
+
+
+def test_should_use_compact_layout_for_small_pi_screens() -> None:
+    assert should_use_compact_layout(800, 480) is True
+    assert should_use_compact_layout(1024, 600) is True
+    assert should_use_compact_layout(1280, 720) is False
 
 
 def test_describe_preview_image_categories() -> None:
