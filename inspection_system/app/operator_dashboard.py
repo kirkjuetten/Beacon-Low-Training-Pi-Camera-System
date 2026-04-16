@@ -313,22 +313,20 @@ class OperatorDashboard:
 
         self.capture_button = ttk.Button(parent, text="Capture Only", command=lambda: self.run_command("capture"))
         self.capture_button.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.reference_button = ttk.Button(parent, text="Set Reference", command=lambda: self.run_command("set-reference"))
-        self.reference_button.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.inspect_button = ttk.Button(parent, text="Inspect Part", command=lambda: self.run_command("inspect"))
-        self.inspect_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.inspect_button.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.production_button = ttk.Button(parent, text="Launch Production", command=self.launch_production)
-        self.production_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.production_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.training_button = ttk.Button(parent, text="Launch Training", command=self.launch_training)
-        self.training_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.training_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.config_editor_button = ttk.Button(parent, text="Open Config + Preview", command=self.launch_config_editor)
-        self.config_editor_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.config_editor_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
-        self.project_manager_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.project_manager_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
-        self.refresh_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.refresh_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
-        self.exit_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=6)
+        self.exit_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -338,18 +336,13 @@ class OperatorDashboard:
         self.project_combo.grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
         ttk.Button(parent, text="Switch to Selected Project", command=self.switch_selected_project).grid(row=2, column=0, sticky="ew", pady=3)
-        ttk.Button(parent, text="Delete Selected Project", command=self.delete_selected_project).grid(row=3, column=0, sticky="ew", pady=3)
-        ttk.Button(parent, text="Export Selected Project", command=self.export_selected_project).grid(row=4, column=0, sticky="ew", pady=3)
-        ttk.Button(parent, text="Import Project from ZIP", command=self.import_project_from_zip).grid(row=5, column=0, sticky="ew", pady=3)
-
-        ttk.Separator(parent, orient="horizontal").grid(row=6, column=0, sticky="ew", pady=12)
-
-        ttk.Label(parent, text="Create project").grid(row=7, column=0, sticky="w")
-        ttk.Label(parent, text="Name").grid(row=8, column=0, sticky="w")
-        ttk.Entry(parent, textvariable=self.new_project_name_var).grid(row=9, column=0, sticky="ew", pady=(2, 8))
-        ttk.Label(parent, text="Description").grid(row=10, column=0, sticky="w")
-        ttk.Entry(parent, textvariable=self.new_project_desc_var).grid(row=11, column=0, sticky="ew", pady=(2, 8))
-        ttk.Button(parent, text="Create Project", command=self.create_project_from_form).grid(row=12, column=0, sticky="ew")
+        ttk.Separator(parent, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=12)
+        ttk.Label(
+            parent,
+            text="Project creation, rename, delete, export, and import live in Project Manager.",
+            wraplength=320,
+            justify="left",
+        ).grid(row=4, column=0, sticky="w")
 
     def _build_console(self, parent: ttk.LabelFrame) -> None:
         self.console = tk.Text(parent, wrap="word", height=18, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
@@ -410,7 +403,6 @@ class OperatorDashboard:
         state = "disabled" if busy else "normal"
         for button in [
             self.capture_button,
-            self.reference_button,
             self.inspect_button,
             self.production_button,
             self.training_button,

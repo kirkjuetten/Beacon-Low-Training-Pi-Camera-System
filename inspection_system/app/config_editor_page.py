@@ -28,6 +28,7 @@ from inspection_system.app.operator_dashboard import (
     read_json_file,
     write_json_file,
 )
+from inspection_system.app.reference_service import set_reference
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_TUNING_DOC = REPO_ROOT / "docs" / "CONFIG_TUNING.md"
@@ -400,10 +401,13 @@ class ConfigEditorPage:
         preview_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         preview_buttons.columnconfigure(0, weight=1)
         preview_buttons.columnconfigure(1, weight=1)
+        preview_buttons.columnconfigure(2, weight=1)
         self.capture_button = ttk.Button(preview_buttons, text="Capture", command=self.capture_live_preview)
         self.capture_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         self.stored_button = ttk.Button(preview_buttons, text="Stored", command=self.show_stored_preview)
-        self.stored_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.stored_button.grid(row=0, column=1, sticky="ew", padx=4)
+        self.set_reference_button = ttk.Button(preview_buttons, text="Set Reference", command=self.set_reference_from_config)
+        self.set_reference_button.grid(row=0, column=2, sticky="ew", padx=(4, 0))
 
         config = ttk.LabelFrame(main, text="Config Editor", padding=10)
         config.grid(row=1, column=1, sticky="nsew")
@@ -491,6 +495,7 @@ class ConfigEditorPage:
         state = "disabled" if busy else "normal"
         for button in [
             self.capture_button,
+            self.set_reference_button,
             self.reload_button,
             self.back_button,
             self.roi_button,
@@ -619,6 +624,29 @@ class ConfigEditorPage:
         self.set_busy(True, "Capturing live preview...")
         thread = threading.Thread(target=self._capture_live_preview_thread, daemon=True)
         thread.start()
+
+    def set_reference_from_config(self) -> None:
+        if self.busy:
+            return
+        self.set_busy(True, "Capturing reference using saved config...")
+        thread = threading.Thread(target=self._set_reference_thread, daemon=True)
+        thread.start()
+
+    def _set_reference_thread(self) -> None:
+        active_paths = get_active_runtime_paths()
+        config = read_json_file(active_paths["config_file"])
+        result_code = set_reference(config)
+
+        def finish() -> None:
+            if result_code == 0:
+                self.set_busy(False, "Reference saved")
+                self.display_mode = "stored"
+                self.refresh_view()
+            else:
+                self.set_busy(False, f"Set reference failed (exit {result_code})")
+                self.refresh_view()
+
+        self.root.after(0, finish)
 
     def _capture_live_preview_thread(self) -> None:
         active_paths = get_active_runtime_paths()
