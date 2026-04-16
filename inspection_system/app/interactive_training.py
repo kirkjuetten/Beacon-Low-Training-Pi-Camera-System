@@ -35,17 +35,26 @@ from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.reference_service import (
+    activate_anomaly_training_sample,
     activate_reference_candidate,
     clear_reference_variants,
+    clear_anomaly_training_artifacts,
+    discard_anomaly_training_sample,
     discard_reference_candidate,
     list_runtime_reference_candidates,
     save_debug_outputs,
     bake_reference_mask,
     save_reference_metadata,
+    stage_anomaly_training_sample_from_image,
     stage_reference_candidate_from_image,
+    train_anomaly_model_from_samples,
     check_reference_settings_match,
 )
-from inspection_system.app.runtime_controller import get_inspection_runtime_warnings, load_anomaly_detector
+from inspection_system.app.runtime_controller import (
+    format_operator_mode_lines,
+    get_inspection_runtime_warnings,
+    load_anomaly_detector,
+)
 
 
 TRAINING_DATA_SCHEMA_VERSION = 2
@@ -405,6 +414,8 @@ class InspectionDisplay:
         if 'anomaly_score' in details:
             metrics.append(f"Anomaly Score: {details['anomaly_score']:.4f}")
         metrics.append(f"Alignment profile: {details.get('alignment_profile', 'balanced')}")
+        for line in details.get('operator_mode_lines', []) or []:
+            metrics.append(line)
 
         y = area.y
         line_height = self.small_font.get_linesize() + 2
@@ -794,6 +805,7 @@ class InspectionDisplay:
         suggestions: dict,
         review_warnings: Optional[List[str]] = None,
         learned_range_lines: Optional[List[str]] = None,
+        mode_lines: Optional[List[str]] = None,
     ) -> str:
         """Pause training and ask operator how to handle pending learning data."""
         defer_color = (70, 130, 220)
@@ -816,6 +828,10 @@ class InspectionDisplay:
                 f"Pending labels: {summary.get('total', 0)}",
                 f"Approved: {summary.get('approve', 0)}   Rejected: {summary.get('reject', 0)}   Review: {summary.get('review', 0)}",
             ]
+
+            if mode_lines:
+                lines.append("Project mode:")
+                lines.extend([f"  - {line}" for line in mode_lines])
 
             if suggestions:
                 lines.append("Suggested updates:")
@@ -1078,6 +1094,12 @@ class ThresholdTrainer:
         if 'reference_candidate_state' not in record:
             record['reference_candidate_state'] = None
             changed = True
+        if 'anomaly_sample_id' not in record:
+            record['anomaly_sample_id'] = None
+            changed = True
+        if 'anomaly_sample_state' not in record:
+            record['anomaly_sample_state'] = None
+            changed = True
         return changed
 
     @staticmethod
@@ -1115,6 +1137,8 @@ class ThresholdTrainer:
             'config_fingerprint': self._build_config_fingerprint(),
             'reference_candidate_id': None,
             'reference_candidate_state': None,
+            'anomaly_sample_id': None,
+            'anomaly_sample_state': None,
             'metrics': {
                 'required_coverage': details.get('required_coverage', 0),
                 'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
@@ -1147,6 +1171,16 @@ class ThresholdTrainer:
             if staged_ok:
                 record['reference_candidate_id'] = staged_result['reference_id']
                 record['reference_candidate_state'] = staged_result['state']
+        if final_class == 'good' and image_path is not None:
+            sample_ok, sample_result = stage_anomaly_training_sample_from_image(
+                current_config,
+                image_path,
+                label=f"Approved Good Sample {len(self.training_data) + 1}",
+                source_record_id=record_id,
+            )
+            if sample_ok:
+                record['anomaly_sample_id'] = sample_result['sample_id']
+                record['anomaly_sample_state'] = sample_result['state']
         self.training_data.append(record)
         self.save_training_data()
 
@@ -1162,6 +1196,16 @@ class ThresholdTrainer:
 
     def get_pending_records(self) -> list[dict]:
         return [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
+
+    def get_pending_good_records(self) -> list[dict]:
+        return [record for record in self.get_pending_records() if self._resolve_learning_class(record) == 'good']
+
+    def get_pending_anomaly_sample_count(self) -> int:
+        return sum(
+            1
+            for record in self.get_pending_good_records()
+            if record.get('anomaly_sample_id') and record.get('anomaly_sample_state') == 'pending'
+        )
 
     @staticmethod
     def _round_learning_value(value) -> float:
@@ -1320,6 +1364,13 @@ class ThresholdTrainer:
                 f"{reject_passes} reject-labeled pending examples still pass the current thresholds. Config may be too loose or the reference may not fit the project."
             )
 
+        inspection_mode = normalize_inspection_mode(inspection_cfg.get('inspection_mode', 'mask_only'))
+        pending_anomaly_samples = self.get_pending_anomaly_sample_count()
+        if inspection_mode in {'mask_and_ml', 'full'} and pending_anomaly_samples:
+            warnings.append(
+                f"{pending_anomaly_samples} approved-good samples are pending anomaly-model rebuild. Press Update to refresh ML gating."
+            )
+
         return warnings
 
     def commit_pending_feedback(self) -> int:
@@ -1334,6 +1385,11 @@ class ThresholdTrainer:
                     if not activate_reference_candidate(candidate_id):
                         continue
                     record['reference_candidate_state'] = 'active'
+                sample_id = record.get('anomaly_sample_id')
+                sample_state = record.get('anomaly_sample_state')
+                if sample_id and sample_state == 'pending' and learning_class == 'good':
+                    if activate_anomaly_training_sample(sample_id):
+                        record['anomaly_sample_state'] = 'active'
                 record['learning_state'] = 'committed'
                 updated += 1
         if updated:
@@ -1350,6 +1406,11 @@ class ThresholdTrainer:
                 if candidate_id and candidate_state == 'pending':
                     discard_reference_candidate(candidate_id, state='pending')
                     record['reference_candidate_state'] = 'discarded'
+                sample_id = record.get('anomaly_sample_id')
+                sample_state = record.get('anomaly_sample_state')
+                if sample_id and sample_state == 'pending':
+                    discard_anomaly_training_sample(sample_id, state='pending')
+                    record['anomaly_sample_state'] = 'discarded'
                 record['learning_state'] = 'discarded'
                 updated += 1
         if updated:
@@ -1439,6 +1500,9 @@ class ThresholdTrainer:
             'learned_ranges_changed': learned_ranges_changed and bool(learned_ranges),
         }
 
+    def rebuild_anomaly_model(self, config: dict) -> dict:
+        return train_anomaly_model_from_samples(config)
+
     def apply_suggestions(self, config: dict, suggestions: dict) -> dict:
         """Persist suggested threshold changes and update the in-memory config."""
         if not suggestions:
@@ -1487,6 +1551,7 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         cv2.imwrite(str(ref_mask_path), mask)
         cv2.imwrite(str(ref_image_path), roi_image)
         clear_reference_variants(active_paths)
+        clear_anomaly_training_artifacts(active_paths)
         save_reference_metadata(config)
         return True, f"Reference saved ({feature_pixels} feature pixels)"
     except Exception as exc:
@@ -1545,7 +1610,7 @@ def run_interactive_training(config: dict) -> int:
     reference_candidates = list_runtime_reference_candidates(config, active_paths)
 
     anomaly_detector = load_anomaly_detector(active_paths)
-    for warning in get_inspection_runtime_warnings(config, anomaly_detector):
+    for warning in get_inspection_runtime_warnings(config, anomaly_detector, active_paths):
         print(f"Warning: {warning}")
 
     # Initialize logger
@@ -1556,15 +1621,13 @@ def run_interactive_training(config: dict) -> int:
     display = InspectionDisplay()
     trainer = ThresholdTrainer(active_paths["config_file"], logger)
     display.set_alignment_profile_label(config.get("alignment", {}).get("tolerance_profile", "balanced"))
-    mode_warnings = get_inspection_runtime_warnings(config, anomaly_detector)
-
     def build_review_warnings() -> list[str]:
         settings_match, reference_warning = check_reference_settings_match(config)
         if settings_match:
             reference_warning = None
         warnings = trainer.get_training_review_warnings(
             config,
-            runtime_warnings=mode_warnings,
+            runtime_warnings=get_inspection_runtime_warnings(config, anomaly_detector, active_paths),
             reference_warning=reference_warning,
         )
         return warnings
@@ -1696,6 +1759,7 @@ def run_interactive_training(config: dict) -> int:
                     continue
 
                 # Display result and get feedback
+                details['operator_mode_lines'] = format_operator_mode_lines(config, active_paths, anomaly_detector)
                 feedback, ready_to_capture = display.display_inspection(
                     image_path,
                     passed,
@@ -1767,6 +1831,7 @@ def run_interactive_training(config: dict) -> int:
                             suggestions,
                             review_warnings,
                             learned_range_lines,
+                            format_operator_mode_lines(config, active_paths, anomaly_detector),
                         )
                         if action in {'quit', 'home'}:
                             print("Returning to dashboard/home.")
@@ -1777,21 +1842,37 @@ def run_interactive_training(config: dict) -> int:
                             discarded = trainer.discard_pending_feedback()
                             print(f"Discarded {discarded} pending training records.")
                         elif action == 'update':
-                            if not suggestions and not learned_ranges:
+                            if not suggestions and not learned_ranges and trainer.get_pending_anomaly_sample_count() == 0:
                                 print("No learned updates to apply yet; continuing with current settings.")
                             else:
-                                applied = trainer.apply_learning_update(config, suggestions, learned_ranges)
-                                if applied['threshold_updates'] or applied['learned_ranges_changed']:
-                                    committed = trainer.commit_pending_feedback()
-                                    if applied['threshold_updates']:
-                                        print("Applied threshold updates:")
-                                    for key, value in applied['threshold_updates'].items():
-                                        print(f"  {key}: {value:.4f}")
-                                    if applied['learned_ranges_saved']:
-                                        print(f"Saved learned ranges for {len(learned_ranges)} metrics.")
-                                    print(f"Committed {committed} training records.")
+                                if suggestions or learned_ranges:
+                                    applied = trainer.apply_learning_update(config, suggestions, learned_ranges)
                                 else:
-                                    print("No learning changes were applied.")
+                                    applied = {
+                                        'threshold_updates': {},
+                                        'learned_ranges_saved': False,
+                                        'learned_ranges_changed': False,
+                                    }
+
+                                committed = trainer.commit_pending_feedback()
+                                model_result = trainer.rebuild_anomaly_model(config)
+                                anomaly_detector = load_anomaly_detector(active_paths)
+
+                                if applied['threshold_updates']:
+                                    print("Applied threshold updates:")
+                                for key, value in applied['threshold_updates'].items():
+                                    print(f"  {key}: {value:.4f}")
+                                if applied['learned_ranges_saved']:
+                                    print(f"Saved learned ranges for {len(learned_ranges)} metrics.")
+                                if committed:
+                                    print(f"Committed {committed} training records.")
+                                if model_result.get('rebuilt'):
+                                    print(
+                                        "Rebuilt anomaly model from "
+                                        f"{model_result['trained_sample_count']} approved-good samples."
+                                    )
+                                elif model_result.get('reason'):
+                                    print(model_result['reason'])
 
             finally:
                 cleanup_temp_image()

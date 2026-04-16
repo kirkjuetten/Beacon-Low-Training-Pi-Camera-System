@@ -8,6 +8,12 @@ from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_tem
 from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
+from inspection_system.app.reference_service import (
+    MIN_ANOMALY_TRAINING_SAMPLES,
+    get_anomaly_model_artifact_paths,
+    get_anomaly_model_metadata,
+    list_anomaly_training_samples,
+)
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
 from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
@@ -17,6 +23,7 @@ from inspection_system.app.camera_interface import import_cv2_and_numpy, get_act
 
 def load_anomaly_detector(active_paths: dict):
     model_path = Path(active_paths["reference_dir"]) / "anomaly_model.pkl"
+    model_path = get_anomaly_model_artifact_paths(active_paths)["model"]
     if not model_path.exists():
         return None
 
@@ -29,13 +36,86 @@ def load_anomaly_detector(active_paths: dict):
         return None
 
 
-def get_inspection_runtime_warnings(config: dict, anomaly_detector: Optional[AnomalyDetector]) -> list[str]:
+def get_anomaly_model_status(
+    config: dict,
+    anomaly_detector: Optional[AnomalyDetector],
+    active_paths: Optional[dict] = None,
+) -> dict:
+    inspection_cfg = config.get("inspection", {})
+    inspection_mode = normalize_inspection_mode(inspection_cfg.get("inspection_mode", "mask_only"))
+    status = {
+        "inspection_mode": inspection_mode,
+        "ml_mode_selected": inspection_mode in {"mask_and_ml", "full"},
+        "active_good_samples": 0,
+        "pending_good_samples": 0,
+        "minimum_required_samples": MIN_ANOMALY_TRAINING_SAMPLES,
+        "model_path": None,
+        "model_exists": False,
+        "trained_sample_count": None,
+        "model_stale": False,
+        "ready": False,
+    }
+
+    if active_paths is None:
+        status["model_exists"] = anomaly_detector is not None
+        status["ready"] = anomaly_detector is not None
+        return status
+
+    artifact_paths = get_anomaly_model_artifact_paths(active_paths)
+    metadata = get_anomaly_model_metadata(active_paths) or {}
+    active_samples = list_anomaly_training_samples(active_paths, states=("active",))
+    pending_samples = list_anomaly_training_samples(active_paths, states=("pending",))
+
+    trained_sample_count = metadata.get("trained_sample_count")
+    if trained_sample_count is not None:
+        trained_sample_count = int(trained_sample_count)
+
+    model_exists = artifact_paths["model"].exists()
+    model_stale = False
+    if model_exists and trained_sample_count is not None:
+        model_stale = trained_sample_count != len(active_samples)
+
+    status.update(
+        {
+            "active_good_samples": len(active_samples),
+            "pending_good_samples": len(pending_samples),
+            "model_path": str(artifact_paths["model"]),
+            "model_exists": model_exists,
+            "trained_sample_count": trained_sample_count,
+            "model_stale": model_stale,
+            "ready": (
+                model_exists
+                and anomaly_detector is not None
+                and len(active_samples) >= MIN_ANOMALY_TRAINING_SAMPLES
+                and not model_stale
+            ),
+        }
+    )
+    return status
+
+
+def get_inspection_runtime_warnings(
+    config: dict,
+    anomaly_detector: Optional[AnomalyDetector],
+    active_paths: Optional[dict] = None,
+) -> list[str]:
     inspection_cfg = config.get("inspection", {})
     inspection_mode = normalize_inspection_mode(inspection_cfg.get("inspection_mode", "mask_only"))
     warnings: list[str] = []
+    anomaly_status = get_anomaly_model_status(config, anomaly_detector, active_paths)
 
     if inspection_mode in {"mask_and_ml", "full"}:
-        if anomaly_detector is None:
+        if active_paths is not None and anomaly_status["active_good_samples"] < anomaly_status["minimum_required_samples"]:
+            warnings.append(
+                "ML-backed mode is selected but there are not enough approved-good samples to train the anomaly model. "
+                f"Committed good samples: {anomaly_status['active_good_samples']}/{anomaly_status['minimum_required_samples']}."
+            )
+        elif active_paths is not None and anomaly_status["model_stale"]:
+            warnings.append(
+                "ML-backed mode is selected but the anomaly model is stale for the current approved-good sample library. "
+                "Press Update in training to rebuild it."
+            )
+        elif anomaly_detector is None:
             warnings.append(
                 "ML-backed mode is selected but no trained anomaly model is available. The anomaly check will not be enforced."
             )
@@ -45,6 +125,37 @@ def get_inspection_runtime_warnings(config: dict, anomaly_detector: Optional[Ano
             )
 
     return warnings
+
+
+def format_operator_mode_lines(
+    config: dict,
+    active_paths: Optional[dict] = None,
+    anomaly_detector: Optional[AnomalyDetector] = None,
+) -> list[str]:
+    inspection_cfg = config.get("inspection", {})
+    inspection_mode = normalize_inspection_mode(inspection_cfg.get("inspection_mode", "mask_only"))
+    reference_strategy = str(inspection_cfg.get("reference_strategy", "golden_only")).strip().lower() or "golden_only"
+    blend_mode = str(inspection_cfg.get("blend_mode", "hard_only")).strip().lower() or "hard_only"
+    tolerance_mode = str(inspection_cfg.get("tolerance_mode", "balanced")).strip().lower() or "balanced"
+    lines = [
+        f"Mode: {inspection_mode} | Ref: {reference_strategy}",
+        f"Blend: {blend_mode} | Tol: {tolerance_mode}",
+    ]
+
+    if active_paths is not None:
+        reference_count = len(list_runtime_reference_candidates(config, active_paths))
+        lines[0] = f"Mode: {inspection_mode} | Ref: {reference_strategy} ({reference_count})"
+        anomaly_status = get_anomaly_model_status(config, anomaly_detector, active_paths)
+        if anomaly_status["ml_mode_selected"]:
+            if anomaly_status["ready"]:
+                lines.append(f"ML: ready ({anomaly_status['active_good_samples']} approved-good samples)")
+            else:
+                lines.append(
+                    "ML: "
+                    f"{anomaly_status['active_good_samples']}/{anomaly_status['minimum_required_samples']} approved-good samples"
+                )
+
+    return lines
 
 
 def print_inspection_runtime_warnings(config: dict, anomaly_detector: Optional[AnomalyDetector]) -> list[str]:
@@ -148,7 +259,8 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
     try:
         active_paths = get_active_runtime_paths()
         anomaly_detector = load_anomaly_detector(active_paths)
-        print_inspection_runtime_warnings(config, anomaly_detector)
+        for warning in get_inspection_runtime_warnings(config, anomaly_detector, active_paths):
+            print(f"Warning: {warning}")
         reference_candidates = list_runtime_reference_candidates(config, active_paths)
         if not reference_candidates:
             print("No active runtime references are available. Capture a golden reference first.")

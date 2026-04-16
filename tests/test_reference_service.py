@@ -1,4 +1,12 @@
-from inspection_system.app.reference_service import check_reference_settings_match, list_runtime_reference_candidates
+import json
+
+import inspection_system.app.reference_service as reference_service
+from inspection_system.app.reference_service import (
+    check_reference_settings_match,
+    list_runtime_reference_candidates,
+    list_anomaly_training_samples,
+    train_anomaly_model_from_samples,
+)
 
 
 def test_check_reference_settings_match_reports_context_mismatches(monkeypatch) -> None:
@@ -106,3 +114,78 @@ def test_list_runtime_reference_candidates_multi_good_prefers_active_variants(tm
     )
 
     assert [candidate['reference_id'] for candidate in candidates] == ['good_ref_2']
+
+
+def test_list_anomaly_training_samples_reads_active_entries(tmp_path) -> None:
+    reference_dir = tmp_path / 'reference'
+    sample_dir = reference_dir / 'anomaly_good_library' / 'active' / 'sample_a'
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    (sample_dir / 'sample_meta.json').write_text(
+        json.dumps(
+            {
+                'sample_asset': {'sample_id': 'sample_a', 'label': 'Approved Good A'},
+                'features': [0.1, 0.2, 0.3],
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    entries = list_anomaly_training_samples({'reference_dir': reference_dir}, states=('active',))
+
+    assert len(entries) == 1
+    assert entries[0]['sample_id'] == 'sample_a'
+    assert entries[0]['features'] == [0.1, 0.2, 0.3]
+
+
+def test_train_anomaly_model_from_samples_requires_minimum_good_samples(tmp_path) -> None:
+    reference_dir = tmp_path / 'reference'
+    active_dir = reference_dir / 'anomaly_good_library' / 'active'
+    for index in range(2):
+        sample_dir = active_dir / f'sample_{index}'
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        (sample_dir / 'sample_meta.json').write_text(
+            json.dumps({'sample_asset': {'sample_id': f'sample_{index}'}, 'features': [0.1, 0.2, 0.3]}),
+            encoding='utf-8',
+        )
+
+    result = train_anomaly_model_from_samples({'inspection': {}}, {'reference_dir': reference_dir}, minimum_samples=3)
+
+    assert result['rebuilt'] is False
+    assert 'Need at least 3 approved-good samples' in result['reason']
+    assert not (reference_dir / 'anomaly_model.pkl').exists()
+
+
+def test_train_anomaly_model_from_samples_persists_model_and_metadata(tmp_path, monkeypatch) -> None:
+    reference_dir = tmp_path / 'reference'
+    active_dir = reference_dir / 'anomaly_good_library' / 'active'
+    for index in range(3):
+        sample_dir = active_dir / f'sample_{index}'
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        (sample_dir / 'sample_meta.json').write_text(
+            json.dumps({'sample_asset': {'sample_id': f'sample_{index}'}, 'features': [0.1, 0.2, 0.3]}),
+            encoding='utf-8',
+        )
+
+    class FakeDetector:
+        def __init__(self, model_path):
+            self.model_path = model_path
+            self.trained_rows = None
+
+        def train(self, features_list):
+            self.trained_rows = features_list
+
+        def save_model(self):
+            self.model_path.write_bytes(b'model')
+
+    monkeypatch.setattr(reference_service, 'AnomalyDetector', FakeDetector)
+
+    result = train_anomaly_model_from_samples(
+        {'inspection': {'inspection_mode': 'mask_and_ml'}},
+        {'reference_dir': reference_dir},
+        minimum_samples=3,
+    )
+
+    assert result['rebuilt'] is True
+    assert (reference_dir / 'anomaly_model.pkl').exists()
+    metadata = json.loads((reference_dir / 'anomaly_model_meta.json').read_text(encoding='utf-8'))
+    assert metadata['trained_sample_count'] == 3

@@ -249,12 +249,18 @@ def test_record_feedback_stages_candidate_for_approved_good_when_multi_reference
     image_path = tmp_path / "sample.png"
     image_path.write_bytes(b"img")
     captured = {}
+    anomaly_captured = {}
 
     def fake_stage_reference_candidate_from_image(config, source_image_path, **kwargs):
         captured['image_path'] = source_image_path
         return True, {'reference_id': 'candidate_123', 'state': 'pending'}
 
+    def fake_stage_anomaly_training_sample_from_image(config, source_image_path, **kwargs):
+        anomaly_captured['image_path'] = source_image_path
+        return True, {'sample_id': 'sample_123', 'state': 'pending'}
+
     monkeypatch.setattr(interactive_training, 'stage_reference_candidate_from_image', fake_stage_reference_candidate_from_image)
+    monkeypatch.setattr(interactive_training, 'stage_anomaly_training_sample_from_image', fake_stage_anomaly_training_sample_from_image)
 
     trainer.record_feedback(
         {
@@ -267,9 +273,12 @@ def test_record_feedback_stages_candidate_for_approved_good_when_multi_reference
     )
 
     assert captured['image_path'] == image_path
+    assert anomaly_captured['image_path'] == image_path
     saved_training = json.loads((config_path.parent / "training_data.json").read_text(encoding="utf-8"))
     assert saved_training[0]["reference_candidate_id"] == "candidate_123"
     assert saved_training[0]["reference_candidate_state"] == "pending"
+    assert saved_training[0]["anomaly_sample_id"] == "sample_123"
+    assert saved_training[0]["anomaly_sample_state"] == "pending"
 
 
 def test_commit_and_discard_pending_feedback_manage_candidate_reference_state(tmp_path, monkeypatch) -> None:
@@ -290,6 +299,8 @@ def test_commit_and_discard_pending_feedback_manage_candidate_reference_state(tm
             'config_fingerprint': {},
             'reference_candidate_id': 'candidate_1',
             'reference_candidate_state': 'pending',
+            'anomaly_sample_id': 'sample_1',
+            'anomaly_sample_state': 'pending',
             'metrics': {'required_coverage': 0.95},
         },
         {
@@ -304,29 +315,59 @@ def test_commit_and_discard_pending_feedback_manage_candidate_reference_state(tm
             'config_fingerprint': {},
             'reference_candidate_id': 'candidate_2',
             'reference_candidate_state': 'pending',
+            'anomaly_sample_id': 'sample_2',
+            'anomaly_sample_state': 'pending',
             'metrics': {'required_coverage': 0.94},
         },
     ]
 
     activated = []
     discarded = []
+    activated_samples = []
+    discarded_samples = []
     monkeypatch.setattr(interactive_training, 'activate_reference_candidate', lambda candidate_id: activated.append(candidate_id) or True)
     monkeypatch.setattr(interactive_training, 'discard_reference_candidate', lambda candidate_id, state='pending': discarded.append((candidate_id, state)) or True)
+    monkeypatch.setattr(interactive_training, 'activate_anomaly_training_sample', lambda sample_id: activated_samples.append(sample_id) or True)
+    monkeypatch.setattr(interactive_training, 'discard_anomaly_training_sample', lambda sample_id, state='pending': discarded_samples.append((sample_id, state)) or True)
 
     committed = trainer.commit_pending_feedback()
     assert committed == 2
     assert activated == ['candidate_1', 'candidate_2']
+    assert activated_samples == ['sample_1', 'sample_2']
     assert all(record['reference_candidate_state'] == 'active' for record in trainer.training_data)
+    assert all(record['anomaly_sample_state'] == 'active' for record in trainer.training_data)
 
     for record in trainer.training_data:
         record['learning_state'] = 'pending'
         record['reference_candidate_state'] = 'pending'
+        record['anomaly_sample_state'] = 'pending'
 
     discarded_count = trainer.discard_pending_feedback()
     assert discarded_count == 2
     assert discarded == [('candidate_1', 'pending'), ('candidate_2', 'pending')]
+    assert discarded_samples == [('sample_1', 'pending'), ('sample_2', 'pending')]
     assert all(record['reference_candidate_state'] == 'discarded' for record in trainer.training_data)
+    assert all(record['anomaly_sample_state'] == 'discarded' for record in trainer.training_data)
     assert trainer.training_data[1]["defect_category"] is None
+
+
+def test_rebuild_anomaly_model_delegates_to_reference_service(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(json.dumps({"inspection": {}}, indent=2) + "\n", encoding="utf-8")
+
+    trainer = ThresholdTrainer(config_path)
+    called = {}
+
+    def fake_train_anomaly_model_from_samples(config):
+        called['config'] = config
+        return {'rebuilt': True, 'trained_sample_count': 8}
+
+    monkeypatch.setattr(interactive_training, 'train_anomaly_model_from_samples', fake_train_anomaly_model_from_samples)
+
+    result = trainer.rebuild_anomaly_model({'inspection': {'inspection_mode': 'mask_and_ml'}})
+
+    assert called['config']['inspection']['inspection_mode'] == 'mask_and_ml'
+    assert result['rebuilt'] is True
 
 
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:

@@ -22,7 +22,11 @@ from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
-from inspection_system.app.runtime_controller import get_inspection_runtime_warnings, load_anomaly_detector
+from inspection_system.app.runtime_controller import (
+    format_operator_mode_lines,
+    get_inspection_runtime_warnings,
+    load_anomaly_detector,
+)
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 
@@ -526,6 +530,7 @@ class ProductionDisplay:
         source_surface: Optional[pygame.Surface],
         processed_surface: Optional[pygame.Surface],
         status_message: str,
+        mode_lines: Optional[list[str]] = None,
     ) -> None:
         self._reflow_layout()
         self.screen.fill(self.BLACK)
@@ -583,6 +588,15 @@ class ProductionDisplay:
                 line_surface = self.font.render(wrapped_line, True, self.WHITE)
                 self.screen.blit(line_surface, (detail_rect.x + 14, y))
                 y += self.font.get_linesize() + 4
+
+        if mode_lines:
+            y += 6
+            for line in mode_lines:
+                wrapped = self._wrap_lines(line, self.small_font, detail_rect.width - 24)
+                for wrapped_line in wrapped:
+                    line_surface = self.small_font.render(wrapped_line, True, self.YELLOW)
+                    self.screen.blit(line_surface, (detail_rect.x + 14, y))
+                    y += self.small_font.get_linesize() + 2
 
         self.draw_buttons()
         pygame.display.flip()
@@ -658,14 +672,15 @@ def run_production_mode(config: dict, indicator) -> int:
     status_message = "Ready. Press MANUAL INSPECT to inspect the next part."
     session.display_mode = str(config.get("inspection", {}).get("image_display_mode", "raw")).strip().lower() or "raw"
     anomaly_detector = load_anomaly_detector(active_paths)
-    mode_warnings = get_inspection_runtime_warnings(config, anomaly_detector)
+    mode_warnings = get_inspection_runtime_warnings(config, anomaly_detector, active_paths)
+    mode_lines = format_operator_mode_lines(config, active_paths, anomaly_detector)
     if mode_warnings:
         for warning in mode_warnings:
             print(f"Warning: {warning}")
         status_message = f"Warning: {mode_warnings[0]}"
 
     try:
-        display.render(session, source_surface, processed_surface, status_message)
+        display.render(session, source_surface, processed_surface, status_message, mode_lines)
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -675,7 +690,7 @@ def run_production_mode(config: dict, indicator) -> int:
                 if event.type == pygame.VIDEORESIZE:
                     new_width, new_height = display.clamp_window_size(event.w, event.h)
                     display.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
-                    display.render(session, source_surface, processed_surface, status_message)
+                    display.render(session, source_surface, processed_surface, status_message, mode_lines)
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     pos = event.pos
                     if display.buttons["manual_inspect"].collidepoint(pos):
@@ -685,7 +700,7 @@ def run_production_mode(config: dict, indicator) -> int:
                             source_surface = None
                             processed_surface = None
                             status_message = f"Inspection error: {error_message}"
-                            display.render(session, source_surface, processed_surface, status_message)
+                            display.render(session, source_surface, processed_surface, status_message, mode_lines)
                             continue
 
                         assert outcome is not None
@@ -706,15 +721,15 @@ def run_production_mode(config: dict, indicator) -> int:
                         reason_label = REASON_LABELS.get(outcome.primary_reason, "-") if outcome.primary_reason else "-"
                         status_message = f"Last result: {outcome.banner_text} | Reason: {reason_label}"
                         cleanup_temp_image()
-                        display.render(session, source_surface, processed_surface, status_message)
+                        display.render(session, source_surface, processed_surface, status_message, mode_lines)
                     elif display.buttons["reset_run"].collidepoint(pos):
                         session.run_totals.reset()
                         status_message = "Run totals reset. Shift totals preserved."
-                        display.render(session, source_surface, processed_surface, status_message)
+                        display.render(session, source_surface, processed_surface, status_message, mode_lines)
                     elif display.buttons["reset_shift"].collidepoint(pos):
                         session.shift_totals.reset()
                         status_message = "Shift totals reset. Run totals preserved."
-                        display.render(session, source_surface, processed_surface, status_message)
+                        display.render(session, source_surface, processed_surface, status_message, mode_lines)
                     elif display.buttons["home"].collidepoint(pos):
                         return 0
 

@@ -76,6 +76,8 @@ These are active only if the selected inspection mode includes them and a value 
 - Purpose: Minimum anomaly model score.
 - Higher value: Stricter anomaly acceptance.
 - Requires: a trained `anomaly_model.pkl` for the active project. If no model exists, ML-backed modes warn and the anomaly gate cannot be enforced.
+- Build path: in Training, collect approved-good parts and press `Update`. The system now stores approved-good samples per project and rebuilds the anomaly model when enough committed good samples exist.
+- Minimum data: ML model rebuild requires at least 8 committed approved-good samples for the active project.
 
 ## Workflow / Diagnostics
 
@@ -101,8 +103,9 @@ These are active only if the selected inspection mode includes them and a value 
 4. Tune `min_required_coverage` and `max_outside_allowed_ratio`.
 5. Tune `min_section_coverage` for local defect sensitivity.
 6. Enable `mask_and_ssim` when appearance similarity should be part of the pass/fail decision.
-7. Enable `mask_and_ml` only after the project has a trained anomaly model and a configured `min_anomaly_score`.
-8. Use `full` when you want both appearance gates and anomaly gating together.
+7. In Training, approve a representative set of good parts and press `Update` until the project has at least 8 committed approved-good samples.
+8. Enable `mask_and_ml` only after the project has a trained anomaly model and a configured `min_anomaly_score`.
+9. Use `full` when you want both appearance gates and anomaly gating together.
 
 ## Quick Symptoms and Fixes
 
