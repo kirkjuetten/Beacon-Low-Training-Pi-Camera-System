@@ -274,19 +274,15 @@ def load_anomaly_detector(active_paths: dict):
 
 
 class ProductionDisplay:
-    MIN_WIDTH = 900
-    MIN_HEIGHT = 620
+    MIN_WIDTH = 640
+    MIN_HEIGHT = 420
 
     def __init__(self, width: int = 1280, height: int = 800):
         if not PYGAME_AVAILABLE:
             raise ImportError("pygame is required for production display. Install with: pip install pygame")
 
         pygame.init()
-        display_info = pygame.display.Info()
-        max_width = max(self.MIN_WIDTH, display_info.current_w - 40)
-        max_height = max(self.MIN_HEIGHT, display_info.current_h - 80)
-        initial_width = min(max(width, self.MIN_WIDTH), max_width)
-        initial_height = min(max(height, self.MIN_HEIGHT), max_height)
+        initial_width, initial_height = self.clamp_window_size(width, height)
 
         self.screen = pygame.display.set_mode((initial_width, initial_height), pygame.RESIZABLE)
         pygame.display.set_caption("Beacon Production Inspection")
@@ -318,23 +314,37 @@ class ProductionDisplay:
     def _clamp(value: int, lower: int, upper: int) -> int:
         return max(lower, min(value, upper))
 
+    def _window_bounds(self) -> tuple[int, int, int, int]:
+        display_info = pygame.display.Info()
+        max_width = max(480, display_info.current_w - 24)
+        max_height = max(360, display_info.current_h - 56)
+        min_width = min(self.MIN_WIDTH, max_width)
+        min_height = min(self.MIN_HEIGHT, max_height)
+        return min_width, min_height, max_width, max_height
+
+    def clamp_window_size(self, width: int, height: int) -> tuple[int, int]:
+        min_width, min_height, max_width, max_height = self._window_bounds()
+        clamped_width = max(min_width, min(width, max_width))
+        clamped_height = max(min_height, min(height, max_height))
+        return clamped_width, clamped_height
+
     def _update_fonts(self) -> None:
         _, height = self.screen.get_size()
-        base_size = self._clamp(int(height * 0.035), 22, 34)
-        small_size = self._clamp(int(height * 0.026), 16, 24)
-        large_size = self._clamp(int(height * 0.07), 46, 72)
+        base_size = self._clamp(int(height * 0.035), 18, 34)
+        small_size = self._clamp(int(height * 0.026), 14, 24)
+        large_size = self._clamp(int(height * 0.07), 36, 72)
         self.font = pygame.font.Font(None, base_size)
         self.small_font = pygame.font.Font(None, small_size)
         self.large_font = pygame.font.Font(None, large_size)
 
     def _reflow_layout(self) -> None:
         width, height = self.screen.get_size()
-        pad = self._clamp(int(height * 0.018), 10, 20)
-        banner_h = self._clamp(int(height * 0.13), 74, 120)
-        controls_h = self._clamp(int(height * 0.12), 72, 120)
+        pad = self._clamp(int(height * 0.018), 6, 20)
+        banner_h = self._clamp(int(height * 0.13), 54, 120)
+        controls_h = self._clamp(int(height * 0.12), 58, 120)
         content_h = height - banner_h - controls_h - pad * 4
-        sidebar_w = self._clamp(int(width * 0.29), 280, 430)
-        detail_h = self._clamp(int(content_h * 0.24), 120, 210)
+        sidebar_w = self._clamp(int(width * 0.29), 200, 430)
+        detail_h = self._clamp(int(content_h * 0.24), 84, 210)
 
         banner_rect = pygame.Rect(pad, pad, width - pad * 2, banner_h)
         sidebar_rect = pygame.Rect(pad, banner_rect.bottom + pad, sidebar_w, content_h)
@@ -360,7 +370,7 @@ class ProductionDisplay:
 
     def _layout_buttons(self, controls_rect: pygame.Rect) -> None:
         gap = self._clamp(int(controls_rect.width * 0.015), 10, 22)
-        pad = self._clamp(int(controls_rect.height * 0.18), 10, 18)
+        pad = self._clamp(int(controls_rect.height * 0.16), 6, 18)
         button_h = controls_rect.height - pad * 2
         button_defs = [
             ("manual_inspect", 0.42),
@@ -460,20 +470,38 @@ class ProductionDisplay:
         title_surface = self.font.render(title, True, self.WHITE)
         self.screen.blit(title_surface, (rect.x + 14, rect.y + 12))
 
+        compact = rect.height < 170
+        y = rect.y + title_surface.get_height() + 16
+        line_height = self.small_font.get_linesize() + 3
+
+        if compact:
+            totals_line = f"T:{scope.total}  G:{scope.good}  R:{scope.reject}  V:{scope.review}"
+            totals_surface = self.small_font.render(totals_line, True, self.WHITE)
+            self.screen.blit(totals_surface, (rect.x + 14, y))
+            y += line_height + 2
+
+            reason_pairs = [
+                f"Miss:{scope.reject_reasons.get(REASON_MISSING_PRINT, 0)}  Extra:{scope.reject_reasons.get(REASON_EXTRA_PRINT, 0)}",
+                f"Uneven:{scope.reject_reasons.get(REASON_UNEVEN_PRINT, 0)}  Match:{scope.reject_reasons.get(REASON_REFERENCE_MISMATCH, 0)}",
+            ]
+            for row in reason_pairs:
+                line = self.small_font.render(row, True, self.WHITE)
+                self.screen.blit(line, (rect.x + 14, y))
+                y += line_height
+            return
+
         rows = [
             f"Total: {scope.total}",
             f"Good: {scope.good}",
             f"Reject: {scope.reject}",
             f"Review: {scope.review}",
         ]
-        y = rect.y + title_surface.get_height() + 20
-        line_height = self.small_font.get_linesize() + 4
         for row in rows:
             line = self.small_font.render(row, True, self.WHITE)
             self.screen.blit(line, (rect.x + 16, y))
             y += line_height
 
-        y += 6
+        y += 4
         subtitle = self.small_font.render("Reject reasons", True, self.YELLOW)
         self.screen.blit(subtitle, (rect.x + 16, y))
         y += line_height
@@ -652,8 +680,7 @@ def run_production_mode(config: dict, indicator) -> int:
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     return 0
                 if event.type == pygame.VIDEORESIZE:
-                    new_width = max(event.w, display.MIN_WIDTH)
-                    new_height = max(event.h, display.MIN_HEIGHT)
+                    new_width, new_height = display.clamp_window_size(event.w, event.h)
                     display.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
                     display.render(session, source_surface, processed_surface, status_message)
                 if event.type == pygame.MOUSEBUTTONDOWN:
