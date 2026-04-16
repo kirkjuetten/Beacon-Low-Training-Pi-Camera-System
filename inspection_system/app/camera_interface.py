@@ -35,6 +35,16 @@ def _set_global_runtime_paths(project_info: Dict) -> None:
     REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
 
 
+def _resolve_project_registry_key(registry: Dict, project_name: str) -> Optional[str]:
+    normalized_name = str(project_name).strip()
+    if normalized_name in registry["projects"]:
+        return normalized_name
+    for existing_name in registry["projects"]:
+        if str(existing_name).strip() == normalized_name:
+            return existing_name
+    return None
+
+
 def _deep_merge_defaults(defaults, config):
     if isinstance(defaults, dict) and isinstance(config, dict):
         merged = {}
@@ -287,21 +297,27 @@ def list_projects() -> List[Dict]:
 def delete_project(project_name: str) -> bool:
     """Delete a project and all its files."""
     registry = get_project_registry()
+    resolved_project_name = _resolve_project_registry_key(registry, project_name)
 
-    if project_name not in registry["projects"]:
-        print(f"Project '{project_name}' does not exist.")
+    if resolved_project_name is None:
+        print(f"Project '{str(project_name).strip()}' does not exist.")
         return False
 
-    deleting_current = registry.get("current_project") == project_name
+    deleting_current = registry.get("current_project") == resolved_project_name
 
     # Remove project directory
-    project_dir = PROJECTS_DIR / project_name
+    project_info = registry["projects"][resolved_project_name]
+    project_dir = Path(project_info.get("config_file", PROJECTS_DIR / resolved_project_name)).parent.parent
     if project_dir.exists():
         import shutil
-        shutil.rmtree(project_dir)
+        try:
+            shutil.rmtree(project_dir)
+        except Exception as exc:
+            print(f"Failed to delete project '{resolved_project_name}': {exc}")
+            return False
 
     # Remove from registry
-    del registry["projects"][project_name]
+    del registry["projects"][resolved_project_name]
 
     if deleting_current:
         remaining_projects = sorted(registry["projects"])
@@ -315,7 +331,7 @@ def delete_project(project_name: str) -> bool:
 
     save_project_registry(registry)
 
-    print(f"Deleted project '{project_name}'")
+    print(f"Deleted project '{resolved_project_name}'")
     return True
 
 

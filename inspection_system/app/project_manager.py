@@ -238,7 +238,7 @@ class ProjectManagerGUI:
             return
 
         item = self.tree.item(selection[0])
-        project_name = item['values'][0]
+        project_name = str(item['values'][0]).strip()
 
         if messagebox.askyesno("Confirm Delete",
                               f"Are you sure you want to delete project '{project_name}'?\n\n"

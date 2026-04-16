@@ -241,3 +241,64 @@ def test_delete_last_active_project_clears_current_project(monkeypatch, tmp_path
     assert registry["current_project"] is None
     assert camera_interface.CONFIG_FILE == tmp_path / "config" / "camera_config.json"
     assert (tmp_path / "projects" / "solo").exists() is False
+
+
+def test_delete_project_accepts_whitespace_padded_name(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+    monkeypatch.setattr(camera_interface, "REFERENCE_MASK", tmp_path / "reference" / "golden_reference_mask.png")
+    monkeypatch.setattr(camera_interface, "REFERENCE_IMAGE", tmp_path / "reference" / "golden_reference_image.png")
+
+    camera_interface.ensure_directories()
+    assert camera_interface.create_project("5036", "pad print") is True
+
+    assert camera_interface.delete_project(" 5036 ") is True
+
+    registry = camera_interface.get_project_registry()
+    assert "5036" not in registry["projects"]
+    assert (tmp_path / "projects" / "5036").exists() is False
+
+
+def test_delete_project_uses_registry_config_path_to_find_project_dir(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(camera_interface, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(camera_interface, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(camera_interface, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(camera_interface, "REFERENCE_DIR", tmp_path / "reference")
+    monkeypatch.setattr(camera_interface, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(camera_interface, "PROJECTS_DIR", tmp_path / "projects")
+    monkeypatch.setattr(camera_interface, "CONFIG_FILE", tmp_path / "config" / "camera_config.json")
+    monkeypatch.setattr(camera_interface, "REFERENCE_MASK", tmp_path / "reference" / "golden_reference_mask.png")
+    monkeypatch.setattr(camera_interface, "REFERENCE_IMAGE", tmp_path / "reference" / "golden_reference_image.png")
+
+    camera_interface.ensure_directories()
+
+    actual_project_dir = tmp_path / "projects" / "5036"
+    (actual_project_dir / "config").mkdir(parents=True, exist_ok=True)
+    (actual_project_dir / "reference").mkdir(parents=True, exist_ok=True)
+    (actual_project_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (actual_project_dir / "config" / "camera_config.json").write_text("{}\n", encoding="utf-8")
+
+    registry = {
+        "current_project": None,
+        "projects": {
+            "5036": {
+                "description": "pad print",
+                "created": "2026-04-16 12:00:00",
+                "config_file": str(actual_project_dir / "config" / "camera_config.json"),
+                "reference_dir": str(actual_project_dir / "reference"),
+                "log_dir": str(actual_project_dir / "logs"),
+            }
+        },
+    }
+    (tmp_path / "config" / "projects.json").write_text(
+        __import__("json").dumps(registry, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    assert camera_interface.delete_project("5036") is True
+    assert actual_project_dir.exists() is False
