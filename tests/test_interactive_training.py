@@ -271,6 +271,100 @@ def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:
     assert suggestions["max_section_center_offset_px"] == 0.7
 
 
+def test_suggest_thresholds_can_loosen_lower_is_better_geometry_thresholds(tmp_path) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "inspection": {
+                    "max_mean_edge_distance_px": 0.35,
+                    "max_section_edge_distance_px": 0.45,
+                    "max_section_width_delta_ratio": 0.03,
+                    "max_section_center_offset_px": 0.25,
+                }
+            },
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    trainer = ThresholdTrainer(config_path)
+    trainer.training_data = []
+    for index, edge_distance in enumerate([0.4, 0.5, 0.6, 0.55, 0.45], start=1):
+        trainer.training_data.append(
+            {
+                "schema_version": 2,
+                "record_id": f"feedback_{index}",
+                "timestamp": float(index),
+                "feedback": "approve",
+                "final_class": "good",
+                "defect_category": None,
+                "classification_reason": None,
+                "learning_state": "pending",
+                "config_fingerprint": trainer._build_config_fingerprint(),
+                "reference_candidate_id": None,
+                "reference_candidate_state": None,
+                "anomaly_sample_id": None,
+                "anomaly_sample_state": None,
+                "metrics": {
+                    "required_coverage": 0.95,
+                    "outside_allowed_ratio": 0.01,
+                    "min_section_coverage": 0.9,
+                    "mean_edge_distance_px": edge_distance,
+                    "worst_section_edge_distance_px": edge_distance + 0.2,
+                    "worst_section_width_delta_ratio": round(edge_distance / 10.0, 3),
+                    "worst_section_center_offset_px": round(edge_distance + 0.1, 3),
+                },
+            }
+        )
+
+    suggestions = trainer.suggest_thresholds()
+
+    assert suggestions["max_mean_edge_distance_px"] == 0.6
+    assert suggestions["max_section_edge_distance_px"] == 0.8
+    assert suggestions["max_section_width_delta_ratio"] == 0.06
+    assert suggestions["max_section_center_offset_px"] == 0.7
+
+
+def test_suggest_thresholds_uses_committed_learning_records(tmp_path) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(
+        json.dumps({"inspection": {"max_section_center_offset_px": 0.2}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    trainer = ThresholdTrainer(config_path)
+    trainer.training_data = []
+    for index, center_offset in enumerate([0.3, 0.35, 0.4, 0.45, 0.5], start=1):
+        trainer.training_data.append(
+            {
+                "schema_version": 2,
+                "record_id": f"feedback_{index}",
+                "timestamp": float(index),
+                "feedback": "approve",
+                "final_class": "good",
+                "defect_category": None,
+                "classification_reason": None,
+                "learning_state": "committed",
+                "config_fingerprint": trainer._build_config_fingerprint(),
+                "reference_candidate_id": None,
+                "reference_candidate_state": None,
+                "anomaly_sample_id": None,
+                "anomaly_sample_state": None,
+                "metrics": {
+                    "required_coverage": 0.95,
+                    "outside_allowed_ratio": 0.01,
+                    "min_section_coverage": 0.9,
+                    "worst_section_center_offset_px": center_offset,
+                },
+            }
+        )
+
+    suggestions = trainer.suggest_thresholds()
+
+    assert suggestions["max_section_center_offset_px"] == 0.5
+
+
 def test_load_training_data_backfills_schema_for_legacy_records(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config_path.write_text(json.dumps({"inspection": {}}, indent=2) + "\n", encoding="utf-8")

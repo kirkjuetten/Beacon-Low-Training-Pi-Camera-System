@@ -58,6 +58,7 @@ from inspection_system.app.runtime_controller import (
 
 
 TRAINING_DATA_SCHEMA_VERSION = 2
+MIN_LEARNING_SUGGESTION_RECORDS = 5
 LEARNED_RANGE_DIRECTIONS = {
     'required_coverage': 'higher_is_better',
     'outside_allowed_ratio': 'lower_is_better',
@@ -1287,6 +1288,13 @@ class ThresholdTrainer:
     def get_pending_records(self) -> list[dict]:
         return [r for r in self.training_data if r.get('learning_state', 'committed') == 'pending']
 
+    def get_learning_records(self) -> list[dict]:
+        return [
+            record
+            for record in self.training_data
+            if record.get('learning_state', 'committed') in {'pending', 'committed'}
+        ]
+
     def get_pending_good_records(self) -> list[dict]:
         return [record for record in self.get_pending_records() if self._resolve_learning_class(record) == 'good']
 
@@ -1302,7 +1310,7 @@ class ThresholdTrainer:
         return round(float(value), 4)
 
     def extract_learned_ranges(self, records: Optional[list[dict]] = None) -> dict:
-        source_records = records if records is not None else self.get_pending_records()
+        source_records = records if records is not None else self.get_learning_records()
         good_records = [r for r in source_records if self._resolve_learning_class(r) == 'good']
         reject_records = [r for r in source_records if self._resolve_learning_class(r) == 'reject']
         learned_ranges: dict[str, dict] = {}
@@ -1378,7 +1386,7 @@ class ThresholdTrainer:
             reject_min = learned_metric.get('reject_min')
             if reject_min is not None and good_ceiling < float(reject_min):
                 suggested = (good_ceiling + float(reject_min)) / 2.0
-            elif current_value is None or float(current_value) > good_ceiling:
+            elif current_value is None or float(current_value) != good_ceiling:
                 suggested = good_ceiling
 
         if suggested is None:
@@ -1537,8 +1545,8 @@ class ThresholdTrainer:
 
     def suggest_thresholds(self) -> dict:
         """Analyze training data and suggest new thresholds."""
-        learning_records = self.get_pending_records()
-        if len(learning_records) < 10:
+        learning_records = self.get_learning_records()
+        if len(learning_records) < MIN_LEARNING_SUGGESTION_RECORDS:
             return {}  # Need more data
 
         learned_ranges = self.extract_learned_ranges(learning_records)
