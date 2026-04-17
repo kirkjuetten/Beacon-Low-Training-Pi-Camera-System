@@ -261,6 +261,7 @@ def clear_anomaly_training_artifacts(active_paths: Optional[dict] = None) -> Non
 def stage_reference_candidate_from_image(
     config: dict,
     image_path: Path,
+    active_paths: Optional[dict] = None,
     *,
     label: Optional[str] = None,
     source_record_id: Optional[str] = None,
@@ -269,8 +270,8 @@ def stage_reference_candidate_from_image(
     if error_msg:
         return False, error_msg
 
-    active_paths = get_active_runtime_paths()
-    variant_dirs = get_reference_variant_directories(active_paths)
+    runtime_paths = active_paths or get_active_runtime_paths()
+    variant_dirs = get_reference_variant_directories(runtime_paths)
     variant_dirs["pending"].mkdir(parents=True, exist_ok=True)
 
     reference_id = _sanitize_reference_id(source_record_id or f"candidate_{int(time.time() * 1000)}")
@@ -319,6 +320,7 @@ def stage_reference_candidate_from_image(
 def stage_anomaly_training_sample_from_image(
     config: dict,
     image_path: Path,
+    active_paths: Optional[dict] = None,
     *,
     label: Optional[str] = None,
     source_record_id: Optional[str] = None,
@@ -327,8 +329,8 @@ def stage_anomaly_training_sample_from_image(
     if error_msg:
         return False, error_msg
 
-    active_paths = get_active_runtime_paths()
-    training_dirs = get_anomaly_training_directories(active_paths)
+    runtime_paths = active_paths or get_active_runtime_paths()
+    training_dirs = get_anomaly_training_directories(runtime_paths)
     training_dirs["pending"].mkdir(parents=True, exist_ok=True)
 
     sample_id = _sanitize_reference_id(source_record_id or f"anomaly_good_{int(time.time() * 1000)}")

@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 
@@ -163,6 +164,46 @@ def test_build_dashboard_hint_text_reports_inactive_edge_gate() -> None:
     assert "set Max Section Edge Distance" in hint
     assert "set Max Section Width Drift" in hint
     assert "set Max Section Center Offset" in hint
+
+
+def test_build_dashboard_hint_text_includes_commissioning_status_when_runtime_paths_are_available(tmp_path) -> None:
+    reference_dir = tmp_path / "reference"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    config_file = tmp_path / "camera_config.json"
+    config_file.write_text(json.dumps({"inspection": {}}, indent=2) + "\n", encoding="utf-8")
+    (reference_dir / "reference_mask.png").write_bytes(b"mask")
+    (reference_dir / "golden_reference_image.png").write_bytes(b"image")
+    (tmp_path / "training_data.json").write_text(
+        json.dumps([
+            {"feedback": "approve", "final_class": "good", "learning_state": "committed"},
+            {"feedback": "approve", "final_class": "good", "learning_state": "pending"},
+        ], indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    hint = build_dashboard_hint_text(
+        {
+            "inspection": {
+                "reference_strategy": "golden_only",
+                "max_mean_edge_distance_px": None,
+                "max_section_edge_distance_px": None,
+                "max_section_width_delta_ratio": None,
+                "max_section_center_offset_px": None,
+            }
+        },
+        {
+            "config_file": config_file,
+            "reference_dir": reference_dir,
+            "reference_mask": reference_dir / "reference_mask.png",
+            "reference_image": reference_dir / "golden_reference_image.png",
+        },
+    )
+
+    assert "Workflow: Stage 3/5 - Baseline Build" in hint
+    assert "Instruction: Load known-good part. More good examples needed: 9 of 10 remaining." in hint
+    assert "Commissioning: NOT READY | golden ok | good 1/10" in hint
+    assert "Next: Press Update to commit 1 pending approved-good parts." in hint
+    assert "Edge Gates: global off | section off" in hint
 
 
 def test_dropdown_options_cover_expected_fixed_choice_fields() -> None:

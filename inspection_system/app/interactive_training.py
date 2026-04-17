@@ -885,6 +885,7 @@ class InspectionDisplay:
         """Pause training and ask operator how to handle pending learning data."""
         defer_color = (70, 130, 220)
         discard_color = self.RED
+        reset_color = (180, 90, 30)
         update_color = self.GREEN
         home_color = self.GRAY
 
@@ -924,7 +925,9 @@ class InspectionDisplay:
                 for warning in review_warnings:
                     lines.append(f"  - {warning}")
 
-            lines.append("Choose action: Defer keeps collecting, Discard drops pending learning data, Update applies now.")
+            lines.append(
+                "Choose action: Defer keeps collecting, Discard drops pending items, Reset clears learned training state, Update applies now."
+            )
 
             y = pad + title.get_height() + 10
             line_height = self.small_font.get_linesize() + 3
@@ -936,19 +939,21 @@ class InspectionDisplay:
             button_h = self._clamp(int(height * 0.08), 42, 64)
             button_w = self._clamp(int(width * 0.20), 140, 280)
             gap = self._clamp(int(width * 0.02), 10, 28)
-            total_w = button_w * 4 + gap * 3
+            total_w = button_w * 5 + gap * 4
             start_x = (width - total_w) // 2
             btn_y = height - button_h - pad
 
             button_rects.clear()
             button_rects["defer"] = pygame.Rect(start_x, btn_y, button_w, button_h)
             button_rects["discard"] = pygame.Rect(start_x + (button_w + gap), btn_y, button_w, button_h)
-            button_rects["update"] = pygame.Rect(start_x + (button_w + gap) * 2, btn_y, button_w, button_h)
-            button_rects["home"] = pygame.Rect(start_x + (button_w + gap) * 3, btn_y, button_w, button_h)
+            button_rects["reset"] = pygame.Rect(start_x + (button_w + gap) * 2, btn_y, button_w, button_h)
+            button_rects["update"] = pygame.Rect(start_x + (button_w + gap) * 3, btn_y, button_w, button_h)
+            button_rects["home"] = pygame.Rect(start_x + (button_w + gap) * 4, btn_y, button_w, button_h)
 
             labels = {
                 "defer": ("DEFER", defer_color),
                 "discard": ("DISCARD", discard_color),
+                "reset": ("RESET", reset_color),
                 "update": ("UPDATE", update_color),
                 "home": ("HOME", home_color),
             }
@@ -1087,9 +1092,10 @@ class TrainingLogger:
 class ThresholdTrainer:
     """Manages threshold adjustment based on human feedback."""
 
-    def __init__(self, config_path: Path, logger: Optional[TrainingLogger] = None):
+    def __init__(self, config_path: Path, logger: Optional[TrainingLogger] = None, active_paths: Optional[dict] = None):
         self.config_path = config_path
         self.logger = logger
+        self.active_paths = active_paths
         self.training_data = []
         self.load_training_data()
 
@@ -1253,22 +1259,40 @@ class ThresholdTrainer:
             and image_path is not None
             and reference_strategy in {'hybrid', 'multi_good_experimental'}
         ):
-            staged_ok, staged_result = stage_reference_candidate_from_image(
-                current_config,
-                image_path,
-                label=f"Approved Good {len(self.training_data) + 1}",
-                source_record_id=record_id,
-            )
+            if self.active_paths is None:
+                staged_ok, staged_result = stage_reference_candidate_from_image(
+                    current_config,
+                    image_path,
+                    label=f"Approved Good {len(self.training_data) + 1}",
+                    source_record_id=record_id,
+                )
+            else:
+                staged_ok, staged_result = stage_reference_candidate_from_image(
+                    current_config,
+                    image_path,
+                    active_paths=self.active_paths,
+                    label=f"Approved Good {len(self.training_data) + 1}",
+                    source_record_id=record_id,
+                )
             if staged_ok:
                 record['reference_candidate_id'] = staged_result['reference_id']
                 record['reference_candidate_state'] = staged_result['state']
         if final_class == 'good' and image_path is not None:
-            sample_ok, sample_result = stage_anomaly_training_sample_from_image(
-                current_config,
-                image_path,
-                label=f"Approved Good Sample {len(self.training_data) + 1}",
-                source_record_id=record_id,
-            )
+            if self.active_paths is None:
+                sample_ok, sample_result = stage_anomaly_training_sample_from_image(
+                    current_config,
+                    image_path,
+                    label=f"Approved Good Sample {len(self.training_data) + 1}",
+                    source_record_id=record_id,
+                )
+            else:
+                sample_ok, sample_result = stage_anomaly_training_sample_from_image(
+                    current_config,
+                    image_path,
+                    active_paths=self.active_paths,
+                    label=f"Approved Good Sample {len(self.training_data) + 1}",
+                    source_record_id=record_id,
+                )
             if sample_ok:
                 record['anomaly_sample_id'] = sample_result['sample_id']
                 record['anomaly_sample_state'] = sample_result['state']
@@ -1508,13 +1532,21 @@ class ThresholdTrainer:
                 candidate_state = record.get('reference_candidate_state')
                 learning_class = self._resolve_learning_class(record)
                 if candidate_id and candidate_state == 'pending' and learning_class == 'good':
-                    if not activate_reference_candidate(candidate_id):
+                    if self.active_paths is None:
+                        activated = activate_reference_candidate(candidate_id)
+                    else:
+                        activated = activate_reference_candidate(candidate_id, active_paths=self.active_paths)
+                    if not activated:
                         continue
                     record['reference_candidate_state'] = 'active'
                 sample_id = record.get('anomaly_sample_id')
                 sample_state = record.get('anomaly_sample_state')
                 if sample_id and sample_state == 'pending' and learning_class == 'good':
-                    if activate_anomaly_training_sample(sample_id):
+                    if self.active_paths is None:
+                        activated_sample = activate_anomaly_training_sample(sample_id)
+                    else:
+                        activated_sample = activate_anomaly_training_sample(sample_id, active_paths=self.active_paths)
+                    if activated_sample:
                         record['anomaly_sample_state'] = 'active'
                 record['learning_state'] = 'committed'
                 updated += 1
@@ -1530,18 +1562,71 @@ class ThresholdTrainer:
                 candidate_id = record.get('reference_candidate_id')
                 candidate_state = record.get('reference_candidate_state')
                 if candidate_id and candidate_state == 'pending':
-                    discard_reference_candidate(candidate_id, state='pending')
+                    if self.active_paths is None:
+                        discard_reference_candidate(candidate_id, state='pending')
+                    else:
+                        discard_reference_candidate(candidate_id, active_paths=self.active_paths, state='pending')
                     record['reference_candidate_state'] = 'discarded'
                 sample_id = record.get('anomaly_sample_id')
                 sample_state = record.get('anomaly_sample_state')
                 if sample_id and sample_state == 'pending':
-                    discard_anomaly_training_sample(sample_id, state='pending')
+                    if self.active_paths is None:
+                        discard_anomaly_training_sample(sample_id, state='pending')
+                    else:
+                        discard_anomaly_training_sample(sample_id, active_paths=self.active_paths, state='pending')
                     record['anomaly_sample_state'] = 'discarded'
                 record['learning_state'] = 'discarded'
                 updated += 1
         if updated:
             self.save_training_data()
         return updated
+
+    def reset_commissioning_state(self, config: dict, *, clear_reference: bool = False) -> dict:
+        """Clear learned training state so the active project can be recommissioned."""
+        active_paths = self.active_paths or get_active_runtime_paths()
+        cleared_records = len(self.training_data)
+
+        self.training_data = []
+        self.save_training_data()
+
+        clear_reference_variants(active_paths)
+        clear_anomaly_training_artifacts(active_paths)
+
+        inspection_cfg = config.setdefault('inspection', {})
+        learned_ranges_cleared = False
+        if self.config_path.exists():
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+        else:
+            file_config = config.copy()
+
+        file_inspection_cfg = file_config.setdefault('inspection', {})
+        if 'learned_ranges' in inspection_cfg:
+            inspection_cfg.pop('learned_ranges', None)
+            learned_ranges_cleared = True
+        if 'learned_ranges' in file_inspection_cfg:
+            file_inspection_cfg.pop('learned_ranges', None)
+            learned_ranges_cleared = True
+
+        reference_cleared = False
+        if clear_reference:
+            metadata_path = active_paths['reference_dir'] / 'ref_meta.json'
+            for path in [active_paths['reference_mask'], active_paths['reference_image'], metadata_path]:
+                if path.exists():
+                    path.unlink()
+                    reference_cleared = True
+
+        with open(self.config_path, 'w', encoding='utf-8') as f:
+            json.dump(file_config, f, indent=2)
+            f.write('\n')
+
+        return {
+            'cleared_records': cleared_records,
+            'learned_ranges_cleared': learned_ranges_cleared,
+            'reference_variants_cleared': True,
+            'anomaly_artifacts_cleared': True,
+            'reference_cleared': reference_cleared,
+        }
 
     def suggest_thresholds(self) -> dict:
         """Analyze training data and suggest new thresholds."""
@@ -1631,7 +1716,9 @@ class ThresholdTrainer:
         }
 
     def rebuild_anomaly_model(self, config: dict) -> dict:
-        return train_anomaly_model_from_samples(config)
+        if self.active_paths is None:
+            return train_anomaly_model_from_samples(config)
+        return train_anomaly_model_from_samples(config, active_paths=self.active_paths)
 
     def apply_suggestions(self, config: dict, suggestions: dict) -> dict:
         """Persist suggested threshold changes and update the in-memory config."""
@@ -1784,6 +1871,9 @@ def run_interactive_training(config: dict) -> int:
 
     try:
         print("Starting interactive training mode...")
+        print("Entering training workflow.")
+        for line in format_operator_mode_lines(config, active_paths, anomaly_detector):
+            print(f"  {line}")
         print("Controls:")
         print("- Green APPROVE button: Accept the sample")
         print("- Red REJECT button: Reject the sample")
@@ -1971,6 +2061,15 @@ def run_interactive_training(config: dict) -> int:
                         elif action == 'discard':
                             discarded = trainer.discard_pending_feedback()
                             print(f"Discarded {discarded} pending training records.")
+                        elif action == 'reset':
+                            reset_result = trainer.reset_commissioning_state(config)
+                            anomaly_detector = load_anomaly_detector(active_paths)
+                            print(
+                                "Reset learned training state: "
+                                f"cleared {reset_result['cleared_records']} records, cleared reference variants, and cleared anomaly artifacts."
+                            )
+                            if reset_result['learned_ranges_cleared']:
+                                print("Removed learned ranges from the project config.")
                         elif action == 'update':
                             if not suggestions and not learned_ranges and trainer.get_pending_anomaly_sample_count() == 0:
                                 print("No learned updates to apply yet; continuing with current settings.")

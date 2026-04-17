@@ -49,7 +49,13 @@ def _get_reference_image_path() -> Path:
     return Path(REFERENCE_IMAGE)
 
 
-def classify_invalid_capture(config: dict, image_path: Path) -> str | None:
+def _round_optional_float(value):
+    if value is None:
+        return None
+    return round(float(value), 6)
+
+
+def classify_invalid_capture(config: dict, image_path: Path, active_paths: dict | None = None) -> str | None:
     try:
         import cv2  # type: ignore
     except ImportError:
@@ -72,16 +78,16 @@ def classify_invalid_capture(config: dict, image_path: Path) -> str | None:
         if x < 0 or y < 0 or x + w > image.shape[1] or y + h > image.shape[0]:
             return "Configured ROI is outside image bounds."
 
-    active_paths = get_active_runtime_paths()
-    if not list_runtime_reference_candidates(config, active_paths):
+    runtime_paths = active_paths or get_active_runtime_paths()
+    if not list_runtime_reference_candidates(config, runtime_paths):
         reference_mask = _get_reference_mask_path()
         return f"Reference mask is missing: {reference_mask}"
 
     return None
 
 
-def inspect_file(config: dict, image_path: Path) -> dict:
-    invalid_reason = classify_invalid_capture(config, image_path)
+def inspect_file(config: dict, image_path: Path, active_paths: dict | None = None) -> dict:
+    invalid_reason = classify_invalid_capture(config, image_path, active_paths=active_paths)
     if invalid_reason is not None:
         return {
             "image": str(image_path),
@@ -89,9 +95,9 @@ def inspect_file(config: dict, image_path: Path) -> dict:
             "reason": invalid_reason,
         }
 
-    active_paths = get_active_runtime_paths()
-    reference_candidates = list_runtime_reference_candidates(config, active_paths)
-    anomaly_detector = load_anomaly_detector(active_paths)
+    runtime_paths = active_paths or get_active_runtime_paths()
+    reference_candidates = list_runtime_reference_candidates(config, runtime_paths)
+    anomaly_detector = load_anomaly_detector(runtime_paths)
 
     try:
         passed, details = inspect_against_references(
@@ -135,10 +141,46 @@ def inspect_file(config: dict, image_path: Path) -> dict:
         "required_coverage": round(float(details.get("required_coverage", 0.0)), 6),
         "outside_allowed_ratio": round(float(details.get("outside_allowed_ratio", 0.0)), 6),
         "min_section_coverage": round(float(details.get("min_section_coverage", 0.0)), 6),
+        "min_required_coverage": _round_optional_float(details.get("min_required_coverage")),
+        "max_outside_allowed_ratio": _round_optional_float(details.get("max_outside_allowed_ratio")),
+        "min_section_coverage_limit": _round_optional_float(details.get("min_section_coverage_limit")),
+        "effective_min_required_coverage": _round_optional_float(details.get("effective_min_required_coverage")),
+        "effective_max_outside_allowed_ratio": _round_optional_float(details.get("effective_max_outside_allowed_ratio")),
+        "effective_min_section_coverage": _round_optional_float(details.get("effective_min_section_coverage")),
         "sample_white_pixels": int(details.get("sample_white_pixels", 0)),
         "best_angle_deg": round(float(details.get("best_angle_deg", 0.0)), 6),
         "best_shift_x": int(details.get("best_shift_x", 0)),
         "best_shift_y": int(details.get("best_shift_y", 0)),
+        "mean_edge_distance_px": _round_optional_float(details.get("mean_edge_distance_px")),
+        "max_mean_edge_distance_px": _round_optional_float(details.get("max_mean_edge_distance_px")),
+        "effective_max_mean_edge_distance_px": _round_optional_float(details.get("effective_max_mean_edge_distance_px")),
+        "worst_section_edge_distance_px": _round_optional_float(details.get("worst_section_edge_distance_px")),
+        "max_section_edge_distance_px": _round_optional_float(details.get("max_section_edge_distance_px")),
+        "effective_max_section_edge_distance_px": _round_optional_float(details.get("effective_max_section_edge_distance_px")),
+        "worst_section_width_delta_ratio": _round_optional_float(details.get("worst_section_width_delta_ratio")),
+        "max_section_width_delta_ratio": _round_optional_float(details.get("max_section_width_delta_ratio")),
+        "effective_max_section_width_delta_ratio": _round_optional_float(details.get("effective_max_section_width_delta_ratio")),
+        "worst_section_center_offset_px": _round_optional_float(details.get("worst_section_center_offset_px")),
+        "max_section_center_offset_px": _round_optional_float(details.get("max_section_center_offset_px")),
+        "effective_max_section_center_offset_px": _round_optional_float(details.get("effective_max_section_center_offset_px")),
+        "ssim": _round_optional_float(details.get("ssim")),
+        "min_ssim": _round_optional_float(details.get("min_ssim")),
+        "effective_min_ssim": _round_optional_float(details.get("effective_min_ssim")),
+        "mse": _round_optional_float(details.get("mse")),
+        "max_mse": _round_optional_float(details.get("max_mse")),
+        "effective_max_mse": _round_optional_float(details.get("effective_max_mse")),
+        "anomaly_score": _round_optional_float(details.get("anomaly_score")),
+        "min_anomaly_score": _round_optional_float(details.get("min_anomaly_score")),
+        "effective_min_anomaly_score": _round_optional_float(details.get("effective_min_anomaly_score")),
+        "histogram_similarity": _round_optional_float(details.get("histogram_similarity")),
+        "inspection_mode": details.get("inspection_mode", config.get("inspection", {}).get("inspection_mode", "mask_only")),
+        "edge_distance_gate_active": bool(details.get("edge_distance_gate_active", False)),
+        "section_edge_gate_active": bool(details.get("section_edge_gate_active", False)),
+        "section_width_gate_active": bool(details.get("section_width_gate_active", False)),
+        "section_center_gate_active": bool(details.get("section_center_gate_active", False)),
+        "ssim_gate_active": bool(details.get("ssim_gate_active", False)),
+        "mse_gate_active": bool(details.get("mse_gate_active", False)),
+        "anomaly_gate_active": bool(details.get("anomaly_gate_active", False)),
     }
 
 

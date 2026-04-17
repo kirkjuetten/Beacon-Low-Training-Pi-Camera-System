@@ -140,6 +140,22 @@ python3 inspection_system/app/replay_inspection.py inspect-file samples/good/exa
 python3 inspection_system/app/replay_inspection.py inspect-folder samples/good
 ```
 
+### 6. Run a sandboxed training episode from collected test images
+
+Use the dashboard's `Collect Test Images` flow to create session folders with `captures.jsonl`, then run a local diagnostic episode without mutating the live project:
+
+```bash
+python3 -m inspection_system.app.dataset_diagnostics ./inspection_system/projects/MyProject/test_data --duplicates 3 --update-every 5
+```
+
+The runner will:
+
+- load collected session manifests under the provided path
+- replay `tuning` samples as simulated training feedback in a temporary sandbox copy of the project config and references
+- apply threshold updates and commit cycles during the episode
+- evaluate `validation` and `regression` samples afterward
+- write a JSON report with false-reject, false-accept, and invalid-capture miss rates under a `diagnostics/` folder
+
 ## Project Management
 
 The system supports multiple inspection projects, allowing you to maintain separate configurations and reference images for different products or inspection setups.

@@ -28,10 +28,13 @@ from inspection_system.app.camera_interface import (
     get_current_project,
     import_project,
     list_projects,
+    load_config,
     switch_project,
 )
+from inspection_system.app.dataset_capture import TestDataCollectorDialog
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
 from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_center_gate_status, describe_section_width_gate_status
+from inspection_system.app.runtime_controller import format_commissioning_status_lines, get_commissioning_status
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -165,11 +168,14 @@ def build_config_editor_values(config: dict) -> dict[str, str]:
     return values
 
 
-def build_dashboard_hint_text(config: dict) -> str:
+def build_dashboard_hint_text(config: dict, active_paths: Path | dict | None = None) -> str:
     edge_status_line, edge_hint = describe_edge_gate_status(config)
     width_status_line, width_hint = describe_section_width_gate_status(config)
     center_status_line, center_hint = describe_section_center_gate_status(config)
-    lines = [edge_status_line, width_status_line, center_status_line]
+    commissioning_lines = []
+    if isinstance(active_paths, dict):
+        commissioning_lines = format_commissioning_status_lines(get_commissioning_status(config, active_paths))
+    lines = commissioning_lines + [edge_status_line, width_status_line, center_status_line]
     if edge_hint:
         lines.append(edge_hint)
     if width_hint:
@@ -271,6 +277,7 @@ class OperatorDashboard:
         self._configure_window_size()
 
         self.operation_running = False
+        self.test_data_dialog = None
 
         self.status_var = tk.StringVar(value="Ready")
         self.current_project_var = tk.StringVar(value="Current project: None")
@@ -396,20 +403,20 @@ class OperatorDashboard:
 
         self.capture_button = ttk.Button(parent, text="Capture Only", command=lambda: self.run_command("capture"))
         self.capture_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.inspect_button = ttk.Button(parent, text="Inspect Part", command=lambda: self.run_command("inspect"))
-        self.inspect_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
+        self.exit_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.production_button = ttk.Button(parent, text="Launch Production", command=self.launch_production)
         self.production_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.training_button = ttk.Button(parent, text="Launch Training", command=self.launch_training)
         self.training_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.config_editor_button = ttk.Button(parent, text="Open Config + Preview", command=self.launch_config_editor)
         self.config_editor_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.test_data_button = ttk.Button(parent, text="Collect Test Images", command=self.launch_test_data_collector)
+        self.test_data_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
-        self.project_manager_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.project_manager_button.grid(row=5, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
-        self.refresh_button.grid(row=5, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
-        self.exit_button.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.refresh_button.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=6)
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -487,9 +494,9 @@ class OperatorDashboard:
         state = "disabled" if busy else "normal"
         for button in [
             self.capture_button,
-            self.inspect_button,
             self.production_button,
             self.training_button,
+            self.test_data_button,
             self.project_manager_button,
             self.config_editor_button,
             self.refresh_button,
@@ -546,6 +553,19 @@ class OperatorDashboard:
 
     def launch_config_editor(self) -> None:
         self._launch_tool("config-editor", "config + preview")
+
+    def launch_test_data_collector(self) -> None:
+        if self.operation_running:
+            messagebox.showinfo("Busy", "Wait for current operation to finish before opening test image collection.")
+            return
+        if self.test_data_dialog is not None and self.test_data_dialog.is_open():
+            self.test_data_dialog.focus()
+            return
+        self.test_data_dialog = TestDataCollectorDialog(
+            self.root,
+            config_loader=load_config,
+            active_paths_loader=get_active_runtime_paths,
+        )
 
     def _launch_tool(self, mode: str, label: str) -> None:
         try:
@@ -701,7 +721,7 @@ class OperatorDashboard:
         self.active_reference_var.set(f"Reference: {active_paths['reference_dir']}")
         self.active_log_var.set(f"Logs: {active_paths['log_dir']}")
         active_config = read_json_file(active_paths["config_file"])
-        self.edge_gate_hint_var.set(build_dashboard_hint_text(active_config))
+        self.edge_gate_hint_var.set(build_dashboard_hint_text(active_config, active_paths))
 
         projects = list_projects()
         project_names = [project["name"] for project in projects]

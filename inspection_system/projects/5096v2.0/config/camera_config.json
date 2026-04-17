@@ -1,0 +1,183 @@
+{
+  "capture": {
+    "timeout_ms": 200,
+    "awb": null,
+    "awb_gains": [
+      1.8,
+      1.8
+    ],
+    "shutter_us": 40000,
+    "gain": 0.5,
+    "width": null,
+    "height": null,
+    "rotation": 0,
+    "hflip": false,
+    "vflip": false
+  },
+  "inspection": {
+    "enabled": true,
+    "inspection_mode": "mask_only",
+    "reference_strategy": "hybrid",
+    "blend_mode": "hard_only",
+    "tolerance_mode": "balanced",
+    "roi": {
+      "x": 88,
+      "y": 149,
+      "width": 1323,
+      "height": 818
+    },
+    "threshold_mode": "otsu",
+    "threshold_value": 180,
+    "blur_kernel": 3,
+    "reference_erode_iterations": 1,
+    "reference_dilate_iterations": 1,
+    "sample_erode_iterations": 1,
+    "sample_dilate_iterations": 1,
+    "min_feature_pixels": 100,
+    "save_debug_images": true,
+    "allowed_dilate_iterations": 2,
+    "required_erode_iterations": 1,
+    "max_outside_allowed_ratio": 0.0142,
+    "min_required_coverage": 0.92,
+    "min_section_coverage": 0.0,
+    "max_mean_edge_distance_px": 4.0958,
+    "max_section_edge_distance_px": Infinity,
+    "max_section_width_delta_ratio": 1.0,
+    "max_section_center_offset_px": Infinity,
+    "section_columns": 12,
+    "min_ssim": null,
+    "max_mse": null,
+    "min_anomaly_score": null,
+    "learned_ranges": {
+      "required_coverage": {
+        "direction": "higher_is_better",
+        "good_min": 0.9706,
+        "good_max": 0.9982,
+        "good_mean": 0.9881,
+        "good_count": 7,
+        "reject_min": 0.9499,
+        "reject_max": 0.9891,
+        "reject_mean": 0.9692,
+        "reject_count": 3
+      },
+      "outside_allowed_ratio": {
+        "direction": "lower_is_better",
+        "good_min": 0.0001,
+        "good_max": 0.0142,
+        "good_mean": 0.0063,
+        "good_count": 7,
+        "reject_min": 0.0094,
+        "reject_max": 0.0327,
+        "reject_mean": 0.0234,
+        "reject_count": 3
+      },
+      "min_section_coverage": {
+        "direction": "higher_is_better",
+        "good_min": 0.0,
+        "good_max": 0.0,
+        "good_mean": 0.0,
+        "good_count": 7,
+        "reject_min": 0.0,
+        "reject_max": 0.7555,
+        "reject_mean": 0.2518,
+        "reject_count": 3
+      },
+      "mean_edge_distance_px": {
+        "direction": "lower_is_better",
+        "good_min": 0.576,
+        "good_max": 4.0958,
+        "good_mean": 2.0804,
+        "good_count": 7,
+        "reject_min": 2.4056,
+        "reject_max": 7.8351,
+        "reject_mean": 5.1428,
+        "reject_count": 3
+      },
+      "worst_section_edge_distance_px": {
+        "direction": "lower_is_better",
+        "good_min": Infinity,
+        "good_max": Infinity,
+        "good_mean": Infinity,
+        "good_count": 7,
+        "reject_min": 3.1228,
+        "reject_max": Infinity,
+        "reject_mean": Infinity,
+        "reject_count": 3
+      },
+      "worst_section_width_delta_ratio": {
+        "direction": "lower_is_better",
+        "good_min": 1.0,
+        "good_max": 1.0,
+        "good_mean": 1.0,
+        "good_count": 7,
+        "reject_min": 0.2803,
+        "reject_max": 1.0,
+        "reject_mean": 0.7601,
+        "reject_count": 3
+      },
+      "worst_section_center_offset_px": {
+        "direction": "lower_is_better",
+        "good_min": Infinity,
+        "good_max": Infinity,
+        "good_mean": Infinity,
+        "good_count": 7,
+        "reject_min": 0.848,
+        "reject_max": Infinity,
+        "reject_mean": Infinity,
+        "reject_count": 3
+      },
+      "ssim": {
+        "direction": "higher_is_better",
+        "good_min": 0.9359,
+        "good_max": 0.9637,
+        "good_mean": 0.9425,
+        "good_count": 7,
+        "reject_min": 0.9322,
+        "reject_max": 0.9362,
+        "reject_mean": 0.934,
+        "reject_count": 3
+      },
+      "mse": {
+        "direction": "lower_is_better",
+        "good_min": 3.0547,
+        "good_max": 12.7343,
+        "good_mean": 10.0368,
+        "good_count": 7,
+        "reject_min": 14.1403,
+        "reject_max": 28.9849,
+        "reject_mean": 22.7432,
+        "reject_count": 3
+      }
+    }
+  },
+  "alignment": {
+    "enabled": true,
+    "mode": "moments",
+    "tolerance_profile": "balanced",
+    "max_angle_deg": 1.0,
+    "max_shift_x": 4,
+    "max_shift_y": 3
+  },
+  "training": {
+    "early_review_parts": 25,
+    "early_review_interval": 5,
+    "steady_review_interval": 10,
+    "golden_only_min_good_samples": 10,
+    "hybrid_min_good_samples": 8,
+    "hybrid_min_active_variants": 3,
+    "multi_good_experimental_min_good_samples": 6,
+    "multi_good_experimental_min_active_variants": 6
+  },
+  "dataset_capture": {
+    "part_id": "5096v2.0",
+    "camera_setup_id": "5096v2.0_default",
+    "default_split": "tuning",
+    "auto_replay_after_capture": true
+  },
+  "indicator_led": {
+    "enabled": false,
+    "pass_gpio": 23,
+    "fail_gpio": 24,
+    "pulse_ms": 750
+  }
+}

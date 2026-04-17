@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +13,7 @@ from inspection_system.app.reference_service import (
     MIN_ANOMALY_TRAINING_SAMPLES,
     get_anomaly_model_artifact_paths,
     get_anomaly_model_metadata,
+    get_reference_variant_directories,
     list_anomaly_training_samples,
 )
 from inspection_system.app.reference_region_utils import build_reference_regions
@@ -21,6 +23,27 @@ from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
 
 
+COMMISSIONING_DEFAULTS = {
+    "golden_only": {
+        "min_good_samples": 10,
+        "min_active_variants": 0,
+        "requires_golden_reference": True,
+    },
+    "hybrid": {
+        "min_good_samples": 8,
+        "min_active_variants": 3,
+        "requires_golden_reference": True,
+    },
+    "multi_good_experimental": {
+        "min_good_samples": 6,
+        "min_active_variants": 6,
+        "requires_golden_reference": False,
+    },
+}
+
+COMMISSIONING_WORKFLOW_TOTAL_STAGES = 5
+
+
 def _optional_float(value):
     if value in {None, ""}:
         return None
@@ -28,6 +51,309 @@ def _optional_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_int(value, default: int) -> int:
+    if value in {None, ""}:
+        return default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _append_unique(lines: list[str], text: str) -> None:
+    if text and text not in lines:
+        lines.append(text)
+
+
+def _resolve_learning_class(record: dict) -> str | None:
+    final_class = record.get("final_class")
+    if final_class in {"good", "reject"}:
+        return final_class
+    feedback = str(record.get("feedback", "")).strip().lower()
+    if feedback == "approve":
+        return "good"
+    if feedback == "reject":
+        return "reject"
+    return None
+
+
+def _load_training_records(active_paths: dict) -> list[dict]:
+    config_path = active_paths.get("config_file")
+    if config_path is None:
+        return []
+
+    training_file = Path(config_path).parent / "training_data.json"
+    if not training_file.exists():
+        return []
+
+    try:
+        payload = json.loads(training_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _count_good_training_records(active_paths: dict) -> dict[str, int]:
+    counts = {
+        "committed_good_records": 0,
+        "pending_good_records": 0,
+    }
+    for record in _load_training_records(active_paths):
+        if _resolve_learning_class(record) != "good":
+            continue
+        learning_state = str(record.get("learning_state", "committed")).strip().lower()
+        if learning_state == "pending":
+            counts["pending_good_records"] += 1
+        elif learning_state != "discarded":
+            counts["committed_good_records"] += 1
+    return counts
+
+
+def _count_reference_variants(active_paths: dict, state: str) -> int:
+    variant_dirs = get_reference_variant_directories(active_paths)
+    base_dir = variant_dirs.get(state)
+    if base_dir is None or not base_dir.exists():
+        return 0
+    return sum(1 for path in base_dir.iterdir() if path.is_dir())
+
+
+def _get_commissioning_requirements(config: dict) -> dict:
+    inspection_cfg = config.get("inspection", {})
+    training_cfg = config.get("training", {})
+    reference_strategy = str(inspection_cfg.get("reference_strategy", "golden_only")).strip().lower() or "golden_only"
+    defaults = COMMISSIONING_DEFAULTS.get(reference_strategy, COMMISSIONING_DEFAULTS["golden_only"])
+    return {
+        "reference_strategy": reference_strategy,
+        "min_good_samples": _optional_int(
+            training_cfg.get(f"{reference_strategy}_min_good_samples"),
+            defaults["min_good_samples"],
+        ),
+        "min_active_variants": _optional_int(
+            training_cfg.get(f"{reference_strategy}_min_active_variants"),
+            defaults["min_active_variants"],
+        ),
+        "requires_golden_reference": bool(
+            training_cfg.get(
+                f"{reference_strategy}_requires_golden_reference",
+                defaults["requires_golden_reference"],
+            )
+        ),
+    }
+
+
+def _has_commissioning_paths(active_paths: Optional[dict]) -> bool:
+    return bool(active_paths) and all(
+        key in active_paths for key in ("config_file", "reference_dir", "reference_mask", "reference_image")
+    )
+
+
+def _annotate_commissioning_workflow(status: dict) -> dict:
+    stage_index = 1
+    stage_title = "Setup"
+    instruction = "Entering training workflow. Capture or confirm the project setup before collecting parts."
+    upgrade_prompt = None
+
+    min_good_samples = int(status.get("min_good_samples", 0))
+    committed_good_records = int(status.get("committed_good_records", 0))
+    pending_good_records = int(status.get("pending_good_records", 0))
+    min_active_variants = int(status.get("min_active_variants", 0))
+    active_reference_variants = int(status.get("active_reference_variants", 0))
+    pending_reference_variants = int(status.get("pending_reference_variants", 0))
+    reference_strategy = str(status.get("reference_strategy", "golden_only"))
+
+    if status.get("requires_golden_reference") and not status.get("golden_reference_present"):
+        stage_title = "Capture Golden Reference"
+        instruction = "Capture one golden reference. Then load a clearly known-good part to verify the setup."
+    elif committed_good_records <= 0:
+        stage_index = 2
+        stage_title = "Golden Check"
+        instruction = "Load known-good part and approve only clearly good samples to verify the reference."
+    elif committed_good_records < min_good_samples:
+        stage_index = 3
+        if pending_good_records and committed_good_records + pending_good_records >= min_good_samples:
+            stage_title = "Commit Baseline"
+            instruction = (
+                f"Baseline captured. Press Update to commit {pending_good_records} pending approved-good parts."
+            )
+        else:
+            remaining = max(0, min_good_samples - committed_good_records)
+            stage_title = "Baseline Build"
+            instruction = (
+                f"Load known-good part. More good examples needed: {remaining} of {min_good_samples} remaining."
+            )
+    elif min_active_variants > 0 and active_reference_variants < min_active_variants:
+        stage_index = 4
+        if pending_reference_variants and active_reference_variants + pending_reference_variants >= min_active_variants:
+            stage_title = "Activate Variation Library"
+            instruction = (
+                f"Variation library is staged. Press Update to activate {pending_reference_variants} pending approved-good references."
+            )
+        else:
+            remaining = max(0, min_active_variants - active_reference_variants)
+            stage_title = "Variation Library"
+            instruction = (
+                f"Load known-good molded part. More approved-good references needed: {remaining} of {min_active_variants} remaining."
+            )
+    elif not status.get("ml_ready", True):
+        stage_index = 4
+        stage_title = "Refresh ML Model"
+        instruction = "Press Update to rebuild the anomaly model before relying on ML-backed production gating."
+    elif not status.get("ready", False):
+        stage_index = 4
+        stage_title = "Review Pending Updates"
+        instruction = status.get("actions", ["Review the pending commissioning actions before proceeding."])[0]
+    else:
+        stage_index = COMMISSIONING_WORKFLOW_TOTAL_STAGES
+        stage_title = "Production Ready"
+        instruction = "Commissioning complete. Inspect parts in production mode or continue collecting approved-good examples."
+        hybrid_min_good = COMMISSIONING_DEFAULTS["hybrid"]["min_good_samples"]
+        if reference_strategy == "golden_only" and committed_good_records >= hybrid_min_good:
+            upgrade_prompt = "Hybrid now available. Activate if molded-part variation needs multiple approved-good references."
+
+    status.update(
+        {
+            "workflow_stage_index": stage_index,
+            "workflow_stage_total": COMMISSIONING_WORKFLOW_TOTAL_STAGES,
+            "workflow_stage_title": stage_title,
+            "workflow_instruction": instruction,
+            "workflow_upgrade_prompt": upgrade_prompt,
+        }
+    )
+    return status
+
+
+def get_commissioning_status(
+    config: dict,
+    active_paths: Optional[dict] = None,
+    anomaly_detector: Optional[AnomalyDetector] = None,
+) -> dict:
+    requirements = _get_commissioning_requirements(config)
+    status = {
+        **requirements,
+        "golden_reference_present": False,
+        "runtime_reference_count": 0,
+        "active_reference_variants": 0,
+        "pending_reference_variants": 0,
+        "committed_good_records": 0,
+        "pending_good_records": 0,
+        "ml_ready": True,
+        "summary_line": "Commissioning: training targets unavailable",
+        "issues": [],
+        "actions": [],
+        "warning": None,
+        "ready": False,
+        "workflow_stage_index": 1,
+        "workflow_stage_total": COMMISSIONING_WORKFLOW_TOTAL_STAGES,
+        "workflow_stage_title": "Setup",
+        "workflow_instruction": "Entering training workflow. Capture or confirm the project setup before collecting parts.",
+        "workflow_upgrade_prompt": None,
+    }
+
+    if not _has_commissioning_paths(active_paths):
+        status["summary_line"] = (
+            "Commissioning: "
+            f"target {status['min_good_samples']} approved-good parts"
+        )
+        return _annotate_commissioning_workflow(status)
+
+    runtime_refs = list_runtime_reference_candidates(config, active_paths)
+    training_counts = _count_good_training_records(active_paths)
+    anomaly_status = get_anomaly_model_status(config, anomaly_detector, active_paths)
+    golden_reference_present = Path(active_paths["reference_mask"]).exists() and Path(active_paths["reference_image"]).exists()
+    active_reference_variants = _count_reference_variants(active_paths, "active")
+    pending_reference_variants = _count_reference_variants(active_paths, "pending")
+
+    issues: list[str] = []
+    actions: list[str] = []
+
+    if status["requires_golden_reference"] and not golden_reference_present:
+        issues.append("golden reference missing")
+        _append_unique(actions, "Capture one golden reference before relying on production results.")
+
+    committed_good_records = training_counts["committed_good_records"]
+    pending_good_records = training_counts["pending_good_records"]
+    min_good_samples = status["min_good_samples"]
+    if committed_good_records < min_good_samples:
+        issues.append(f"approved-good baseline {committed_good_records}/{min_good_samples}")
+        if pending_good_records:
+            _append_unique(actions, f"Press Update to commit {pending_good_records} pending approved-good parts.")
+        remaining_good = max(0, min_good_samples - committed_good_records - pending_good_records)
+        if remaining_good:
+            _append_unique(actions, f"Collect {remaining_good} more approved-good parts.")
+    elif pending_good_records:
+        _append_unique(actions, f"Press Update to commit {pending_good_records} pending approved-good parts.")
+
+    min_active_variants = status["min_active_variants"]
+    if min_active_variants > 0 and active_reference_variants < min_active_variants:
+        issues.append(f"active approved-good references {active_reference_variants}/{min_active_variants}")
+        if pending_reference_variants:
+            _append_unique(actions, f"Press Update to activate {pending_reference_variants} pending approved-good references.")
+        remaining_variants = max(0, min_active_variants - active_reference_variants - pending_reference_variants)
+        if remaining_variants:
+            _append_unique(actions, f"Capture {remaining_variants} more approved-good reference variants.")
+    elif pending_reference_variants:
+        _append_unique(actions, f"Press Update to activate {pending_reference_variants} pending approved-good references.")
+
+    ml_ready = True
+    if anomaly_status["ml_mode_selected"] and not anomaly_status["ready"]:
+        ml_ready = False
+        if anomaly_status["pending_good_samples"] or anomaly_status["model_stale"]:
+            _append_unique(actions, "Press Update to rebuild the anomaly model for the current approved-good sample library.")
+
+    ready = not issues and ml_ready
+    summary_parts = []
+    if status["requires_golden_reference"]:
+        summary_parts.append("golden ok" if golden_reference_present else "golden missing")
+    summary_parts.append(f"good {committed_good_records}/{min_good_samples}")
+    if min_active_variants > 0:
+        summary_parts.append(f"refs {active_reference_variants}/{min_active_variants}")
+    if anomaly_status["ml_mode_selected"]:
+        summary_parts.append("ml ready" if ml_ready else "ml pending")
+
+    status.update(
+        {
+            "golden_reference_present": golden_reference_present,
+            "runtime_reference_count": len(runtime_refs),
+            "active_reference_variants": active_reference_variants,
+            "pending_reference_variants": pending_reference_variants,
+            "committed_good_records": committed_good_records,
+            "pending_good_records": pending_good_records,
+            "ml_ready": ml_ready,
+            "issues": issues,
+            "actions": actions,
+            "ready": ready,
+            "summary_line": (
+                f"Commissioning: {'READY' if ready else 'NOT READY'}"
+                + (f" | {' | '.join(summary_parts)}" if summary_parts else "")
+            ),
+        }
+    )
+
+    if issues:
+        action_text = f" {actions[0]}" if actions else ""
+        status["warning"] = (
+            f"Commissioning is incomplete for {status['reference_strategy']}: "
+            f"{'; '.join(issues)}.{action_text}"
+        )
+    return _annotate_commissioning_workflow(status)
+
+
+def format_commissioning_status_lines(status: dict) -> list[str]:
+    lines = [
+        "Workflow: "
+        f"Stage {status.get('workflow_stage_index', 1)}/{status.get('workflow_stage_total', COMMISSIONING_WORKFLOW_TOTAL_STAGES)}"
+        f" - {status.get('workflow_stage_title', 'Setup')}",
+        f"Instruction: {status.get('workflow_instruction', 'Review the commissioning steps for this project.')}",
+        status.get("summary_line", "Commissioning: unknown"),
+    ]
+    upgrade_prompt = status.get("workflow_upgrade_prompt")
+    if upgrade_prompt:
+        lines.append(f"Prompt: {upgrade_prompt}")
+    for action in status.get("actions", [])[:2]:
+        lines.append(f"Next: {action}")
+    return lines
 
 
 def describe_edge_gate_status(config: dict) -> tuple[str, str | None]:
@@ -188,6 +514,10 @@ def get_inspection_runtime_warnings(
                 "ML-backed mode is selected but Min Anomaly Score is not set. The anomaly gate is inactive."
             )
 
+    commissioning_status = get_commissioning_status(config, active_paths, anomaly_detector)
+    if commissioning_status.get("warning"):
+        warnings.append(commissioning_status["warning"])
+
     return warnings
 
 
@@ -217,6 +547,9 @@ def format_operator_mode_lines(
     lines.append(center_status_line)
     if center_hint:
         lines.append(center_hint)
+
+    commissioning_status = get_commissioning_status(config, active_paths, anomaly_detector)
+    lines.extend(format_commissioning_status_lines(commissioning_status))
 
     if active_paths is not None:
         reference_count = len(list_runtime_reference_candidates(config, active_paths))

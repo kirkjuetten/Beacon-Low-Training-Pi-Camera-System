@@ -1,0 +1,35 @@
+{
+  "created_at": 1776444418.6640923,
+  "roi": {
+    "x": 88,
+    "y": 149,
+    "width": 1323,
+    "height": 818
+  },
+  "threshold": {
+    "type": "otsu",
+    "value": 180.0,
+    "blur_kernel": 3
+  },
+  "morphology": {
+    "reference_erode_iterations": 1,
+    "reference_dilate_iterations": 1
+  },
+  "inspection_context": {
+    "inspection_mode": "mask_only",
+    "reference_strategy": "hybrid",
+    "blend_mode": "hard_only",
+    "tolerance_mode": "balanced"
+  },
+  "alignment": {
+    "tolerance_profile": "balanced"
+  },
+  "reference_asset": {
+    "role": "candidate",
+    "reference_id": "feedback_1776444418518_12",
+    "label": "Approved Good 12",
+    "source": "training_approve",
+    "state": "pending",
+    "source_record_id": "feedback_1776444418518_12"
+  }
+}

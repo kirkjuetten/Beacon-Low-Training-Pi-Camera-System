@@ -76,7 +76,7 @@ def test_inspect_file_uses_runtime_reference_paths_and_anomaly_detector(monkeypa
     detector = object()
     captured = {}
 
-    monkeypatch.setattr(replay_inspection, "classify_invalid_capture", lambda config, path: None)
+    monkeypatch.setattr(replay_inspection, "classify_invalid_capture", lambda config, path, active_paths=None: None)
     monkeypatch.setattr(replay_inspection, "get_active_runtime_paths", lambda: active_paths)
     monkeypatch.setattr(replay_inspection, "load_anomaly_detector", lambda paths: detector)
     monkeypatch.setattr(
@@ -117,10 +117,11 @@ def test_inspect_file_uses_runtime_reference_paths_and_anomaly_detector(monkeypa
 
     monkeypatch.setattr(replay_inspection, "inspect_against_references", fake_inspect_against_references)
 
-    result = replay_inspection.inspect_file({"inspection": {}}, image_path)
+    result = replay_inspection.inspect_file({"inspection": {}}, image_path, active_paths=active_paths)
 
     assert result["status"] == PASS
     assert captured["sample_image_path"] == image_path
     assert captured["reference_mask_path"] == active_paths["reference_mask"]
     assert captured["reference_image_path"] == active_paths["reference_image"]
     assert captured["anomaly_detector"] is detector
+    assert result["inspection_mode"] == "mask_only"

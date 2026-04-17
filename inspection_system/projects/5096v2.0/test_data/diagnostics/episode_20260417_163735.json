@@ -1,0 +1,734 @@
+{
+  "source_path": "c:\\Users\\kjuetten\\Documents\\GitHub\\Beacon-Low-Training-Pi-Camera-System\\inspection_system\\projects\\5096v2.0\\test_data",
+  "episode_parameters": {
+    "duplicate_count": 2,
+    "update_every": 5,
+    "shuffle_seed": null,
+    "train_splits": [
+      "tuning"
+    ],
+    "eval_splits": [
+      "validation",
+      "regression"
+    ]
+  },
+  "partition": {
+    "training_unique_count": 18,
+    "evaluation_unique_count": 24,
+    "evaluation_reused_training_pool": true
+  },
+  "training": {
+    "processed_count": 36,
+    "training_replay_mismatch_count": 36,
+    "update_events": [
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {
+          "min_required_coverage": 0.0,
+          "max_outside_allowed_ratio": 0.0
+        },
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 5
+      },
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 10
+      },
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 15
+      },
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 20
+      },
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 25
+      },
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 30
+      },
+      {
+        "pending_before_update": 5,
+        "committed_count": 5,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 35
+      },
+      {
+        "pending_before_update": 1,
+        "committed_count": 1,
+        "threshold_updates": {},
+        "learned_ranges_saved": true,
+        "learned_ranges_changed": true,
+        "anomaly_rebuild": null,
+        "after_training_record": 36
+      }
+    ],
+    "pending_after_run": {
+      "approve": 0,
+      "reject": 0,
+      "review": 0,
+      "total": 0
+    },
+    "learning_record_count": 36,
+    "threshold_drift": {
+      "min_required_coverage": {
+        "initial": 0.92,
+        "final": 0.0
+      },
+      "max_outside_allowed_ratio": {
+        "initial": 0.0142,
+        "final": 0.0
+      }
+    },
+    "final_thresholds": {
+      "min_required_coverage": 0.0,
+      "max_outside_allowed_ratio": 0.0,
+      "min_section_coverage": 0.0,
+      "max_mean_edge_distance_px": 4.0958,
+      "max_section_edge_distance_px": Infinity,
+      "max_section_width_delta_ratio": 1.0,
+      "max_section_center_offset_px": Infinity,
+      "min_ssim": null,
+      "max_mse": null,
+      "min_anomaly_score": null
+    },
+    "commissioning_status": {
+      "reference_strategy": "hybrid",
+      "min_good_samples": 8,
+      "min_active_variants": 3,
+      "requires_golden_reference": true,
+      "golden_reference_present": true,
+      "runtime_reference_count": 1,
+      "active_reference_variants": 0,
+      "pending_reference_variants": 0,
+      "committed_good_records": 32,
+      "pending_good_records": 0,
+      "ml_ready": true,
+      "summary_line": "Commissioning: NOT READY | golden ok | good 32/8 | refs 0/3",
+      "issues": [
+        "active approved-good references 0/3"
+      ],
+      "actions": [
+        "Capture 3 more approved-good reference variants."
+      ],
+      "warning": "Commissioning is incomplete for hybrid: active approved-good references 0/3. Capture 3 more approved-good reference variants.",
+      "ready": false,
+      "workflow_stage_index": 4,
+      "workflow_stage_total": 5,
+      "workflow_stage_title": "Variation Library",
+      "workflow_instruction": "Load known-good molded part. More approved-good references needed: 3 of 3 remaining.",
+      "workflow_upgrade_prompt": null
+    }
+  },
+  "evaluation": {
+    "evaluated_count": 24,
+    "expected_counts": {
+      "INVALID_CAPTURE": 5,
+      "FAIL": 2,
+      "PASS": 16
+    },
+    "actual_counts": {
+      "INVALID_CAPTURE": 24
+    },
+    "confusion_matrix": {
+      "INVALID_CAPTURE": {
+        "INVALID_CAPTURE": 5
+      },
+      "FAIL": {
+        "INVALID_CAPTURE": 2
+      },
+      "PASS": {
+        "INVALID_CAPTURE": 16
+      }
+    },
+    "borderline_outcomes": {
+      "INVALID_CAPTURE": 1
+    },
+    "false_reject_count": 16,
+    "false_accept_count": 0,
+    "invalid_capture_miss_count": 0,
+    "false_reject_rate": 1.0,
+    "false_accept_rate": 0.0,
+    "invalid_capture_miss_rate": 0.0,
+    "results": [
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0001_invalid-capture_no-part.png",
+        "bucket": "invalid_capture",
+        "dataset_split": "tuning",
+        "defect_category": "no_part",
+        "note": null,
+        "expected_status": "INVALID_CAPTURE",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0001_invalid-capture_no-part.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0001_invalid-capture_no-part.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0001_invalid-capture_no-part.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0002_invalid-capture_shifted-load.png",
+        "bucket": "invalid_capture",
+        "dataset_split": "tuning",
+        "defect_category": "shifted_load",
+        "note": "loaded backward",
+        "expected_status": "INVALID_CAPTURE",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0002_invalid-capture_shifted-load.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0002_invalid-capture_shifted-load.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0002_invalid-capture_shifted-load.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0003_invalid-capture_shifted-load.png",
+        "bucket": "invalid_capture",
+        "dataset_split": "tuning",
+        "defect_category": "shifted_load",
+        "note": "not_in_position",
+        "expected_status": "INVALID_CAPTURE",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0003_invalid-capture_shifted-load.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0003_invalid-capture_shifted-load.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0003_invalid-capture_shifted-load.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0004_invalid-capture_wrong-part.png",
+        "bucket": "invalid_capture",
+        "dataset_split": "tuning",
+        "defect_category": "wrong_part",
+        "note": null,
+        "expected_status": "INVALID_CAPTURE",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0004_invalid-capture_wrong-part.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0004_invalid-capture_wrong-part.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0004_invalid-capture_wrong-part.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0005_invalid-capture_wrong-part.png",
+        "bucket": "invalid_capture",
+        "dataset_split": "tuning",
+        "defect_category": "wrong_part",
+        "note": null,
+        "expected_status": "INVALID_CAPTURE",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0005_invalid-capture_wrong-part.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0005_invalid-capture_wrong-part.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0005_invalid-capture_wrong-part.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0006_borderline_light-pipe-position.png",
+        "bucket": "borderline",
+        "dataset_split": "tuning",
+        "defect_category": "light_pipe_position",
+        "note": "slight_shift",
+        "expected_status": null,
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0006_borderline_light-pipe-position.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0006_borderline_light-pipe-position.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0006_borderline_light-pipe-position.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0007_reject_light-pipe-position.png",
+        "bucket": "reject",
+        "dataset_split": "tuning",
+        "defect_category": "light_pipe_position",
+        "note": "one_shifted_closer_together",
+        "expected_status": "FAIL",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0007_reject_light-pipe-position.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0007_reject_light-pipe-position.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0007_reject_light-pipe-position.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0008_reject_light-pipe-position.png",
+        "bucket": "reject",
+        "dataset_split": "tuning",
+        "defect_category": "light_pipe_position",
+        "note": "one_shifted",
+        "expected_status": "FAIL",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0008_reject_light-pipe-position.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0008_reject_light-pipe-position.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0008_reject_light-pipe-position.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0009_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0009_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0009_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0009_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0010_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0010_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0010_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0010_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0011_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0011_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0011_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0011_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0012_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0012_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0012_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0012_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0013_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0013_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0013_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0013_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0014_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0014_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0014_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0014_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0015_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0015_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0015_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0015_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0016_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0016_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0016_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0016_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0017_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0017_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0017_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0017_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0018_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0018_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0018_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0018_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0019_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0019_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0019_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0019_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0020_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0020_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0020_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0020_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0021_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0021_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0021_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0021_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0022_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0022_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0022_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0022_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0023_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0023_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0023_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0023_good.png"
+        }
+      },
+      {
+        "image_path": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0024_good.png",
+        "bucket": "good",
+        "dataset_split": "tuning",
+        "defect_category": null,
+        "note": null,
+        "expected_status": "PASS",
+        "actual_status": "INVALID_CAPTURE",
+        "diagnosis": {
+          "primary_cause": "invalid_capture",
+          "summary": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0024_good.png",
+          "failure_modes": [],
+          "closest_pass_gates": [],
+          "alignment_warnings": []
+        },
+        "result": {
+          "image": "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0024_good.png",
+          "status": "INVALID_CAPTURE",
+          "reason": "Image does not exist: \\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0024_good.png"
+        }
+      }
+    ]
+  },
+  "analysis": {
+    "high_level_findings": [
+      "Top false-reject driver: invalid_capture (16 images)."
+    ],
+    "false_reject_patterns": [
+      {
+        "cause_code": "invalid_capture",
+        "count": 16,
+        "sample_images": [
+          "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0009_good.png",
+          "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0010_good.png",
+          "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0011_good.png",
+          "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0012_good.png",
+          "\\home\\pi\\inspection_system\\projects\\5096v2.0\\test_data\\5096v2-0\\5096v2-0-default\\20260417_152838_commissioning\\images\\0013_good.png"
+        ]
+      }
+    ],
+    "false_accept_patterns": {
+      "by_defect_category": {},
+      "near_gate_counts": {},
+      "feature_gap_categories": {}
+    },
+    "invalid_capture_patterns": {},
+    "recommendations": [
+      {
+        "priority": "high",
+        "category": "commissioning",
+        "title": "Finish commissioning before trusting training results",
+        "rationale": "Commissioning is incomplete for hybrid: active approved-good references 0/3. Capture 3 more approved-good reference variants.",
+        "suggested_changes": [
+          "Capture 3 more approved-good reference variants."
+        ],
+        "evidence": {
+          "workflow_stage": "Variation Library",
+          "committed_good_records": 32,
+          "pending_good_records": 0
+        }
+      }
+    ]
+  }
+}

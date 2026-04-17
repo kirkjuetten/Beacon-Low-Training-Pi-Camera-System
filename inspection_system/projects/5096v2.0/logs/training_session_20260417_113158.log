@@ -1,0 +1,29 @@
+=== TRAINING SESSION STARTED: 20260417_113158 ===
+[11:32:24] FAIL -> APPROVE | temp_capture.png | Coverage: 0.998 | Outside: 0.000 | EdgeDist: 0.576px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.964 | ✗ SECTION COVERAGE: Weakest section missing 85.0% coverage. ✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by infpx. ✗ SECTION WIDTH: Worst section width drift exceeds limit by 90.0%. ✗ SECTION CENTER: Worst section center offset exceeds limit by infpx
+[11:32:55] FAIL -> APPROVE | temp_capture.png | Coverage: 0.992 | Outside: 0.009 | EdgeDist: 2.033px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.936 | ✗ SECTION COVERAGE: Weakest section missing 85.0% coverage. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 0.78px. ✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by infpx. ✗ SECTION WIDTH: Worst section width drift exceeds limit by 90.0%. ✗ SECTION CENTER: Worst section center offset exceeds limit by infpx
+[11:33:27] FAIL -> APPROVE | temp_capture.png | Coverage: 0.995 | Outside: 0.003 | EdgeDist: 1.308px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.942 | ✗ SECTION COVERAGE: Weakest section missing 85.0% coverage. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 0.06px. ✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by infpx. ✗ SECTION WIDTH: Worst section width drift exceeds limit by 90.0%. ✗ SECTION CENTER: Worst section center offset exceeds limit by infpx
+[11:33:55] FAIL -> APPROVE | temp_capture.png | Coverage: 0.971 | Outside: 0.014 | EdgeDist: 4.096px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.938 | ✗ SECTION COVERAGE: Weakest section missing 85.0% coverage. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 2.85px. ✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by infpx. ✗ SECTION WIDTH: Worst section width drift exceeds limit by 90.0%. ✗ SECTION CENTER: Worst section center offset exceeds limit by infpx. ⚠ ALIGNMENT: Significant rotation correction (0.66°) applied. ⚠ ALIGNMENT: Large positional shift (4.1 pixels) detected
+[11:34:21] FAIL -> APPROVE | temp_capture.png | Coverage: 0.987 | Outside: 0.009 | EdgeDist: 2.546px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.937 | ✗ SECTION COVERAGE: Weakest section missing 85.0% coverage. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 1.30px. ✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by infpx. ✗ SECTION WIDTH: Worst section width drift exceeds limit by 90.0%. ✗ SECTION CENTER: Worst section center offset exceeds limit by infpx. ⚠ ALIGNMENT: Large positional shift (4.0 pixels) detected
+=== THRESHOLD SUGGESTIONS ===
+Suggested max_outside_allowed_ratio: 0.0142
+Suggested min_section_coverage: 0.0000
+Suggested max_mean_edge_distance_px: 4.0958
+Suggested max_section_edge_distance_px: inf
+Suggested max_section_width_delta_ratio: 1.0000
+Suggested max_section_center_offset_px: inf
+==============================
+=== REVIEW WARNINGS ===
+5 approved-good pending examples fail the current thresholds. Config may be too strict for this project.
+==============================
+[11:36:17] PASS -> APPROVE | temp_capture.png | Coverage: 0.980 | Outside: 0.007 | EdgeDist: 2.698px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.939 | ✓ APPROVED: Sample meets all quality requirements
+[11:37:34] PASS -> APPROVE | temp_capture.png | Coverage: 0.994 | Outside: 0.001 | EdgeDist: 1.306px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.942 | ✓ APPROVED: Sample meets all quality requirements
+[11:39:05] FAIL -> REJECT | temp_capture.png | Coverage: 0.950 | Outside: 0.028 | EdgeDist: 7.835px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.934 | ✗ OUTSIDE ALLOWED: 1.4% excess material in restricted areas. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 3.74px. ⚠ ALIGNMENT: Significant rotation correction (1.00°) applied. ⚠ ALIGNMENT: Large positional shift (4.5 pixels) detected
+[11:40:16] PASS -> REJECT | temp_capture.png | Coverage: 0.989 | Outside: 0.009 | EdgeDist: 2.406px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.936 | ✓ APPROVED: Sample meets all quality requirements
+[11:41:39] FAIL -> REJECT | temp_capture.png | Coverage: 0.969 | Outside: 0.033 | EdgeDist: 5.188px | SectEdge: 3.123px | SectWidth: 28.0% | SectCenter: 0.848px | SSIM: 0.932 | ✗ OUTSIDE ALLOWED: 1.9% excess material in restricted areas. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 1.09px. ⚠ ALIGNMENT: Significant rotation correction (0.71°) applied. ⚠ ALIGNMENT: Large positional shift (5.0 pixels) detected
+=== REVIEW WARNINGS ===
+1 reject-labeled pending examples still pass the current thresholds. Config may be too loose or the reference may not fit the project.
+==============================
+[11:44:22] PASS -> APPROVE | temp_capture.png | Coverage: 0.971 | Outside: 0.009 | EdgeDist: 3.269px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.958 | ✓ APPROVED: Sample meets all quality requirements
+[11:46:46] FAIL -> APPROVE | temp_capture.png | Coverage: 0.929 | Outside: 0.022 | EdgeDist: 9.766px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.941 | ✗ OUTSIDE ALLOWED: 0.7% excess material in restricted areas. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 5.67px. ⚠ ALIGNMENT: Significant rotation correction (1.00°) applied. ⚠ ALIGNMENT: Large positional shift (5.0 pixels) detected
+[12:49:09] FAIL -> APPROVE | temp_capture.png | Coverage: 0.952 | Outside: 0.022 | EdgeDist: 6.345px | SectEdge: infpx | SectWidth: 100.0% | SectCenter: infpx | SSIM: 0.935 | ✗ OUTSIDE ALLOWED: 0.8% excess material in restricted areas. ✗ EDGE SHAPE: Mean edge drift exceeds limit by 2.25px. ⚠ ALIGNMENT: Significant rotation correction (1.00°) applied. ⚠ ALIGNMENT: Large positional shift (5.0 pixels) detected
+=== SESSION ENDED: Duration 10622.0s ===

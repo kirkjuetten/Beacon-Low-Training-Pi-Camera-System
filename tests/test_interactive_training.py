@@ -525,6 +525,110 @@ def test_rebuild_anomaly_model_delegates_to_reference_service(tmp_path, monkeypa
     assert result['rebuilt'] is True
 
 
+def test_reset_commissioning_state_clears_learning_state_but_preserves_reference(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(
+        json.dumps({"inspection": {"learned_ranges": {"required_coverage": {"good_min": 0.9}}}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    reference_dir = tmp_path / "reference"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    reference_mask = reference_dir / "golden_reference_mask.png"
+    reference_image = reference_dir / "golden_reference_image.png"
+    reference_mask.write_bytes(b"mask")
+    reference_image.write_bytes(b"image")
+    (reference_dir / "ref_meta.json").write_text("{}", encoding="utf-8")
+    (reference_dir / "reference_variants" / "active" / "candidate_a").mkdir(parents=True, exist_ok=True)
+    (reference_dir / "anomaly_good_library" / "active" / "sample_a").mkdir(parents=True, exist_ok=True)
+    (reference_dir / "anomaly_model.pkl").write_bytes(b"model")
+    (reference_dir / "anomaly_model_meta.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        interactive_training,
+        'get_active_runtime_paths',
+        lambda: {
+            'config_file': config_path,
+            'reference_dir': reference_dir,
+            'reference_mask': reference_mask,
+            'reference_image': reference_image,
+            'log_dir': tmp_path / 'logs',
+        },
+    )
+
+    trainer = ThresholdTrainer(config_path)
+    trainer.training_data = [
+        {
+            'schema_version': 2,
+            'record_id': 'feedback_1',
+            'timestamp': 1.0,
+            'feedback': 'approve',
+            'final_class': 'good',
+            'defect_category': None,
+            'classification_reason': None,
+            'learning_state': 'committed',
+            'config_fingerprint': {},
+            'reference_candidate_id': None,
+            'reference_candidate_state': None,
+            'anomaly_sample_id': None,
+            'anomaly_sample_state': None,
+            'metrics': {'required_coverage': 0.95},
+        }
+    ]
+    trainer.save_training_data()
+
+    config = json.loads(config_path.read_text(encoding='utf-8'))
+    result = trainer.reset_commissioning_state(config)
+
+    assert result['cleared_records'] == 1
+    assert result['learned_ranges_cleared'] is True
+    assert result['reference_cleared'] is False
+    assert trainer.training_data == []
+    assert json.loads((config_path.parent / 'training_data.json').read_text(encoding='utf-8')) == []
+    saved_config = json.loads(config_path.read_text(encoding='utf-8'))
+    assert 'learned_ranges' not in saved_config['inspection']
+    assert reference_mask.exists()
+    assert reference_image.exists()
+    assert not (reference_dir / 'reference_variants').exists()
+    assert not (reference_dir / 'anomaly_good_library').exists()
+    assert not (reference_dir / 'anomaly_model.pkl').exists()
+    assert not (reference_dir / 'anomaly_model_meta.json').exists()
+
+
+def test_reset_commissioning_state_can_clear_reference_assets(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "camera_config.json"
+    config_path.write_text(json.dumps({"inspection": {}}, indent=2) + "\n", encoding="utf-8")
+
+    reference_dir = tmp_path / "reference"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    reference_mask = reference_dir / "golden_reference_mask.png"
+    reference_image = reference_dir / "golden_reference_image.png"
+    metadata_path = reference_dir / "ref_meta.json"
+    reference_mask.write_bytes(b"mask")
+    reference_image.write_bytes(b"image")
+    metadata_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        interactive_training,
+        'get_active_runtime_paths',
+        lambda: {
+            'config_file': config_path,
+            'reference_dir': reference_dir,
+            'reference_mask': reference_mask,
+            'reference_image': reference_image,
+            'log_dir': tmp_path / 'logs',
+        },
+    )
+
+    trainer = ThresholdTrainer(config_path)
+    result = trainer.reset_commissioning_state({}, clear_reference=True)
+
+    assert result['reference_cleared'] is True
+    assert not reference_mask.exists()
+    assert not reference_image.exists()
+    assert not metadata_path.exists()
+
+
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config = {

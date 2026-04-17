@@ -112,6 +112,22 @@ DEFAULT_CONFIG = {
         "max_shift_x": 4,
         "max_shift_y": 3,
     },
+    "training": {
+        "early_review_parts": 25,
+        "early_review_interval": 5,
+        "steady_review_interval": 10,
+        "golden_only_min_good_samples": 10,
+        "hybrid_min_good_samples": 8,
+        "hybrid_min_active_variants": 3,
+        "multi_good_experimental_min_good_samples": 6,
+        "multi_good_experimental_min_active_variants": 6,
+    },
+    "dataset_capture": {
+        "part_id": None,
+        "camera_setup_id": None,
+        "default_split": "tuning",
+        "auto_replay_after_capture": True,
+    },
     "indicator_led": {
         "enabled": False,
         "pass_gpio": 23,
