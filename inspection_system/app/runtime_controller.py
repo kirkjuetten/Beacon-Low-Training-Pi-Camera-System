@@ -63,6 +63,17 @@ def describe_edge_gate_status(config: dict) -> tuple[str, str | None]:
     return status_line, None
 
 
+def describe_section_width_gate_status(config: dict) -> tuple[str, str | None]:
+    inspection_cfg = config.get("inspection", {})
+    max_section_width_delta_ratio = _optional_float(inspection_cfg.get("max_section_width_delta_ratio"))
+    if max_section_width_delta_ratio is None:
+        return (
+            "Width Gate: section off",
+            "Hint: set Max Section Width Drift to enable per-section width drift checks.",
+        )
+    return (f"Width Gate: section<={max_section_width_delta_ratio:.1%}", None)
+
+
 def load_anomaly_detector(active_paths: dict):
     model_path = Path(active_paths["reference_dir"]) / "anomaly_model.pkl"
     model_path = get_anomaly_model_artifact_paths(active_paths)["model"]
@@ -187,6 +198,10 @@ def format_operator_mode_lines(
     lines.append(edge_status_line)
     if edge_hint:
         lines.append(edge_hint)
+    width_status_line, width_hint = describe_section_width_gate_status(config)
+    lines.append(width_status_line)
+    if width_hint:
+        lines.append(width_hint)
 
     if active_paths is not None:
         reference_count = len(list_runtime_reference_candidates(config, active_paths))
@@ -257,6 +272,17 @@ def print_inspection_result(passed: bool, details: dict) -> None:
             )
         else:
             print(f"Worst section edge distance: {details['worst_section_edge_distance_px']:.3f}px")
+    if details.get("worst_section_width_delta_ratio") is not None:
+        section_width_gate_active = bool(details.get("section_width_gate_active", False))
+        if details.get("max_section_width_delta_ratio") is not None:
+            suffix = " [gate]" if section_width_gate_active else " [info]"
+            print(
+                "Worst section width drift: "
+                f"{details['worst_section_width_delta_ratio']:.1%} "
+                f"(max {details['max_section_width_delta_ratio']:.1%}){suffix}"
+            )
+        else:
+            print(f"Worst section width drift: {details['worst_section_width_delta_ratio']:.1%}")
     if details.get("mean_edge_distance_px") is not None:
         edge_distance_gate_active = bool(details.get("edge_distance_gate_active", False))
         if details.get("max_mean_edge_distance_px") is not None:
@@ -273,6 +299,8 @@ def print_inspection_result(passed: bool, details: dict) -> None:
         print("Section coverages:", ", ".join(f"{v:.3f}" for v in details["section_coverages"]))
     if details.get("section_edge_distances_px"):
         print("Section edge distances:", ", ".join(f"{v:.3f}" for v in details["section_edge_distances_px"]))
+    if details.get("section_width_ratios"):
+        print("Section width ratios:", ", ".join(f"{v:.3f}x" for v in details["section_width_ratios"]))
     if "ssim" in details:
         ssim_gate_active = bool(details.get("ssim_gate_active", False))
         if details.get("min_ssim") is not None:

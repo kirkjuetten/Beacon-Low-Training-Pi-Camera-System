@@ -102,6 +102,24 @@ def compute_section_edge_distances_px(reference_mask, sample_mask, section_masks
     return distances
 
 
+def compute_section_width_ratios(reference_mask, sample_mask, section_masks, np_module):
+    ratios = []
+    reference_white = reference_mask > 0
+    sample_white = sample_mask > 0
+    for section_mask in section_masks:
+        section_points = np_module.argwhere(section_mask > 0)
+        if section_points.size == 0:
+            continue
+        y0, x0 = section_points.min(axis=0)
+        y1, x1 = section_points.max(axis=0) + 1
+        reference_count = int(reference_white[y0:y1, x0:x1].sum())
+        if reference_count == 0:
+            continue
+        sample_count = int(sample_white[y0:y1, x0:x1].sum())
+        ratios.append(sample_count / reference_count)
+    return ratios
+
+
 def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, float]:
     margins = [
         float(details.get("required_coverage", 0.0)) - float(details.get("effective_min_required_coverage", details.get("min_required_coverage", 0.0))),
@@ -110,6 +128,7 @@ def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, fl
     ]
 
     optional_gates = [
+        ("section_width_gate_active", "worst_section_width_delta_ratio", "effective_max_section_width_delta_ratio", "max_section_width_delta_ratio", "lower"),
         ("section_edge_gate_active", "worst_section_edge_distance_px", "effective_max_section_edge_distance_px", "max_section_edge_distance_px", "lower"),
         ("edge_distance_gate_active", "mean_edge_distance_px", "effective_max_mean_edge_distance_px", "max_mean_edge_distance_px", "lower"),
         ("ssim_gate_active", "ssim", "effective_min_ssim", "min_ssim", "higher"),
@@ -216,10 +235,13 @@ def inspect_against_reference(
         cv2,
     )
     worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
+    section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
+    worst_section_width_delta_ratio = max((abs(float(ratio) - 1.0) for ratio in section_width_ratios), default=0.0)
     metric_inputs = {
         **metrics,
         "mean_edge_distance_px": mean_edge_distance_px,
         "worst_section_edge_distance_px": worst_section_edge_distance_px,
+        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
         **anomaly_metrics,
     }
     passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
@@ -284,6 +306,13 @@ def inspect_against_reference(
         ),
         "max_section_edge_distance_px": threshold_summary.get("max_section_edge_distance_px"),
         "effective_max_section_edge_distance_px": threshold_summary.get("effective_max_section_edge_distance_px"),
+        "section_width_ratios": section_width_ratios,
+        "worst_section_width_delta_ratio": threshold_summary.get(
+            "worst_section_width_delta_ratio",
+            worst_section_width_delta_ratio,
+        ),
+        "max_section_width_delta_ratio": threshold_summary.get("max_section_width_delta_ratio"),
+        "effective_max_section_width_delta_ratio": threshold_summary.get("effective_max_section_width_delta_ratio"),
         "min_ssim": threshold_summary.get("min_ssim"),
         "max_mse": threshold_summary.get("max_mse"),
         "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
@@ -296,6 +325,7 @@ def inspect_against_reference(
         "learned_ranges_active": bool(threshold_summary.get("learned_ranges_active", False)),
         "edge_distance_gate_active": bool(threshold_summary.get("edge_distance_gate_active", False)),
         "section_edge_gate_active": bool(threshold_summary.get("section_edge_gate_active", False)),
+        "section_width_gate_active": bool(threshold_summary.get("section_width_gate_active", False)),
         "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
         "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
         "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),

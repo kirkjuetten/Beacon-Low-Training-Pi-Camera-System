@@ -100,6 +100,7 @@ DEFAULT_CONFIG = {
         "min_section_coverage": 0.85,
         "max_mean_edge_distance_px": None,
         "max_section_edge_distance_px": None,
+        "max_section_width_delta_ratio": None,
         "section_columns": 12,
     },
     "alignment": {

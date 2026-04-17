@@ -119,6 +119,16 @@ def _threshold_ratio(value: Optional[float], threshold: Optional[float], high_is
     return value / threshold
 
 
+def _metric_exceeds_limit(details: dict, value_key: str, threshold_key: str, *, high_is_bad: bool = True) -> bool:
+    value = details.get(value_key)
+    threshold = details.get(threshold_key)
+    if value is None or threshold is None:
+        return True
+    if high_is_bad:
+        return float(value) > float(threshold)
+    return float(value) < float(threshold)
+
+
 def _failed_checks(details: dict) -> list[str]:
     failures: list[str] = []
 
@@ -132,35 +142,43 @@ def _failed_checks(details: dict) -> list[str]:
         failures.append(REASON_UNEVEN_PRINT)
 
     mismatch_failure = False
+    if bool(details.get("section_width_gate_active", False)):
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "worst_section_width_delta_ratio",
+            "max_section_width_delta_ratio",
+        )
     if bool(details.get("section_edge_gate_active", False)):
-        worst_section_edge_distance_px = details.get("worst_section_edge_distance_px")
-        max_section_edge_distance_px = details.get("max_section_edge_distance_px")
-        mismatch_failure = mismatch_failure or (
-            worst_section_edge_distance_px is None
-            or max_section_edge_distance_px is None
-            or float(worst_section_edge_distance_px) > float(max_section_edge_distance_px)
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "worst_section_edge_distance_px",
+            "max_section_edge_distance_px",
         )
     if bool(details.get("ssim_gate_active", False)):
-        ssim_value = details.get("ssim")
-        min_ssim = details.get("min_ssim")
-        mismatch_failure = mismatch_failure or (ssim_value is None or min_ssim is None or float(ssim_value) < float(min_ssim))
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "ssim",
+            "min_ssim",
+            high_is_bad=False,
+        )
     if bool(details.get("mse_gate_active", False)):
-        mse_value = details.get("mse")
-        max_mse = details.get("max_mse")
-        mismatch_failure = mismatch_failure or (mse_value is None or max_mse is None or float(mse_value) > float(max_mse))
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "mse",
+            "max_mse",
+        )
     if bool(details.get("edge_distance_gate_active", False)):
-        mean_edge_distance_px = details.get("mean_edge_distance_px")
-        max_mean_edge_distance_px = details.get("max_mean_edge_distance_px")
-        mismatch_failure = mismatch_failure or (
-            mean_edge_distance_px is None
-            or max_mean_edge_distance_px is None
-            or float(mean_edge_distance_px) > float(max_mean_edge_distance_px)
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "mean_edge_distance_px",
+            "max_mean_edge_distance_px",
         )
     if bool(details.get("anomaly_gate_active", False)):
-        anomaly_score = details.get("anomaly_score")
-        min_anomaly_score = details.get("min_anomaly_score")
-        mismatch_failure = mismatch_failure or (
-            anomaly_score is None or min_anomaly_score is None or float(anomaly_score) < float(min_anomaly_score)
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "anomaly_score",
+            "min_anomaly_score",
+            high_is_bad=False,
         )
 
     if mismatch_failure:
@@ -192,23 +210,55 @@ def _is_borderline_failure(details: dict, failure: str) -> bool:
         ) >= 0.9
 
     if failure == REASON_REFERENCE_MISMATCH:
-        if bool(details.get("section_edge_gate_active", False)):
+        if bool(details.get("section_width_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "worst_section_width_delta_ratio",
+            "max_section_width_delta_ratio",
+        ):
+            return _threshold_ratio(
+                details.get("worst_section_width_delta_ratio"),
+                details.get("max_section_width_delta_ratio"),
+                high_is_bad=True,
+            ) >= (1.0 / 1.1)
+        if bool(details.get("section_edge_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "worst_section_edge_distance_px",
+            "max_section_edge_distance_px",
+        ):
             return _threshold_ratio(
                 details.get("worst_section_edge_distance_px"),
                 details.get("max_section_edge_distance_px"),
                 high_is_bad=True,
             ) >= (1.0 / 1.1)
-        if bool(details.get("edge_distance_gate_active", False)):
+        if bool(details.get("edge_distance_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "mean_edge_distance_px",
+            "max_mean_edge_distance_px",
+        ):
             return _threshold_ratio(
                 details.get("mean_edge_distance_px"),
                 details.get("max_mean_edge_distance_px"),
                 high_is_bad=True,
             ) >= (1.0 / 1.1)
-        if bool(details.get("ssim_gate_active", False)):
+        if bool(details.get("ssim_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "ssim",
+            "min_ssim",
+            high_is_bad=False,
+        ):
             return _threshold_ratio(details.get("ssim"), details.get("min_ssim"), high_is_bad=False) >= 0.95
-        if bool(details.get("mse_gate_active", False)):
+        if bool(details.get("mse_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "mse",
+            "max_mse",
+        ):
             return _threshold_ratio(details.get("mse"), details.get("max_mse"), high_is_bad=True) >= (1.0 / 1.1)
-        if bool(details.get("anomaly_gate_active", False)):
+        if bool(details.get("anomaly_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "anomaly_score",
+            "min_anomaly_score",
+            high_is_bad=False,
+        ):
             return _threshold_ratio(
                 details.get("anomaly_score"),
                 details.get("min_anomaly_score"),
@@ -254,7 +304,17 @@ def _make_summary_lines(status: str, primary_reason: Optional[str], details: dic
     else:
         lines.append("Part does not match reference.")
         if (
+            bool(details.get("section_width_gate_active", False))
+            and _metric_exceeds_limit(details, "worst_section_width_delta_ratio", "max_section_width_delta_ratio")
+            and details.get("worst_section_width_delta_ratio") is not None
+            and details.get("max_section_width_delta_ratio") is not None
+        ):
+            lines.append(
+                f"Section width drift {float(details['worst_section_width_delta_ratio']):.1%} / {float(details['max_section_width_delta_ratio']):.1%}"
+            )
+        elif (
             bool(details.get("section_edge_gate_active", False))
+            and _metric_exceeds_limit(details, "worst_section_edge_distance_px", "max_section_edge_distance_px")
             and details.get("worst_section_edge_distance_px") is not None
             and details.get("max_section_edge_distance_px") is not None
         ):
@@ -263,17 +323,18 @@ def _make_summary_lines(status: str, primary_reason: Optional[str], details: dic
             )
         elif (
             bool(details.get("edge_distance_gate_active", False))
+            and _metric_exceeds_limit(details, "mean_edge_distance_px", "max_mean_edge_distance_px")
             and details.get("mean_edge_distance_px") is not None
             and details.get("max_mean_edge_distance_px") is not None
         ):
             lines.append(
                 f"Edge drift {float(details['mean_edge_distance_px']):.2f}px / {float(details['max_mean_edge_distance_px']):.2f}px"
             )
-        elif bool(details.get("ssim_gate_active", False)) and details.get("ssim") is not None and details.get("min_ssim") is not None:
+        elif bool(details.get("ssim_gate_active", False)) and _metric_exceeds_limit(details, "ssim", "min_ssim", high_is_bad=False) and details.get("ssim") is not None and details.get("min_ssim") is not None:
             lines.append(f"Similarity {float(details['ssim']):.3f} / {float(details['min_ssim']):.3f}")
-        elif bool(details.get("mse_gate_active", False)) and details.get("mse") is not None and details.get("max_mse") is not None:
+        elif bool(details.get("mse_gate_active", False)) and _metric_exceeds_limit(details, "mse", "max_mse") and details.get("mse") is not None and details.get("max_mse") is not None:
             lines.append(f"Difference {float(details['mse']):.1f} / {float(details['max_mse']):.1f}")
-        elif bool(details.get("anomaly_gate_active", False)) and details.get("anomaly_score") is not None and details.get("min_anomaly_score") is not None:
+        elif bool(details.get("anomaly_gate_active", False)) and _metric_exceeds_limit(details, "anomaly_score", "min_anomaly_score", high_is_bad=False) and details.get("anomaly_score") is not None and details.get("min_anomaly_score") is not None:
             lines.append(
                 f"Anomaly {float(details['anomaly_score']):.3f} / {float(details['min_anomaly_score']):.3f}"
             )

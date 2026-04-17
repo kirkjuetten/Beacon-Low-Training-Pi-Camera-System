@@ -1,6 +1,6 @@
 import json
 
-from inspection_system.app.runtime_controller import describe_edge_gate_status, format_operator_mode_lines, get_inspection_runtime_warnings
+from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_width_gate_status, format_operator_mode_lines, get_inspection_runtime_warnings
 
 
 def test_ml_mode_warns_when_model_and_threshold_are_missing() -> None:
@@ -51,12 +51,22 @@ def test_format_operator_mode_lines_includes_edge_gate_hint() -> None:
                 "tolerance_mode": "balanced",
                 "max_mean_edge_distance_px": 1.25,
                 "max_section_edge_distance_px": None,
+                "max_section_width_delta_ratio": None,
             }
         }
     )
 
     assert "Edge Gates: global<=1.25px | section off" in lines
     assert any("set Max Section Edge Distance" in line for line in lines)
+    assert "Width Gate: section off" in lines
+    assert any("set Max Section Width Drift" in line for line in lines)
+
+
+def test_describe_section_width_gate_status_reports_missing_threshold() -> None:
+    status_line, hint = describe_section_width_gate_status({"inspection": {}})
+
+    assert status_line == "Width Gate: section off"
+    assert "set Max Section Width Drift" in hint
 
 
 def test_ml_mode_warns_when_committed_good_samples_are_insufficient(tmp_path) -> None:

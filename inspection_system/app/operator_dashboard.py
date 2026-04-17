@@ -31,7 +31,7 @@ from inspection_system.app.camera_interface import (
     switch_project,
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
-from inspection_system.app.runtime_controller import describe_edge_gate_status
+from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_width_gate_status
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +59,7 @@ CONFIG_FIELD_SPECS = [
     ("inspection.min_section_coverage", "Min Section Coverage", float),
     ("inspection.max_mean_edge_distance_px", "Max Mean Edge Distance (px, optional)", float),
     ("inspection.max_section_edge_distance_px", "Max Section Edge Distance (px, optional)", float),
+    ("inspection.max_section_width_delta_ratio", "Max Section Width Drift (ratio, optional)", float),
     ("inspection.min_ssim", "Min SSIM (optional)", float),
     ("inspection.max_mse", "Max MSE (optional)", float),
     ("inspection.min_anomaly_score", "Min Anomaly Score (optional)", float),
@@ -85,6 +86,7 @@ CONFIG_DROPDOWN_OPTIONS = {
 OPTIONAL_FLOAT_FIELDS = {
     "inspection.max_mean_edge_distance_px",
     "inspection.max_section_edge_distance_px",
+    "inspection.max_section_width_delta_ratio",
     "inspection.min_ssim",
     "inspection.max_mse",
     "inspection.min_anomaly_score",
@@ -162,10 +164,16 @@ def build_config_editor_values(config: dict) -> dict[str, str]:
 
 
 def build_dashboard_hint_text(config: dict) -> str:
-    status_line, hint = describe_edge_gate_status(config)
-    if hint:
-        return f"{status_line} | {hint}"
-    return f"{status_line} | All edge gates active."
+    edge_status_line, edge_hint = describe_edge_gate_status(config)
+    width_status_line, width_hint = describe_section_width_gate_status(config)
+    lines = [edge_status_line, width_status_line]
+    if edge_hint:
+        lines.append(edge_hint)
+    if width_hint:
+        lines.append(width_hint)
+    if not edge_hint and not width_hint:
+        lines.append("All geometry gates active.")
+    return "\n".join(lines)
 
 
 def is_informative_preview_image(image_path: Path) -> bool:

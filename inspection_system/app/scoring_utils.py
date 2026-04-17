@@ -28,6 +28,7 @@ LEARNED_RANGE_DIRECTIONS = {
     "min_section_coverage": "higher_is_better",
     "mean_edge_distance_px": "lower_is_better",
     "worst_section_edge_distance_px": "lower_is_better",
+    "worst_section_width_delta_ratio": "lower_is_better",
     "ssim": "higher_is_better",
     "mse": "lower_is_better",
     "anomaly_score": "higher_is_better",
@@ -39,6 +40,7 @@ DEFAULT_LEARNED_MARGINS = {
     "min_section_coverage": 0.02,
     "mean_edge_distance_px": 0.5,
     "worst_section_edge_distance_px": 0.5,
+    "worst_section_width_delta_ratio": 0.05,
     "ssim": 0.02,
     "mse": 1.0,
     "anomaly_score": 0.05,
@@ -126,6 +128,7 @@ def resolve_inspection_mode_details(inspection_cfg: dict) -> dict:
 
     max_mean_edge_distance_px = _optional_float(inspection_cfg.get("max_mean_edge_distance_px"))
     max_section_edge_distance_px = _optional_float(inspection_cfg.get("max_section_edge_distance_px"))
+    max_section_width_delta_ratio = _optional_float(inspection_cfg.get("max_section_width_delta_ratio"))
     min_ssim = _optional_float(inspection_cfg.get("min_ssim"))
     max_mse = _optional_float(inspection_cfg.get("max_mse"))
     min_anomaly_score = _optional_float(inspection_cfg.get("min_anomaly_score"))
@@ -135,11 +138,13 @@ def resolve_inspection_mode_details(inspection_cfg: dict) -> dict:
         "included_gates": included_gates,
         "max_mean_edge_distance_px": max_mean_edge_distance_px,
         "max_section_edge_distance_px": max_section_edge_distance_px,
+        "max_section_width_delta_ratio": max_section_width_delta_ratio,
         "min_ssim": min_ssim,
         "max_mse": max_mse,
         "min_anomaly_score": min_anomaly_score,
         "edge_distance_gate_active": max_mean_edge_distance_px is not None,
         "section_edge_gate_active": max_section_edge_distance_px is not None,
+        "section_width_gate_active": max_section_width_delta_ratio is not None,
         "ssim_gate_active": "ssim" in included_gates and min_ssim is not None,
         "mse_gate_active": "mse" in included_gates and max_mse is not None,
         "anomaly_gate_active": "anomaly" in included_gates and min_anomaly_score is not None,
@@ -190,6 +195,7 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     min_section_coverage = float(metrics["min_section_coverage"])
     mean_edge_distance_px = _optional_float(metrics.get("mean_edge_distance_px"))
     worst_section_edge_distance_px = _optional_float(metrics.get("worst_section_edge_distance_px"))
+    worst_section_width_delta_ratio = _optional_float(metrics.get("worst_section_width_delta_ratio"))
     ssim_value = _optional_float(metrics.get("ssim"))
     mse_value = _optional_float(metrics.get("mse"))
     anomaly_score = _optional_float(metrics.get("anomaly_score"))
@@ -202,6 +208,7 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     inspection_mode = mode_details["inspection_mode"]
     configured_max_mean_edge_distance_px = mode_details["max_mean_edge_distance_px"]
     configured_max_section_edge_distance_px = mode_details["max_section_edge_distance_px"]
+    configured_max_section_width_delta_ratio = mode_details["max_section_width_delta_ratio"]
     configured_min_ssim = mode_details["min_ssim"]
     configured_max_mse = mode_details["max_mse"]
     configured_min_anomaly_score = mode_details["min_anomaly_score"]
@@ -232,6 +239,11 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     learned_section_edge_distance = _get_learned_metric_threshold(
         "worst_section_edge_distance_px",
         _get_learned_metric_range(inspection_cfg, "worst_section_edge_distance_px"),
+        tolerance_mode,
+    )
+    learned_section_width_delta = _get_learned_metric_threshold(
+        "worst_section_width_delta_ratio",
+        _get_learned_metric_range(inspection_cfg, "worst_section_width_delta_ratio"),
         tolerance_mode,
     )
     learned_ssim = _get_learned_metric_threshold(
@@ -271,6 +283,12 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         learned_section_edge_distance,
         blend_mode,
     )
+    effective_max_section_width_delta_ratio = _blend_threshold(
+        "worst_section_width_delta_ratio",
+        configured_max_section_width_delta_ratio,
+        learned_section_width_delta,
+        blend_mode,
+    )
     effective_min_ssim = _blend_threshold("ssim", configured_min_ssim, learned_ssim, blend_mode)
     effective_max_mse = _blend_threshold("mse", configured_max_mse, learned_mse, blend_mode)
     effective_min_anomaly_score = _blend_threshold(
@@ -279,6 +297,7 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
 
     edge_distance_gate_active = effective_max_mean_edge_distance_px is not None
     section_edge_gate_active = effective_max_section_edge_distance_px is not None
+    section_width_gate_active = effective_max_section_width_delta_ratio is not None
     ssim_gate_active = "ssim" in mode_details["included_gates"] and effective_min_ssim is not None
     mse_gate_active = "mse" in mode_details["included_gates"] and effective_max_mse is not None
     anomaly_gate_active = "anomaly" in mode_details["included_gates"] and effective_min_anomaly_score is not None
@@ -289,6 +308,10 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     section_edge_pass = True if not section_edge_gate_active else (
         worst_section_edge_distance_px is not None
         and worst_section_edge_distance_px <= effective_max_section_edge_distance_px
+    )
+    section_width_pass = True if not section_width_gate_active else (
+        worst_section_width_delta_ratio is not None
+        and worst_section_width_delta_ratio <= effective_max_section_width_delta_ratio
     )
     ssim_pass = True if not ssim_gate_active else (ssim_value is not None and ssim_value >= effective_min_ssim)
     mse_pass = True if not mse_gate_active else (mse_value is not None and mse_value <= effective_max_mse)
@@ -302,6 +325,7 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         and min_section_coverage >= effective_min_section_coverage
         and edge_distance_pass
         and section_edge_pass
+        and section_width_pass
         and ssim_pass
         and mse_pass
         and anomaly_pass
@@ -323,6 +347,9 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         "worst_section_edge_distance_px": worst_section_edge_distance_px,
         "max_section_edge_distance_px": configured_max_section_edge_distance_px,
         "effective_max_section_edge_distance_px": effective_max_section_edge_distance_px,
+        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
+        "max_section_width_delta_ratio": configured_max_section_width_delta_ratio,
+        "effective_max_section_width_delta_ratio": effective_max_section_width_delta_ratio,
         "ssim": ssim_value,
         "mse": mse_value,
         "anomaly_score": anomaly_score,
@@ -343,6 +370,7 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
                 learned_section,
                 learned_edge_distance,
                 learned_section_edge_distance,
+                learned_section_width_delta,
                 learned_ssim,
                 learned_mse,
                 learned_anomaly,
@@ -350,6 +378,7 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         ),
         "edge_distance_gate_active": edge_distance_gate_active,
         "section_edge_gate_active": section_edge_gate_active,
+        "section_width_gate_active": section_width_gate_active,
         "ssim_gate_active": ssim_gate_active,
         "mse_gate_active": mse_gate_active,
         "anomaly_gate_active": anomaly_gate_active,
