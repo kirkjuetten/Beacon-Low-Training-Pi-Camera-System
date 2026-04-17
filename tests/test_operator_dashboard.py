@@ -41,6 +41,7 @@ def test_apply_config_updates_updates_nested_fields() -> None:
             "max_mean_edge_distance_px": None,
             "max_section_edge_distance_px": None,
             "max_section_width_delta_ratio": None,
+            "max_section_center_offset_px": None,
             "save_debug_images": True,
         },
         "alignment": {"enabled": True},
@@ -60,6 +61,7 @@ def test_apply_config_updates_updates_nested_fields() -> None:
             "inspection.max_mean_edge_distance_px": "1.25",
             "inspection.max_section_edge_distance_px": "0.75",
             "inspection.max_section_width_delta_ratio": "0.12",
+            "inspection.max_section_center_offset_px": "0.6",
             "inspection.save_debug_images": "false",
             "alignment.enabled": "false",
         },
@@ -75,6 +77,7 @@ def test_apply_config_updates_updates_nested_fields() -> None:
     assert get_nested_config_value(updated, "inspection.max_mean_edge_distance_px") == 1.25
     assert get_nested_config_value(updated, "inspection.max_section_edge_distance_px") == 0.75
     assert get_nested_config_value(updated, "inspection.max_section_width_delta_ratio") == 0.12
+    assert get_nested_config_value(updated, "inspection.max_section_center_offset_px") == 0.6
     assert get_nested_config_value(updated, "inspection.save_debug_images") is False
     assert get_nested_config_value(updated, "alignment.enabled") is False
     assert get_nested_config_value(config, "capture.timeout_ms") == 200
@@ -119,6 +122,7 @@ def test_build_config_editor_values_returns_string_values() -> None:
             "max_mean_edge_distance_px": 1.5,
             "max_section_edge_distance_px": 0.8,
             "max_section_width_delta_ratio": 0.1,
+            "max_section_center_offset_px": 0.5,
         },
         "alignment": {"enabled": True},
         "indicator_led": {"enabled": False},
@@ -136,6 +140,7 @@ def test_build_config_editor_values_returns_string_values() -> None:
     assert values["inspection.max_mean_edge_distance_px"] == "1.5"
     assert values["inspection.max_section_edge_distance_px"] == "0.8"
     assert values["inspection.max_section_width_delta_ratio"] == "0.1"
+    assert values["inspection.max_section_center_offset_px"] == "0.5"
     assert values["alignment.enabled"] == "True"
     assert values["indicator_led.enabled"] == "False"
 
@@ -147,14 +152,17 @@ def test_build_dashboard_hint_text_reports_inactive_edge_gate() -> None:
                 "max_mean_edge_distance_px": 1.2,
                 "max_section_edge_distance_px": None,
                 "max_section_width_delta_ratio": None,
+                "max_section_center_offset_px": None,
             }
         }
     )
 
     assert "Edge Gates: global<=1.20px | section off" in hint
     assert "Width Gate: section off" in hint
+    assert "Center Gate: section off" in hint
     assert "set Max Section Edge Distance" in hint
     assert "set Max Section Width Drift" in hint
+    assert "set Max Section Center Offset" in hint
 
 
 def test_dropdown_options_cover_expected_fixed_choice_fields() -> None:

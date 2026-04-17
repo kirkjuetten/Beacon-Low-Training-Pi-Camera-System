@@ -31,7 +31,7 @@ from inspection_system.app.camera_interface import (
     switch_project,
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
-from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_width_gate_status
+from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_center_gate_status, describe_section_width_gate_status
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -60,6 +60,7 @@ CONFIG_FIELD_SPECS = [
     ("inspection.max_mean_edge_distance_px", "Max Mean Edge Distance (px, optional)", float),
     ("inspection.max_section_edge_distance_px", "Max Section Edge Distance (px, optional)", float),
     ("inspection.max_section_width_delta_ratio", "Max Section Width Drift (ratio, optional)", float),
+    ("inspection.max_section_center_offset_px", "Max Section Center Offset (px, optional)", float),
     ("inspection.min_ssim", "Min SSIM (optional)", float),
     ("inspection.max_mse", "Max MSE (optional)", float),
     ("inspection.min_anomaly_score", "Min Anomaly Score (optional)", float),
@@ -87,6 +88,7 @@ OPTIONAL_FLOAT_FIELDS = {
     "inspection.max_mean_edge_distance_px",
     "inspection.max_section_edge_distance_px",
     "inspection.max_section_width_delta_ratio",
+    "inspection.max_section_center_offset_px",
     "inspection.min_ssim",
     "inspection.max_mse",
     "inspection.min_anomaly_score",
@@ -166,12 +168,15 @@ def build_config_editor_values(config: dict) -> dict[str, str]:
 def build_dashboard_hint_text(config: dict) -> str:
     edge_status_line, edge_hint = describe_edge_gate_status(config)
     width_status_line, width_hint = describe_section_width_gate_status(config)
-    lines = [edge_status_line, width_status_line]
+    center_status_line, center_hint = describe_section_center_gate_status(config)
+    lines = [edge_status_line, width_status_line, center_status_line]
     if edge_hint:
         lines.append(edge_hint)
     if width_hint:
         lines.append(width_hint)
-    if not edge_hint and not width_hint:
+    if center_hint:
+        lines.append(center_hint)
+    if not edge_hint and not width_hint and not center_hint:
         lines.append("All geometry gates active.")
     return "\n".join(lines)
 

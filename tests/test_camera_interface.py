@@ -55,6 +55,7 @@ def test_load_and_write_default_config_creates_file(monkeypatch, tmp_path) -> No
     assert config["inspection"]["max_mean_edge_distance_px"] is None
     assert config["inspection"]["max_section_edge_distance_px"] is None
     assert config["inspection"]["max_section_width_delta_ratio"] is None
+    assert config["inspection"]["max_section_center_offset_px"] is None
 
 
 def test_load_config_merges_new_defaults_into_legacy_project_config(monkeypatch, tmp_path) -> None:
@@ -100,6 +101,7 @@ def test_load_config_merges_new_defaults_into_legacy_project_config(monkeypatch,
     assert config["inspection"]["max_mean_edge_distance_px"] is None
     assert config["inspection"]["max_section_edge_distance_px"] is None
     assert config["inspection"]["max_section_width_delta_ratio"] is None
+    assert config["inspection"]["max_section_center_offset_px"] is None
 
 
 def test_get_active_runtime_paths_uses_current_project_registry(monkeypatch, tmp_path) -> None:

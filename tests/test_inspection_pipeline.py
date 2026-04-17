@@ -6,6 +6,7 @@ import numpy as np
 import inspection_pipeline
 from inspection_pipeline import (
     compute_mean_edge_distance_px,
+    compute_section_center_offsets_px,
     compute_section_edge_distances_px,
     compute_section_width_ratios,
     inspect_against_reference,
@@ -167,6 +168,24 @@ def test_compute_section_width_ratios_detects_narrower_section() -> None:
     assert len(ratios) == 2
     assert ratios[0] == 1.0
     assert ratios[1] < 1.0
+
+
+def test_compute_section_center_offsets_px_detects_shifted_section_center() -> None:
+    reference_mask = np.zeros((12, 12), dtype=np.uint8)
+    sample_mask = np.zeros((12, 12), dtype=np.uint8)
+    reference_mask[3:9, 3:9] = 255
+    sample_mask[3:9, 4:10] = 255
+    left_section = np.zeros((12, 12), dtype=np.uint8)
+    right_section = np.zeros((12, 12), dtype=np.uint8)
+    left_section[3:9, 3:6] = 255
+    right_section[3:9, 6:9] = 255
+
+    offsets = compute_section_center_offsets_px(reference_mask, sample_mask, [left_section, right_section], np)
+
+    assert len(offsets) == 2
+    assert offsets[0] > 0.0
+    assert offsets[1] >= 0.0
+    assert max(offsets) > 0.0
 
 
 def test_inspect_against_reference_raises_for_shape_mismatch() -> None:
@@ -378,6 +397,7 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
         assert metrics['mean_edge_distance_px'] == 0.0
         assert metrics['worst_section_edge_distance_px'] == 0.0
         assert metrics['worst_section_width_delta_ratio'] == 0.0
+        assert metrics['worst_section_center_offset_px'] == 0.0
         assert metrics['anomaly_score'] == 0.25
         return False, {
             'required_coverage': 0.96,
@@ -395,12 +415,16 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
             'worst_section_width_delta_ratio': 0.0,
             'max_section_width_delta_ratio': 0.15,
             'effective_max_section_width_delta_ratio': 0.15,
+            'worst_section_center_offset_px': 0.0,
+            'max_section_center_offset_px': 0.75,
+            'effective_max_section_center_offset_px': 0.75,
             'min_anomaly_score': 0.5,
             'effective_min_anomaly_score': 0.5,
             'inspection_mode': 'mask_and_ml',
             'edge_distance_gate_active': True,
             'section_edge_gate_active': True,
             'section_width_gate_active': True,
+            'section_center_gate_active': True,
             'anomaly_gate_active': True,
         }
 
@@ -433,5 +457,7 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
     assert details['section_edge_gate_active'] is True
     assert details['worst_section_width_delta_ratio'] == 0.0
     assert details['section_width_gate_active'] is True
+    assert details['worst_section_center_offset_px'] == 0.0
+    assert details['section_center_gate_active'] is True
     assert details['anomaly_score'] == 0.25
     assert details['anomaly_gate_active'] is True

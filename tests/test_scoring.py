@@ -181,6 +181,27 @@ def test_evaluate_metrics_fails_when_section_width_delta_exceeds_threshold() -> 
     assert summary["effective_max_section_width_delta_ratio"] == 0.1
 
 
+def test_evaluate_metrics_fails_when_section_center_offset_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_center_offset_px": 1.2,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_center_offset_px": 0.6,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["section_center_gate_active"] is True
+    assert summary["effective_max_section_center_offset_px"] == 0.6
+
+
 def test_evaluate_metrics_fails_when_optional_gate_is_not_met() -> None:
     metrics = {
         "required_coverage": 0.95,
@@ -555,3 +576,35 @@ def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_section_width_delta
     assert passed is True
     assert summary["section_width_gate_active"] is True
     assert summary["effective_max_section_width_delta_ratio"] > summary["max_section_width_delta_ratio"]
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_section_center_offset() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_center_offset_px": 0.9,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_center_offset_px": 0.5,
+        "learned_ranges": {
+            "worst_section_center_offset_px": {
+                "direction": "lower_is_better",
+                "good_min": 0.1,
+                "good_max": 1.0,
+                "good_mean": 0.6,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_center_gate_active"] is True
+    assert summary["effective_max_section_center_offset_px"] > summary["max_section_center_offset_px"]

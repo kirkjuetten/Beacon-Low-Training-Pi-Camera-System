@@ -65,6 +65,7 @@ LEARNED_RANGE_DIRECTIONS = {
     'mean_edge_distance_px': 'lower_is_better',
     'worst_section_edge_distance_px': 'lower_is_better',
     'worst_section_width_delta_ratio': 'lower_is_better',
+    'worst_section_center_offset_px': 'lower_is_better',
     'ssim': 'higher_is_better',
     'mse': 'lower_is_better',
     'anomaly_score': 'higher_is_better',
@@ -434,6 +435,14 @@ class InspectionDisplay:
                 )
             else:
                 metrics.append(f"Worst Section Width Drift: {details['worst_section_width_delta_ratio']:.1%}")
+        if 'worst_section_center_offset_px' in details:
+            threshold = details.get('max_section_center_offset_px')
+            if threshold is not None:
+                metrics.append(
+                    f"Worst Section Center Offset: {details['worst_section_center_offset_px']:.3f}px (max {threshold:.3f}px)"
+                )
+            else:
+                metrics.append(f"Worst Section Center Offset: {details['worst_section_center_offset_px']:.3f}px")
         if 'ssim' in details:
             metrics.append(f"SSIM: {details['ssim']:.4f}")
         if 'anomaly_score' in details:
@@ -507,6 +516,16 @@ class InspectionDisplay:
         ):
             excess = float(worst_section_width_delta_ratio) - float(max_section_width_delta_ratio)
             descriptions.append(f"✗ SECTION WIDTH: Worst section width drift exceeds limit by {excess:.1%}")
+
+        max_section_center_offset_px = details.get('max_section_center_offset_px')
+        worst_section_center_offset_px = details.get('worst_section_center_offset_px')
+        if (
+            max_section_center_offset_px not in {None, ''}
+            and worst_section_center_offset_px is not None
+            and float(worst_section_center_offset_px) > float(max_section_center_offset_px)
+        ):
+            excess = float(worst_section_center_offset_px) - float(max_section_center_offset_px)
+            descriptions.append(f"✗ SECTION CENTER: Worst section center offset exceeds limit by {excess:.2f}px")
 
         # Check anomaly metrics
         if 'ssim' in details and details['ssim'] < 0.8:
@@ -998,6 +1017,8 @@ class TrainingLogger:
             log_entry += f" | SectEdge: {details['worst_section_edge_distance_px']:.3f}px"
         if 'worst_section_width_delta_ratio' in details:
             log_entry += f" | SectWidth: {details['worst_section_width_delta_ratio']:.1%}"
+        if 'worst_section_center_offset_px' in details:
+            log_entry += f" | SectCenter: {details['worst_section_center_offset_px']:.3f}px"
 
         if 'ssim' in details:
             log_entry += f" | SSIM: {details['ssim']:.3f}"
@@ -1126,6 +1147,7 @@ class ThresholdTrainer:
             'max_mean_edge_distance_px': inspection_cfg.get('max_mean_edge_distance_px'),
             'max_section_edge_distance_px': inspection_cfg.get('max_section_edge_distance_px'),
             'max_section_width_delta_ratio': inspection_cfg.get('max_section_width_delta_ratio'),
+            'max_section_center_offset_px': inspection_cfg.get('max_section_center_offset_px'),
             'min_ssim': inspection_cfg.get('min_ssim'),
             'max_mse': inspection_cfg.get('max_mse'),
             'min_anomaly_score': inspection_cfg.get('min_anomaly_score'),
@@ -1210,6 +1232,7 @@ class ThresholdTrainer:
                 'mean_edge_distance_px': details.get('mean_edge_distance_px'),
                 'worst_section_edge_distance_px': details.get('worst_section_edge_distance_px'),
                 'worst_section_width_delta_ratio': details.get('worst_section_width_delta_ratio'),
+                'worst_section_center_offset_px': details.get('worst_section_center_offset_px'),
                 'ssim': details.get('ssim'),
                 'mse': details.get('mse'),
                 'anomaly_score': details.get('anomaly_score'),
@@ -1323,6 +1346,7 @@ class ThresholdTrainer:
             'mean_edge_distance_px',
             'worst_section_edge_distance_px',
             'worst_section_width_delta_ratio',
+            'worst_section_center_offset_px',
             'ssim',
             'mse',
             'anomaly_score',
@@ -1369,6 +1393,7 @@ class ThresholdTrainer:
         mean_edge_distance_px = metrics.get('mean_edge_distance_px')
         worst_section_edge_distance_px = metrics.get('worst_section_edge_distance_px')
         worst_section_width_delta_ratio = metrics.get('worst_section_width_delta_ratio')
+        worst_section_center_offset_px = metrics.get('worst_section_center_offset_px')
 
         if required_coverage < float(inspection_cfg.get('min_required_coverage', 0.92)):
             return False
@@ -1390,6 +1415,11 @@ class ThresholdTrainer:
         max_section_width_delta_ratio = inspection_cfg.get('max_section_width_delta_ratio')
         if max_section_width_delta_ratio not in {None, ''}:
             if worst_section_width_delta_ratio is None or float(worst_section_width_delta_ratio) > float(max_section_width_delta_ratio):
+                return False
+
+        max_section_center_offset_px = inspection_cfg.get('max_section_center_offset_px')
+        if max_section_center_offset_px not in {None, ''}:
+            if worst_section_center_offset_px is None or float(worst_section_center_offset_px) > float(max_section_center_offset_px):
                 return False
 
         min_ssim = inspection_cfg.get('min_ssim')
@@ -1526,6 +1556,7 @@ class ThresholdTrainer:
             ('mean_edge_distance_px', 'max_mean_edge_distance_px'),
             ('worst_section_edge_distance_px', 'max_section_edge_distance_px'),
             ('worst_section_width_delta_ratio', 'max_section_width_delta_ratio'),
+            ('worst_section_center_offset_px', 'max_section_center_offset_px'),
         ]
         for metric_name, config_key in metric_map:
             learned_metric = learned_ranges.get(metric_name)

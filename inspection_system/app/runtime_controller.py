@@ -74,6 +74,17 @@ def describe_section_width_gate_status(config: dict) -> tuple[str, str | None]:
     return (f"Width Gate: section<={max_section_width_delta_ratio:.1%}", None)
 
 
+def describe_section_center_gate_status(config: dict) -> tuple[str, str | None]:
+    inspection_cfg = config.get("inspection", {})
+    max_section_center_offset_px = _optional_float(inspection_cfg.get("max_section_center_offset_px"))
+    if max_section_center_offset_px is None:
+        return (
+            "Center Gate: section off",
+            "Hint: set Max Section Center Offset to enable per-section center drift checks.",
+        )
+    return (f"Center Gate: section<={max_section_center_offset_px:.2f}px", None)
+
+
 def load_anomaly_detector(active_paths: dict):
     model_path = Path(active_paths["reference_dir"]) / "anomaly_model.pkl"
     model_path = get_anomaly_model_artifact_paths(active_paths)["model"]
@@ -202,6 +213,10 @@ def format_operator_mode_lines(
     lines.append(width_status_line)
     if width_hint:
         lines.append(width_hint)
+    center_status_line, center_hint = describe_section_center_gate_status(config)
+    lines.append(center_status_line)
+    if center_hint:
+        lines.append(center_hint)
 
     if active_paths is not None:
         reference_count = len(list_runtime_reference_candidates(config, active_paths))
@@ -283,6 +298,17 @@ def print_inspection_result(passed: bool, details: dict) -> None:
             )
         else:
             print(f"Worst section width drift: {details['worst_section_width_delta_ratio']:.1%}")
+    if details.get("worst_section_center_offset_px") is not None:
+        section_center_gate_active = bool(details.get("section_center_gate_active", False))
+        if details.get("max_section_center_offset_px") is not None:
+            suffix = " [gate]" if section_center_gate_active else " [info]"
+            print(
+                "Worst section center offset: "
+                f"{details['worst_section_center_offset_px']:.3f}px "
+                f"(max {details['max_section_center_offset_px']:.3f}px){suffix}"
+            )
+        else:
+            print(f"Worst section center offset: {details['worst_section_center_offset_px']:.3f}px")
     if details.get("mean_edge_distance_px") is not None:
         edge_distance_gate_active = bool(details.get("edge_distance_gate_active", False))
         if details.get("max_mean_edge_distance_px") is not None:
@@ -301,6 +327,8 @@ def print_inspection_result(passed: bool, details: dict) -> None:
         print("Section edge distances:", ", ".join(f"{v:.3f}" for v in details["section_edge_distances_px"]))
     if details.get("section_width_ratios"):
         print("Section width ratios:", ", ".join(f"{v:.3f}x" for v in details["section_width_ratios"]))
+    if details.get("section_center_offsets_px"):
+        print("Section center offsets:", ", ".join(f"{v:.3f}px" for v in details["section_center_offsets_px"]))
     if "ssim" in details:
         ssim_gate_active = bool(details.get("ssim_gate_active", False))
         if details.get("min_ssim") is not None:

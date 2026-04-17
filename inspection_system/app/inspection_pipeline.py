@@ -120,6 +120,27 @@ def compute_section_width_ratios(reference_mask, sample_mask, section_masks, np_
     return ratios
 
 
+def compute_section_center_offsets_px(reference_mask, sample_mask, section_masks, np_module):
+    offsets = []
+    reference_white = reference_mask > 0
+    sample_white = sample_mask > 0
+    for section_mask in section_masks:
+        section_white = section_mask > 0
+        if not section_white.any():
+            continue
+        reference_points = np_module.argwhere(reference_white & section_white)
+        if reference_points.size == 0:
+            continue
+        sample_points = np_module.argwhere(sample_white & section_white)
+        if sample_points.size == 0:
+            offsets.append(float("inf"))
+            continue
+        reference_center_x = float(reference_points[:, 1].mean())
+        sample_center_x = float(sample_points[:, 1].mean())
+        offsets.append(abs(sample_center_x - reference_center_x))
+    return offsets
+
+
 def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, float]:
     margins = [
         float(details.get("required_coverage", 0.0)) - float(details.get("effective_min_required_coverage", details.get("min_required_coverage", 0.0))),
@@ -128,6 +149,7 @@ def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, fl
     ]
 
     optional_gates = [
+        ("section_center_gate_active", "worst_section_center_offset_px", "effective_max_section_center_offset_px", "max_section_center_offset_px", "lower"),
         ("section_width_gate_active", "worst_section_width_delta_ratio", "effective_max_section_width_delta_ratio", "max_section_width_delta_ratio", "lower"),
         ("section_edge_gate_active", "worst_section_edge_distance_px", "effective_max_section_edge_distance_px", "max_section_edge_distance_px", "lower"),
         ("edge_distance_gate_active", "mean_edge_distance_px", "effective_max_mean_edge_distance_px", "max_mean_edge_distance_px", "lower"),
@@ -237,11 +259,14 @@ def inspect_against_reference(
     worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
     section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
     worst_section_width_delta_ratio = max((abs(float(ratio) - 1.0) for ratio in section_width_ratios), default=0.0)
+    section_center_offsets_px = compute_section_center_offsets_px(reference_mask, aligned_sample_mask, section_masks, np)
+    worst_section_center_offset_px = max(section_center_offsets_px, default=0.0)
     metric_inputs = {
         **metrics,
         "mean_edge_distance_px": mean_edge_distance_px,
         "worst_section_edge_distance_px": worst_section_edge_distance_px,
         "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
+        "worst_section_center_offset_px": worst_section_center_offset_px,
         **anomaly_metrics,
     }
     passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
@@ -313,6 +338,13 @@ def inspect_against_reference(
         ),
         "max_section_width_delta_ratio": threshold_summary.get("max_section_width_delta_ratio"),
         "effective_max_section_width_delta_ratio": threshold_summary.get("effective_max_section_width_delta_ratio"),
+        "section_center_offsets_px": section_center_offsets_px,
+        "worst_section_center_offset_px": threshold_summary.get(
+            "worst_section_center_offset_px",
+            worst_section_center_offset_px,
+        ),
+        "max_section_center_offset_px": threshold_summary.get("max_section_center_offset_px"),
+        "effective_max_section_center_offset_px": threshold_summary.get("effective_max_section_center_offset_px"),
         "min_ssim": threshold_summary.get("min_ssim"),
         "max_mse": threshold_summary.get("max_mse"),
         "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
@@ -326,6 +358,7 @@ def inspect_against_reference(
         "edge_distance_gate_active": bool(threshold_summary.get("edge_distance_gate_active", False)),
         "section_edge_gate_active": bool(threshold_summary.get("section_edge_gate_active", False)),
         "section_width_gate_active": bool(threshold_summary.get("section_width_gate_active", False)),
+        "section_center_gate_active": bool(threshold_summary.get("section_center_gate_active", False)),
         "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
         "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
         "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),

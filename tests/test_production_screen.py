@@ -21,6 +21,7 @@ def _base_details() -> dict:
         "min_section_coverage_limit": 0.85,
         "edge_distance_gate_active": False,
         "section_width_gate_active": False,
+        "section_center_gate_active": False,
         "ssim_gate_active": False,
         "mse_gate_active": False,
         "anomaly_gate_active": False,
@@ -136,6 +137,22 @@ def test_determine_operator_outcome_uses_reference_mismatch_for_section_width_ga
             "section_width_gate_active": True,
             "worst_section_width_delta_ratio": 0.18,
             "max_section_width_delta_ratio": 0.1,
+        }
+    )
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_REFERENCE_MISMATCH
+
+
+def test_determine_operator_outcome_uses_reference_mismatch_for_section_center_gate() -> None:
+    details = _base_details()
+    details.update(
+        {
+            "section_center_gate_active": True,
+            "worst_section_center_offset_px": 1.2,
+            "max_section_center_offset_px": 0.6,
         }
     )
 

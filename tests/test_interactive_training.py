@@ -70,15 +70,15 @@ def test_extract_learned_ranges_collects_good_and_reject_statistics(tmp_path) ->
 
     trainer = ThresholdTrainer(config_path)
     trainer.record_feedback(
-        {"required_coverage": 0.82, "outside_allowed_ratio": 0.03, "min_section_coverage": 0.70, "mean_edge_distance_px": 1.2, "worst_section_edge_distance_px": 1.4, "worst_section_width_delta_ratio": 0.18, "ssim": 0.88, "mse": 7.0},
+        {"required_coverage": 0.82, "outside_allowed_ratio": 0.03, "min_section_coverage": 0.70, "mean_edge_distance_px": 1.2, "worst_section_edge_distance_px": 1.4, "worst_section_width_delta_ratio": 0.18, "worst_section_center_offset_px": 0.9, "ssim": 0.88, "mse": 7.0},
         "approve",
     )
     trainer.record_feedback(
-        {"required_coverage": 0.90, "outside_allowed_ratio": 0.01, "min_section_coverage": 0.88, "mean_edge_distance_px": 0.5, "worst_section_edge_distance_px": 0.7, "worst_section_width_delta_ratio": 0.08, "ssim": 0.94, "mse": 3.0},
+        {"required_coverage": 0.90, "outside_allowed_ratio": 0.01, "min_section_coverage": 0.88, "mean_edge_distance_px": 0.5, "worst_section_edge_distance_px": 0.7, "worst_section_width_delta_ratio": 0.08, "worst_section_center_offset_px": 0.3, "ssim": 0.94, "mse": 3.0},
         "approve",
     )
     trainer.record_feedback(
-        {"required_coverage": 0.76, "outside_allowed_ratio": 0.05, "min_section_coverage": 0.60, "mean_edge_distance_px": 2.0, "worst_section_edge_distance_px": 2.3, "worst_section_width_delta_ratio": 0.28, "ssim": 0.80, "mse": 9.0},
+        {"required_coverage": 0.76, "outside_allowed_ratio": 0.05, "min_section_coverage": 0.60, "mean_edge_distance_px": 2.0, "worst_section_edge_distance_px": 2.3, "worst_section_width_delta_ratio": 0.28, "worst_section_center_offset_px": 1.8, "ssim": 0.80, "mse": 9.0},
         "reject",
     )
 
@@ -94,6 +94,8 @@ def test_extract_learned_ranges_collects_good_and_reject_statistics(tmp_path) ->
     assert learned_ranges["worst_section_edge_distance_px"]["good_max"] == 1.4
     assert learned_ranges["worst_section_width_delta_ratio"]["direction"] == "lower_is_better"
     assert learned_ranges["worst_section_width_delta_ratio"]["good_max"] == 0.18
+    assert learned_ranges["worst_section_center_offset_px"]["direction"] == "lower_is_better"
+    assert learned_ranges["worst_section_center_offset_px"]["good_max"] == 0.9
     assert learned_ranges["mse"]["direction"] == "lower_is_better"
 
 
@@ -191,6 +193,7 @@ def test_record_feedback_accepts_final_class_and_defect_category(tmp_path) -> No
             "mean_edge_distance_px": 1.9,
             "worst_section_edge_distance_px": 2.1,
             "worst_section_width_delta_ratio": 0.22,
+            "worst_section_center_offset_px": 1.1,
             "ssim": 0.81,
             "mse": 7.2,
             "anomaly_score": -0.5,
@@ -218,6 +221,7 @@ def test_record_feedback_accepts_final_class_and_defect_category(tmp_path) -> No
     assert record["metrics"]["mean_edge_distance_px"] == 1.9
     assert record["metrics"]["worst_section_edge_distance_px"] == 2.1
     assert record["metrics"]["worst_section_width_delta_ratio"] == 0.22
+    assert record["metrics"]["worst_section_center_offset_px"] == 1.1
     assert record["metrics"]["histogram_similarity"] == 0.33
     assert record["metrics"]["best_shift_x"] == 3
 
@@ -225,7 +229,7 @@ def test_record_feedback_accepts_final_class_and_defect_category(tmp_path) -> No
 def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config_path.write_text(
-        json.dumps({"inspection": {"max_mean_edge_distance_px": 2.0, "max_section_edge_distance_px": 2.5, "max_section_width_delta_ratio": 0.4}}, indent=2) + "\n",
+        json.dumps({"inspection": {"max_mean_edge_distance_px": 2.0, "max_section_edge_distance_px": 2.5, "max_section_width_delta_ratio": 0.4, "max_section_center_offset_px": 2.0}}, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -254,6 +258,7 @@ def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:
                     "mean_edge_distance_px": edge_distance,
                     "worst_section_edge_distance_px": edge_distance + 0.2,
                     "worst_section_width_delta_ratio": round(edge_distance / 10.0, 3),
+                    "worst_section_center_offset_px": round(edge_distance + 0.1, 3),
                 },
             }
         )
@@ -263,6 +268,7 @@ def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:
     assert suggestions["max_mean_edge_distance_px"] == 0.6
     assert suggestions["max_section_edge_distance_px"] == 0.8
     assert suggestions["max_section_width_delta_ratio"] == 0.06
+    assert suggestions["max_section_center_offset_px"] == 0.7
 
 
 def test_load_training_data_backfills_schema_for_legacy_records(tmp_path) -> None:

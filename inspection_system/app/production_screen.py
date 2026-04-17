@@ -142,6 +142,12 @@ def _failed_checks(details: dict) -> list[str]:
         failures.append(REASON_UNEVEN_PRINT)
 
     mismatch_failure = False
+    if bool(details.get("section_center_gate_active", False)):
+        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
+            details,
+            "worst_section_center_offset_px",
+            "max_section_center_offset_px",
+        )
     if bool(details.get("section_width_gate_active", False)):
         mismatch_failure = mismatch_failure or _metric_exceeds_limit(
             details,
@@ -210,6 +216,16 @@ def _is_borderline_failure(details: dict, failure: str) -> bool:
         ) >= 0.9
 
     if failure == REASON_REFERENCE_MISMATCH:
+        if bool(details.get("section_center_gate_active", False)) and _metric_exceeds_limit(
+            details,
+            "worst_section_center_offset_px",
+            "max_section_center_offset_px",
+        ):
+            return _threshold_ratio(
+                details.get("worst_section_center_offset_px"),
+                details.get("max_section_center_offset_px"),
+                high_is_bad=True,
+            ) >= (1.0 / 1.1)
         if bool(details.get("section_width_gate_active", False)) and _metric_exceeds_limit(
             details,
             "worst_section_width_delta_ratio",
@@ -304,6 +320,15 @@ def _make_summary_lines(status: str, primary_reason: Optional[str], details: dic
     else:
         lines.append("Part does not match reference.")
         if (
+            bool(details.get("section_center_gate_active", False))
+            and _metric_exceeds_limit(details, "worst_section_center_offset_px", "max_section_center_offset_px")
+            and details.get("worst_section_center_offset_px") is not None
+            and details.get("max_section_center_offset_px") is not None
+        ):
+            lines.append(
+                f"Section center offset {float(details['worst_section_center_offset_px']):.2f}px / {float(details['max_section_center_offset_px']):.2f}px"
+            )
+        elif (
             bool(details.get("section_width_gate_active", False))
             and _metric_exceeds_limit(details, "worst_section_width_delta_ratio", "max_section_width_delta_ratio")
             and details.get("worst_section_width_delta_ratio") is not None
