@@ -62,6 +62,8 @@ LEARNED_RANGE_DIRECTIONS = {
     'required_coverage': 'higher_is_better',
     'outside_allowed_ratio': 'lower_is_better',
     'min_section_coverage': 'higher_is_better',
+    'mean_edge_distance_px': 'lower_is_better',
+    'worst_section_edge_distance_px': 'lower_is_better',
     'ssim': 'higher_is_better',
     'mse': 'lower_is_better',
     'anomaly_score': 'higher_is_better',
@@ -409,6 +411,20 @@ class InspectionDisplay:
             f"Shift: x={details.get('best_shift_x', 0)}, y={details.get('best_shift_y', 0)}",
         ]
 
+        if 'mean_edge_distance_px' in details:
+            threshold = details.get('max_mean_edge_distance_px')
+            if threshold is not None:
+                metrics.append(f"Mean Edge Distance: {details['mean_edge_distance_px']:.3f}px (max {threshold:.3f}px)")
+            else:
+                metrics.append(f"Mean Edge Distance: {details['mean_edge_distance_px']:.3f}px")
+        if 'worst_section_edge_distance_px' in details:
+            threshold = details.get('max_section_edge_distance_px')
+            if threshold is not None:
+                metrics.append(
+                    f"Worst Section Edge Distance: {details['worst_section_edge_distance_px']:.3f}px (max {threshold:.3f}px)"
+                )
+            else:
+                metrics.append(f"Worst Section Edge Distance: {details['worst_section_edge_distance_px']:.3f}px")
         if 'ssim' in details:
             metrics.append(f"SSIM: {details['ssim']:.4f}")
         if 'anomaly_score' in details:
@@ -452,6 +468,26 @@ class InspectionDisplay:
         if min_section < min_section_limit:
             deficit = min_section_limit - min_section
             descriptions.append(f"✗ SECTION COVERAGE: Weakest section missing {deficit:.1%} coverage")
+
+        max_mean_edge_distance_px = details.get('max_mean_edge_distance_px')
+        mean_edge_distance_px = details.get('mean_edge_distance_px')
+        if (
+            max_mean_edge_distance_px not in {None, ''}
+            and mean_edge_distance_px is not None
+            and float(mean_edge_distance_px) > float(max_mean_edge_distance_px)
+        ):
+            excess = float(mean_edge_distance_px) - float(max_mean_edge_distance_px)
+            descriptions.append(f"✗ EDGE SHAPE: Mean edge drift exceeds limit by {excess:.2f}px")
+
+        max_section_edge_distance_px = details.get('max_section_edge_distance_px')
+        worst_section_edge_distance_px = details.get('worst_section_edge_distance_px')
+        if (
+            max_section_edge_distance_px not in {None, ''}
+            and worst_section_edge_distance_px is not None
+            and float(worst_section_edge_distance_px) > float(max_section_edge_distance_px)
+        ):
+            excess = float(worst_section_edge_distance_px) - float(max_section_edge_distance_px)
+            descriptions.append(f"✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by {excess:.2f}px")
 
         # Check anomaly metrics
         if 'ssim' in details and details['ssim'] < 0.8:
@@ -937,6 +973,10 @@ class TrainingLogger:
         log_entry += f" | {Path(image_path).name}"
         log_entry += f" | Coverage: {details.get('required_coverage', 0):.3f}"
         log_entry += f" | Outside: {details.get('outside_allowed_ratio', 0):.3f}"
+        if 'mean_edge_distance_px' in details:
+            log_entry += f" | EdgeDist: {details['mean_edge_distance_px']:.3f}px"
+        if 'worst_section_edge_distance_px' in details:
+            log_entry += f" | SectEdge: {details['worst_section_edge_distance_px']:.3f}px"
 
         if 'ssim' in details:
             log_entry += f" | SSIM: {details['ssim']:.3f}"
@@ -1062,6 +1102,8 @@ class ThresholdTrainer:
             'min_required_coverage': inspection_cfg.get('min_required_coverage'),
             'max_outside_allowed_ratio': inspection_cfg.get('max_outside_allowed_ratio'),
             'min_section_coverage': inspection_cfg.get('min_section_coverage'),
+            'max_mean_edge_distance_px': inspection_cfg.get('max_mean_edge_distance_px'),
+            'max_section_edge_distance_px': inspection_cfg.get('max_section_edge_distance_px'),
             'min_ssim': inspection_cfg.get('min_ssim'),
             'max_mse': inspection_cfg.get('max_mse'),
             'min_anomaly_score': inspection_cfg.get('min_anomaly_score'),
@@ -1143,6 +1185,8 @@ class ThresholdTrainer:
                 'required_coverage': details.get('required_coverage', 0),
                 'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
                 'min_section_coverage': details.get('min_section_coverage', 0),
+                'mean_edge_distance_px': details.get('mean_edge_distance_px'),
+                'worst_section_edge_distance_px': details.get('worst_section_edge_distance_px'),
                 'ssim': details.get('ssim'),
                 'mse': details.get('mse'),
                 'anomaly_score': details.get('anomaly_score'),
@@ -1253,6 +1297,8 @@ class ThresholdTrainer:
             'required_coverage',
             'outside_allowed_ratio',
             'min_section_coverage',
+            'mean_edge_distance_px',
+            'worst_section_edge_distance_px',
             'ssim',
             'mse',
             'anomaly_score',
@@ -1284,7 +1330,7 @@ class ThresholdTrainer:
             reject_min = learned_metric.get('reject_min')
             if reject_min is not None and good_ceiling < float(reject_min):
                 suggested = (good_ceiling + float(reject_min)) / 2.0
-            elif current_value is None or float(current_value) < good_ceiling:
+            elif current_value is None or float(current_value) > good_ceiling:
                 suggested = good_ceiling
 
         if suggested is None:
@@ -1296,6 +1342,8 @@ class ThresholdTrainer:
         required_coverage = float(metrics.get('required_coverage', 0.0))
         outside_allowed_ratio = float(metrics.get('outside_allowed_ratio', 1.0))
         min_section_coverage = float(metrics.get('min_section_coverage', 0.0))
+        mean_edge_distance_px = metrics.get('mean_edge_distance_px')
+        worst_section_edge_distance_px = metrics.get('worst_section_edge_distance_px')
 
         if required_coverage < float(inspection_cfg.get('min_required_coverage', 0.92)):
             return False
@@ -1303,6 +1351,16 @@ class ThresholdTrainer:
             return False
         if min_section_coverage < float(inspection_cfg.get('min_section_coverage', 0.85)):
             return False
+
+        max_mean_edge_distance_px = inspection_cfg.get('max_mean_edge_distance_px')
+        if max_mean_edge_distance_px not in {None, ''}:
+            if mean_edge_distance_px is None or float(mean_edge_distance_px) > float(max_mean_edge_distance_px):
+                return False
+
+        max_section_edge_distance_px = inspection_cfg.get('max_section_edge_distance_px')
+        if max_section_edge_distance_px not in {None, ''}:
+            if worst_section_edge_distance_px is None or float(worst_section_edge_distance_px) > float(max_section_edge_distance_px):
+                return False
 
         min_ssim = inspection_cfg.get('min_ssim')
         if min_ssim not in {None, ''}:
@@ -1435,6 +1493,8 @@ class ThresholdTrainer:
             ('required_coverage', 'min_required_coverage'),
             ('outside_allowed_ratio', 'max_outside_allowed_ratio'),
             ('min_section_coverage', 'min_section_coverage'),
+            ('mean_edge_distance_px', 'max_mean_edge_distance_px'),
+            ('worst_section_edge_distance_px', 'max_section_edge_distance_px'),
         ]
         for metric_name, config_key in metric_map:
             learned_metric = learned_ranges.get(metric_name)

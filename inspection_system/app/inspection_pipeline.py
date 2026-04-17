@@ -43,6 +43,65 @@ def resolve_alignment_config(config: dict) -> tuple[dict, str]:
     return alignment_cfg, profile_name
 
 
+def _compute_edge_mask(mask, np_module):
+    white = mask > 0
+    if not white.any():
+        return white
+
+    padded = np_module.pad(white, 1, mode="constant", constant_values=False)
+    interior = white.copy()
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            interior &= padded[1 + dy : 1 + dy + white.shape[0], 1 + dx : 1 + dx + white.shape[1]]
+    return white & (~interior)
+
+
+def _mean_nearest_edge_distance(edge_source, edge_target, np_module, cv2_module=None) -> float:
+    source_count = int(edge_source.sum())
+    target_count = int(edge_target.sum())
+    if source_count == 0 and target_count == 0:
+        return 0.0
+    if source_count == 0 or target_count == 0:
+        return float("inf")
+
+    if cv2_module is not None and hasattr(cv2_module, "distanceTransform"):
+        distance_input = (~edge_target).astype(np_module.uint8)
+        distance_map = cv2_module.distanceTransform(
+            distance_input,
+            getattr(cv2_module, "DIST_L2", 2),
+            getattr(cv2_module, "DIST_MASK_PRECISE", 0),
+        )
+        return float(distance_map[edge_source].mean())
+
+    source_points = np_module.argwhere(edge_source).astype(np_module.float32)
+    target_points = np_module.argwhere(edge_target).astype(np_module.float32)
+    deltas = source_points[:, None, :] - target_points[None, :, :]
+    distances = np_module.sqrt(np_module.sum(deltas * deltas, axis=2))
+    return float(distances.min(axis=1).mean())
+
+
+def compute_mean_edge_distance_px(reference_mask, sample_mask, np_module, cv2_module=None) -> float:
+    reference_edges = _compute_edge_mask(reference_mask, np_module)
+    sample_edges = _compute_edge_mask(sample_mask, np_module)
+    forward_distance = _mean_nearest_edge_distance(sample_edges, reference_edges, np_module, cv2_module)
+    reverse_distance = _mean_nearest_edge_distance(reference_edges, sample_edges, np_module, cv2_module)
+    return float((forward_distance + reverse_distance) / 2.0)
+
+
+def compute_section_edge_distances_px(reference_mask, sample_mask, section_masks, np_module, cv2_module=None):
+    distances = []
+    for section_mask in section_masks:
+        section_white = section_mask > 0
+        if not section_white.any():
+            continue
+        section_reference_mask = np_module.where(section_white, reference_mask, 0).astype(reference_mask.dtype, copy=False)
+        section_sample_mask = np_module.where(section_white, sample_mask, 0).astype(sample_mask.dtype, copy=False)
+        distances.append(compute_mean_edge_distance_px(section_reference_mask, section_sample_mask, np_module, cv2_module))
+    return distances
+
+
 def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, float]:
     margins = [
         float(details.get("required_coverage", 0.0)) - float(details.get("effective_min_required_coverage", details.get("min_required_coverage", 0.0))),
@@ -51,6 +110,8 @@ def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, fl
     ]
 
     optional_gates = [
+        ("section_edge_gate_active", "worst_section_edge_distance_px", "effective_max_section_edge_distance_px", "max_section_edge_distance_px", "lower"),
+        ("edge_distance_gate_active", "mean_edge_distance_px", "effective_max_mean_edge_distance_px", "max_mean_edge_distance_px", "lower"),
         ("ssim_gate_active", "ssim", "effective_min_ssim", "min_ssim", "higher"),
         ("mse_gate_active", "mse", "effective_max_mse", "max_mse", "lower"),
         ("anomaly_gate_active", "anomaly_score", "effective_min_anomaly_score", "min_anomaly_score", "higher"),
@@ -146,7 +207,21 @@ def inspect_against_reference(
     )
 
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
-    metric_inputs = {**metrics, **anomaly_metrics}
+    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, aligned_sample_mask, np, cv2)
+    section_edge_distances_px = compute_section_edge_distances_px(
+        reference_mask,
+        aligned_sample_mask,
+        section_masks,
+        np,
+        cv2,
+    )
+    worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
+    metric_inputs = {
+        **metrics,
+        "mean_edge_distance_px": mean_edge_distance_px,
+        "worst_section_edge_distance_px": worst_section_edge_distance_px,
+        **anomaly_metrics,
+    }
     passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
 
     required_coverage = float(threshold_summary["required_coverage"])
@@ -199,6 +274,16 @@ def inspect_against_reference(
         "effective_min_required_coverage": threshold_summary.get("effective_min_required_coverage", min_required_coverage),
         "effective_max_outside_allowed_ratio": threshold_summary.get("effective_max_outside_allowed_ratio", max_outside_allowed_ratio),
         "effective_min_section_coverage": threshold_summary.get("effective_min_section_coverage", min_section_coverage_limit),
+        "mean_edge_distance_px": threshold_summary.get("mean_edge_distance_px", mean_edge_distance_px),
+        "max_mean_edge_distance_px": threshold_summary.get("max_mean_edge_distance_px"),
+        "effective_max_mean_edge_distance_px": threshold_summary.get("effective_max_mean_edge_distance_px"),
+        "section_edge_distances_px": section_edge_distances_px,
+        "worst_section_edge_distance_px": threshold_summary.get(
+            "worst_section_edge_distance_px",
+            worst_section_edge_distance_px,
+        ),
+        "max_section_edge_distance_px": threshold_summary.get("max_section_edge_distance_px"),
+        "effective_max_section_edge_distance_px": threshold_summary.get("effective_max_section_edge_distance_px"),
         "min_ssim": threshold_summary.get("min_ssim"),
         "max_mse": threshold_summary.get("max_mse"),
         "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
@@ -209,6 +294,8 @@ def inspect_against_reference(
         "blend_mode": threshold_summary.get("blend_mode", "hard_only"),
         "tolerance_mode": threshold_summary.get("tolerance_mode", "balanced"),
         "learned_ranges_active": bool(threshold_summary.get("learned_ranges_active", False)),
+        "edge_distance_gate_active": bool(threshold_summary.get("edge_distance_gate_active", False)),
+        "section_edge_gate_active": bool(threshold_summary.get("section_edge_gate_active", False)),
         "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
         "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
         "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),

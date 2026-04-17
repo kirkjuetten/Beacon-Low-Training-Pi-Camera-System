@@ -19,6 +19,7 @@ def _base_details() -> dict:
         "max_outside_allowed_ratio": 0.02,
         "min_section_coverage": 0.94,
         "min_section_coverage_limit": 0.85,
+        "edge_distance_gate_active": False,
         "ssim_gate_active": False,
         "mse_gate_active": False,
         "anomaly_gate_active": False,
@@ -86,6 +87,38 @@ def test_determine_operator_outcome_uses_reference_mismatch_when_gate_fails() ->
             "ssim_gate_active": True,
             "min_ssim": 0.90,
             "ssim": 0.72,
+        }
+    )
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_REFERENCE_MISMATCH
+
+
+def test_determine_operator_outcome_uses_reference_mismatch_for_edge_distance_gate() -> None:
+    details = _base_details()
+    details.update(
+        {
+            "edge_distance_gate_active": True,
+            "mean_edge_distance_px": 1.6,
+            "max_mean_edge_distance_px": 1.0,
+        }
+    )
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REJECT
+    assert outcome.primary_reason == REASON_REFERENCE_MISMATCH
+
+
+def test_determine_operator_outcome_uses_reference_mismatch_for_section_edge_gate() -> None:
+    details = _base_details()
+    details.update(
+        {
+            "section_edge_gate_active": True,
+            "worst_section_edge_distance_px": 1.3,
+            "max_section_edge_distance_px": 0.8,
         }
     )
 

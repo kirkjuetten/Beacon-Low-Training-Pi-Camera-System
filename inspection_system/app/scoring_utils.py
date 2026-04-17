@@ -26,6 +26,8 @@ LEARNED_RANGE_DIRECTIONS = {
     "required_coverage": "higher_is_better",
     "outside_allowed_ratio": "lower_is_better",
     "min_section_coverage": "higher_is_better",
+    "mean_edge_distance_px": "lower_is_better",
+    "worst_section_edge_distance_px": "lower_is_better",
     "ssim": "higher_is_better",
     "mse": "lower_is_better",
     "anomaly_score": "higher_is_better",
@@ -35,6 +37,8 @@ DEFAULT_LEARNED_MARGINS = {
     "required_coverage": 0.02,
     "outside_allowed_ratio": 0.01,
     "min_section_coverage": 0.02,
+    "mean_edge_distance_px": 0.5,
+    "worst_section_edge_distance_px": 0.5,
     "ssim": 0.02,
     "mse": 1.0,
     "anomaly_score": 0.05,
@@ -120,6 +124,8 @@ def resolve_inspection_mode_details(inspection_cfg: dict) -> dict:
     inspection_mode = normalize_inspection_mode(inspection_cfg.get("inspection_mode", "mask_only"))
     included_gates = INSPECTION_MODE_GATES[inspection_mode]
 
+    max_mean_edge_distance_px = _optional_float(inspection_cfg.get("max_mean_edge_distance_px"))
+    max_section_edge_distance_px = _optional_float(inspection_cfg.get("max_section_edge_distance_px"))
     min_ssim = _optional_float(inspection_cfg.get("min_ssim"))
     max_mse = _optional_float(inspection_cfg.get("max_mse"))
     min_anomaly_score = _optional_float(inspection_cfg.get("min_anomaly_score"))
@@ -127,9 +133,13 @@ def resolve_inspection_mode_details(inspection_cfg: dict) -> dict:
     return {
         "inspection_mode": inspection_mode,
         "included_gates": included_gates,
+        "max_mean_edge_distance_px": max_mean_edge_distance_px,
+        "max_section_edge_distance_px": max_section_edge_distance_px,
         "min_ssim": min_ssim,
         "max_mse": max_mse,
         "min_anomaly_score": min_anomaly_score,
+        "edge_distance_gate_active": max_mean_edge_distance_px is not None,
+        "section_edge_gate_active": max_section_edge_distance_px is not None,
         "ssim_gate_active": "ssim" in included_gates and min_ssim is not None,
         "mse_gate_active": "mse" in included_gates and max_mse is not None,
         "anomaly_gate_active": "anomaly" in included_gates and min_anomaly_score is not None,
@@ -178,6 +188,8 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     required_coverage = float(metrics["required_coverage"])
     outside_allowed_ratio = float(metrics["outside_allowed_ratio"])
     min_section_coverage = float(metrics["min_section_coverage"])
+    mean_edge_distance_px = _optional_float(metrics.get("mean_edge_distance_px"))
+    worst_section_edge_distance_px = _optional_float(metrics.get("worst_section_edge_distance_px"))
     ssim_value = _optional_float(metrics.get("ssim"))
     mse_value = _optional_float(metrics.get("mse"))
     anomaly_score = _optional_float(metrics.get("anomaly_score"))
@@ -188,6 +200,8 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
 
     mode_details = resolve_inspection_mode_details(inspection_cfg)
     inspection_mode = mode_details["inspection_mode"]
+    configured_max_mean_edge_distance_px = mode_details["max_mean_edge_distance_px"]
+    configured_max_section_edge_distance_px = mode_details["max_section_edge_distance_px"]
     configured_min_ssim = mode_details["min_ssim"]
     configured_max_mse = mode_details["max_mse"]
     configured_min_anomaly_score = mode_details["min_anomaly_score"]
@@ -208,6 +222,16 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     learned_section = _get_learned_metric_threshold(
         "min_section_coverage",
         _get_learned_metric_range(inspection_cfg, "min_section_coverage"),
+        tolerance_mode,
+    )
+    learned_edge_distance = _get_learned_metric_threshold(
+        "mean_edge_distance_px",
+        _get_learned_metric_range(inspection_cfg, "mean_edge_distance_px"),
+        tolerance_mode,
+    )
+    learned_section_edge_distance = _get_learned_metric_threshold(
+        "worst_section_edge_distance_px",
+        _get_learned_metric_range(inspection_cfg, "worst_section_edge_distance_px"),
         tolerance_mode,
     )
     learned_ssim = _get_learned_metric_threshold(
@@ -235,16 +259,37 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
     effective_min_section_coverage = _blend_threshold(
         "min_section_coverage", min_section_coverage_limit, learned_section, blend_mode
     )
+    effective_max_mean_edge_distance_px = _blend_threshold(
+        "mean_edge_distance_px",
+        configured_max_mean_edge_distance_px,
+        learned_edge_distance,
+        blend_mode,
+    )
+    effective_max_section_edge_distance_px = _blend_threshold(
+        "worst_section_edge_distance_px",
+        configured_max_section_edge_distance_px,
+        learned_section_edge_distance,
+        blend_mode,
+    )
     effective_min_ssim = _blend_threshold("ssim", configured_min_ssim, learned_ssim, blend_mode)
     effective_max_mse = _blend_threshold("mse", configured_max_mse, learned_mse, blend_mode)
     effective_min_anomaly_score = _blend_threshold(
         "anomaly_score", configured_min_anomaly_score, learned_anomaly, blend_mode
     )
 
+    edge_distance_gate_active = effective_max_mean_edge_distance_px is not None
+    section_edge_gate_active = effective_max_section_edge_distance_px is not None
     ssim_gate_active = "ssim" in mode_details["included_gates"] and effective_min_ssim is not None
     mse_gate_active = "mse" in mode_details["included_gates"] and effective_max_mse is not None
     anomaly_gate_active = "anomaly" in mode_details["included_gates"] and effective_min_anomaly_score is not None
 
+    edge_distance_pass = True if not edge_distance_gate_active else (
+        mean_edge_distance_px is not None and mean_edge_distance_px <= effective_max_mean_edge_distance_px
+    )
+    section_edge_pass = True if not section_edge_gate_active else (
+        worst_section_edge_distance_px is not None
+        and worst_section_edge_distance_px <= effective_max_section_edge_distance_px
+    )
     ssim_pass = True if not ssim_gate_active else (ssim_value is not None and ssim_value >= effective_min_ssim)
     mse_pass = True if not mse_gate_active else (mse_value is not None and mse_value <= effective_max_mse)
     anomaly_pass = True if not anomaly_gate_active else (
@@ -255,6 +300,8 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         required_coverage >= effective_min_required_coverage
         and outside_allowed_ratio <= effective_max_outside_allowed_ratio
         and min_section_coverage >= effective_min_section_coverage
+        and edge_distance_pass
+        and section_edge_pass
         and ssim_pass
         and mse_pass
         and anomaly_pass
@@ -270,6 +317,12 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         "effective_min_required_coverage": effective_min_required_coverage,
         "effective_max_outside_allowed_ratio": effective_max_outside_allowed_ratio,
         "effective_min_section_coverage": effective_min_section_coverage,
+        "mean_edge_distance_px": mean_edge_distance_px,
+        "max_mean_edge_distance_px": configured_max_mean_edge_distance_px,
+        "effective_max_mean_edge_distance_px": effective_max_mean_edge_distance_px,
+        "worst_section_edge_distance_px": worst_section_edge_distance_px,
+        "max_section_edge_distance_px": configured_max_section_edge_distance_px,
+        "effective_max_section_edge_distance_px": effective_max_section_edge_distance_px,
         "ssim": ssim_value,
         "mse": mse_value,
         "anomaly_score": anomaly_score,
@@ -288,11 +341,15 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
                 learned_required,
                 learned_outside,
                 learned_section,
+                learned_edge_distance,
+                learned_section_edge_distance,
                 learned_ssim,
                 learned_mse,
                 learned_anomaly,
             ]
         ),
+        "edge_distance_gate_active": edge_distance_gate_active,
+        "section_edge_gate_active": section_edge_gate_active,
         "ssim_gate_active": ssim_gate_active,
         "mse_gate_active": mse_gate_active,
         "anomaly_gate_active": anomaly_gate_active,

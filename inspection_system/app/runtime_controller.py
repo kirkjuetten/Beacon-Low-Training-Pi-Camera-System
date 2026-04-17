@@ -21,6 +21,48 @@ from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
 
 
+def _optional_float(value):
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def describe_edge_gate_status(config: dict) -> tuple[str, str | None]:
+    inspection_cfg = config.get("inspection", {})
+    max_mean_edge_distance_px = _optional_float(inspection_cfg.get("max_mean_edge_distance_px"))
+    max_section_edge_distance_px = _optional_float(inspection_cfg.get("max_section_edge_distance_px"))
+
+    mean_status = (
+        f"global<={max_mean_edge_distance_px:.2f}px" if max_mean_edge_distance_px is not None else "global off"
+    )
+    section_status = (
+        f"section<={max_section_edge_distance_px:.2f}px"
+        if max_section_edge_distance_px is not None
+        else "section off"
+    )
+    status_line = f"Edge Gates: {mean_status} | {section_status}"
+
+    if max_mean_edge_distance_px is None and max_section_edge_distance_px is None:
+        return (
+            status_line,
+            "Hint: set Max Mean Edge Distance and Max Section Edge Distance to enable global and section edge drift checks.",
+        )
+    if max_mean_edge_distance_px is None:
+        return (
+            status_line,
+            "Hint: set Max Mean Edge Distance to enable the global edge drift gate.",
+        )
+    if max_section_edge_distance_px is None:
+        return (
+            status_line,
+            "Hint: set Max Section Edge Distance to enable the section edge drift gate.",
+        )
+    return status_line, None
+
+
 def load_anomaly_detector(active_paths: dict):
     model_path = Path(active_paths["reference_dir"]) / "anomaly_model.pkl"
     model_path = get_anomaly_model_artifact_paths(active_paths)["model"]
@@ -141,6 +183,10 @@ def format_operator_mode_lines(
         f"Mode: {inspection_mode} | Ref: {reference_strategy}",
         f"Blend: {blend_mode} | Tol: {tolerance_mode}",
     ]
+    edge_status_line, edge_hint = describe_edge_gate_status(config)
+    lines.append(edge_status_line)
+    if edge_hint:
+        lines.append(edge_hint)
 
     if active_paths is not None:
         reference_count = len(list_runtime_reference_candidates(config, active_paths))
@@ -200,9 +246,33 @@ def print_inspection_result(passed: bool, details: dict) -> None:
     print(f"Required coverage: {details['required_coverage']:.4f} (min {details['min_required_coverage']:.4f})")
     print(f"Outside allowed ratio: {details['outside_allowed_ratio']:.4f} (max {details['max_outside_allowed_ratio']:.4f})")
     print(f"Min section coverage: {details['min_section_coverage']:.4f} (min {details['min_section_coverage_limit']:.4f})")
+    if details.get("worst_section_edge_distance_px") is not None:
+        section_edge_gate_active = bool(details.get("section_edge_gate_active", False))
+        if details.get("max_section_edge_distance_px") is not None:
+            suffix = " [gate]" if section_edge_gate_active else " [info]"
+            print(
+                "Worst section edge distance: "
+                f"{details['worst_section_edge_distance_px']:.3f}px "
+                f"(max {details['max_section_edge_distance_px']:.3f}px){suffix}"
+            )
+        else:
+            print(f"Worst section edge distance: {details['worst_section_edge_distance_px']:.3f}px")
+    if details.get("mean_edge_distance_px") is not None:
+        edge_distance_gate_active = bool(details.get("edge_distance_gate_active", False))
+        if details.get("max_mean_edge_distance_px") is not None:
+            suffix = " [gate]" if edge_distance_gate_active else " [info]"
+            print(
+                "Mean edge distance: "
+                f"{details['mean_edge_distance_px']:.3f}px "
+                f"(max {details['max_mean_edge_distance_px']:.3f}px){suffix}"
+            )
+        else:
+            print(f"Mean edge distance: {details['mean_edge_distance_px']:.3f}px")
     print(f"Sample white pixels: {details['sample_white_pixels']}")
     if details.get("section_coverages"):
         print("Section coverages:", ", ".join(f"{v:.3f}" for v in details["section_coverages"]))
+    if details.get("section_edge_distances_px"):
+        print("Section edge distances:", ", ".join(f"{v:.3f}" for v in details["section_edge_distances_px"]))
     if "ssim" in details:
         ssim_gate_active = bool(details.get("ssim_gate_active", False))
         if details.get("min_ssim") is not None:

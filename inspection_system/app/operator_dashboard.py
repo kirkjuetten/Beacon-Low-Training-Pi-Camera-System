@@ -31,6 +31,7 @@ from inspection_system.app.camera_interface import (
     switch_project,
 )
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
+from inspection_system.app.runtime_controller import describe_edge_gate_status
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -56,6 +57,8 @@ CONFIG_FIELD_SPECS = [
     ("inspection.min_required_coverage", "Min Required Coverage", float),
     ("inspection.max_outside_allowed_ratio", "Max Outside Allowed", float),
     ("inspection.min_section_coverage", "Min Section Coverage", float),
+    ("inspection.max_mean_edge_distance_px", "Max Mean Edge Distance (px, optional)", float),
+    ("inspection.max_section_edge_distance_px", "Max Section Edge Distance (px, optional)", float),
     ("inspection.min_ssim", "Min SSIM (optional)", float),
     ("inspection.max_mse", "Max MSE (optional)", float),
     ("inspection.min_anomaly_score", "Min Anomaly Score (optional)", float),
@@ -80,6 +83,8 @@ CONFIG_DROPDOWN_OPTIONS = {
 }
 
 OPTIONAL_FLOAT_FIELDS = {
+    "inspection.max_mean_edge_distance_px",
+    "inspection.max_section_edge_distance_px",
     "inspection.min_ssim",
     "inspection.max_mse",
     "inspection.min_anomaly_score",
@@ -154,6 +159,13 @@ def build_config_editor_values(config: dict) -> dict[str, str]:
         value = get_nested_config_value(config, dotted_path)
         values[dotted_path] = "" if value is None else str(value)
     return values
+
+
+def build_dashboard_hint_text(config: dict) -> str:
+    status_line, hint = describe_edge_gate_status(config)
+    if hint:
+        return f"{status_line} | {hint}"
+    return f"{status_line} | All edge gates active."
 
 
 def is_informative_preview_image(image_path: Path) -> bool:
@@ -252,6 +264,7 @@ class OperatorDashboard:
         self.active_config_var = tk.StringVar(value="Config: -")
         self.active_reference_var = tk.StringVar(value="Reference: -")
         self.active_log_var = tk.StringVar(value="Logs: -")
+        self.edge_gate_hint_var = tk.StringVar(value="Edge Gates: -")
         self.project_select_var = tk.StringVar()
         self.new_project_name_var = tk.StringVar()
         self.new_project_desc_var = tk.StringVar()
@@ -366,23 +379,24 @@ class OperatorDashboard:
         ttk.Label(info, textvariable=self.active_config_var).grid(row=0, column=0, sticky="w", pady=1)
         ttk.Label(info, textvariable=self.active_reference_var).grid(row=1, column=0, sticky="w", pady=1)
         ttk.Label(info, textvariable=self.active_log_var).grid(row=2, column=0, sticky="w", pady=1)
+        ttk.Label(info, textvariable=self.edge_gate_hint_var, wraplength=620 if self.compact_layout else 420, justify="left").grid(row=3, column=0, sticky="w", pady=(4, 1))
 
         self.capture_button = ttk.Button(parent, text="Capture Only", command=lambda: self.run_command("capture"))
-        self.capture_button.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.capture_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.inspect_button = ttk.Button(parent, text="Inspect Part", command=lambda: self.run_command("inspect"))
-        self.inspect_button.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.inspect_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.production_button = ttk.Button(parent, text="Launch Production", command=self.launch_production)
-        self.production_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.production_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.training_button = ttk.Button(parent, text="Launch Training", command=self.launch_training)
-        self.training_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.training_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.config_editor_button = ttk.Button(parent, text="Open Config + Preview", command=self.launch_config_editor)
-        self.config_editor_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.config_editor_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
-        self.project_manager_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.project_manager_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
-        self.refresh_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.refresh_button.grid(row=5, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
-        self.exit_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.exit_button.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=6)
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -673,6 +687,8 @@ class OperatorDashboard:
         self.active_config_var.set(f"Config: {active_paths['config_file']}")
         self.active_reference_var.set(f"Reference: {active_paths['reference_dir']}")
         self.active_log_var.set(f"Logs: {active_paths['log_dir']}")
+        active_config = read_json_file(active_paths["config_file"])
+        self.edge_gate_hint_var.set(build_dashboard_hint_text(active_config))
 
         projects = list_projects()
         project_names = [project["name"] for project in projects]

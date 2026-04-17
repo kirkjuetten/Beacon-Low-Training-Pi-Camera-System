@@ -132,6 +132,14 @@ def _failed_checks(details: dict) -> list[str]:
         failures.append(REASON_UNEVEN_PRINT)
 
     mismatch_failure = False
+    if bool(details.get("section_edge_gate_active", False)):
+        worst_section_edge_distance_px = details.get("worst_section_edge_distance_px")
+        max_section_edge_distance_px = details.get("max_section_edge_distance_px")
+        mismatch_failure = mismatch_failure or (
+            worst_section_edge_distance_px is None
+            or max_section_edge_distance_px is None
+            or float(worst_section_edge_distance_px) > float(max_section_edge_distance_px)
+        )
     if bool(details.get("ssim_gate_active", False)):
         ssim_value = details.get("ssim")
         min_ssim = details.get("min_ssim")
@@ -140,6 +148,14 @@ def _failed_checks(details: dict) -> list[str]:
         mse_value = details.get("mse")
         max_mse = details.get("max_mse")
         mismatch_failure = mismatch_failure or (mse_value is None or max_mse is None or float(mse_value) > float(max_mse))
+    if bool(details.get("edge_distance_gate_active", False)):
+        mean_edge_distance_px = details.get("mean_edge_distance_px")
+        max_mean_edge_distance_px = details.get("max_mean_edge_distance_px")
+        mismatch_failure = mismatch_failure or (
+            mean_edge_distance_px is None
+            or max_mean_edge_distance_px is None
+            or float(mean_edge_distance_px) > float(max_mean_edge_distance_px)
+        )
     if bool(details.get("anomaly_gate_active", False)):
         anomaly_score = details.get("anomaly_score")
         min_anomaly_score = details.get("min_anomaly_score")
@@ -176,6 +192,18 @@ def _is_borderline_failure(details: dict, failure: str) -> bool:
         ) >= 0.9
 
     if failure == REASON_REFERENCE_MISMATCH:
+        if bool(details.get("section_edge_gate_active", False)):
+            return _threshold_ratio(
+                details.get("worst_section_edge_distance_px"),
+                details.get("max_section_edge_distance_px"),
+                high_is_bad=True,
+            ) >= (1.0 / 1.1)
+        if bool(details.get("edge_distance_gate_active", False)):
+            return _threshold_ratio(
+                details.get("mean_edge_distance_px"),
+                details.get("max_mean_edge_distance_px"),
+                high_is_bad=True,
+            ) >= (1.0 / 1.1)
         if bool(details.get("ssim_gate_active", False)):
             return _threshold_ratio(details.get("ssim"), details.get("min_ssim"), high_is_bad=False) >= 0.95
         if bool(details.get("mse_gate_active", False)):
@@ -225,7 +253,23 @@ def _make_summary_lines(status: str, primary_reason: Optional[str], details: dic
         lines.append(f"Weakest section {min_section_coverage:.1%} / {min_section_limit:.1%}")
     else:
         lines.append("Part does not match reference.")
-        if bool(details.get("ssim_gate_active", False)) and details.get("ssim") is not None and details.get("min_ssim") is not None:
+        if (
+            bool(details.get("section_edge_gate_active", False))
+            and details.get("worst_section_edge_distance_px") is not None
+            and details.get("max_section_edge_distance_px") is not None
+        ):
+            lines.append(
+                f"Section edge drift {float(details['worst_section_edge_distance_px']):.2f}px / {float(details['max_section_edge_distance_px']):.2f}px"
+            )
+        elif (
+            bool(details.get("edge_distance_gate_active", False))
+            and details.get("mean_edge_distance_px") is not None
+            and details.get("max_mean_edge_distance_px") is not None
+        ):
+            lines.append(
+                f"Edge drift {float(details['mean_edge_distance_px']):.2f}px / {float(details['max_mean_edge_distance_px']):.2f}px"
+            )
+        elif bool(details.get("ssim_gate_active", False)) and details.get("ssim") is not None and details.get("min_ssim") is not None:
             lines.append(f"Similarity {float(details['ssim']):.3f} / {float(details['min_ssim']):.3f}")
         elif bool(details.get("mse_gate_active", False)) and details.get("mse") is not None and details.get("max_mse") is not None:
             lines.append(f"Difference {float(details['mse']):.1f} / {float(details['max_mse']):.1f}")

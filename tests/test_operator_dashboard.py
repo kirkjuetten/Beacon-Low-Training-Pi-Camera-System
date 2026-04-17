@@ -7,6 +7,7 @@ from inspection_system.app.operator_dashboard import (
     CONFIG_DROPDOWN_OPTIONS,
     CONFIG_FIELD_SPECS,
     apply_config_updates,
+    build_dashboard_hint_text,
     build_config_editor_values,
     describe_preview_image,
     find_preview_image,
@@ -37,6 +38,8 @@ def test_apply_config_updates_updates_nested_fields() -> None:
             "threshold_mode": "otsu",
             "threshold_value": 180,
             "min_required_coverage": 0.92,
+            "max_mean_edge_distance_px": None,
+            "max_section_edge_distance_px": None,
             "save_debug_images": True,
         },
         "alignment": {"enabled": True},
@@ -53,6 +56,8 @@ def test_apply_config_updates_updates_nested_fields() -> None:
             "inspection.tolerance_mode": "forgiving",
             "inspection.threshold_mode": "fixed_inv",
             "inspection.min_required_coverage": "0.975",
+            "inspection.max_mean_edge_distance_px": "1.25",
+            "inspection.max_section_edge_distance_px": "0.75",
             "inspection.save_debug_images": "false",
             "alignment.enabled": "false",
         },
@@ -65,6 +70,8 @@ def test_apply_config_updates_updates_nested_fields() -> None:
     assert get_nested_config_value(updated, "inspection.tolerance_mode") == "forgiving"
     assert get_nested_config_value(updated, "inspection.threshold_mode") == "fixed_inv"
     assert get_nested_config_value(updated, "inspection.min_required_coverage") == 0.975
+    assert get_nested_config_value(updated, "inspection.max_mean_edge_distance_px") == 1.25
+    assert get_nested_config_value(updated, "inspection.max_section_edge_distance_px") == 0.75
     assert get_nested_config_value(updated, "inspection.save_debug_images") is False
     assert get_nested_config_value(updated, "alignment.enabled") is False
     assert get_nested_config_value(config, "capture.timeout_ms") == 200
@@ -106,6 +113,8 @@ def test_build_config_editor_values_returns_string_values() -> None:
             "tolerance_mode": "balanced",
             "threshold_mode": "otsu",
             "min_required_coverage": 0.92,
+            "max_mean_edge_distance_px": 1.5,
+            "max_section_edge_distance_px": 0.8,
         },
         "alignment": {"enabled": True},
         "indicator_led": {"enabled": False},
@@ -120,8 +129,24 @@ def test_build_config_editor_values_returns_string_values() -> None:
     assert values["inspection.tolerance_mode"] == "balanced"
     assert values["inspection.threshold_mode"] == "otsu"
     assert values["inspection.min_required_coverage"] == "0.92"
+    assert values["inspection.max_mean_edge_distance_px"] == "1.5"
+    assert values["inspection.max_section_edge_distance_px"] == "0.8"
     assert values["alignment.enabled"] == "True"
     assert values["indicator_led.enabled"] == "False"
+
+
+def test_build_dashboard_hint_text_reports_inactive_edge_gate() -> None:
+    hint = build_dashboard_hint_text(
+        {
+            "inspection": {
+                "max_mean_edge_distance_px": 1.2,
+                "max_section_edge_distance_px": None,
+            }
+        }
+    )
+
+    assert "Edge Gates: global<=1.20px | section off" in hint
+    assert "set Max Section Edge Distance" in hint
 
 
 def test_dropdown_options_cover_expected_fixed_choice_fields() -> None:

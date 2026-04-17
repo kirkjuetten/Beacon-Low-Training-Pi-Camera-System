@@ -4,7 +4,12 @@ from unittest import mock
 import numpy as np
 
 import inspection_pipeline
-from inspection_pipeline import inspect_against_reference, inspect_against_references
+from inspection_pipeline import (
+    compute_mean_edge_distance_px,
+    compute_section_edge_distances_px,
+    inspect_against_reference,
+    inspect_against_references,
+)
 
 
 class FakeCv2:
@@ -108,12 +113,42 @@ def test_inspect_against_reference_returns_expected_details() -> None:
     assert details["required_coverage"] == 0.95
     assert details["outside_allowed_ratio"] == 0.01
     assert details["min_section_coverage"] == 0.90
+    assert details["mean_edge_distance_px"] == 0.0
+    assert details["worst_section_edge_distance_px"] == 0.0
     assert details["section_coverages"] == [0.90]
     assert details["sample_white_pixels"] == 4
     assert details["min_required_coverage"] == 0.92
     assert details["max_outside_allowed_ratio"] == 0.02
     assert details["min_section_coverage_limit"] == 0.85
     assert details["debug_paths"] == {"mask": "mask-path", "diff": "diff-path"}
+
+
+def test_compute_mean_edge_distance_px_detects_shifted_edges() -> None:
+    reference_mask = np.zeros((12, 12), dtype=np.uint8)
+    sample_mask = np.zeros((12, 12), dtype=np.uint8)
+    reference_mask[3:9, 3:9] = 255
+    sample_mask[3:9, 4:10] = 255
+
+    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, sample_mask, np)
+
+    assert mean_edge_distance_px > 0.0
+
+
+def test_compute_section_edge_distances_px_reports_per_section_drift() -> None:
+    reference_mask = np.zeros((12, 12), dtype=np.uint8)
+    sample_mask = np.zeros((12, 12), dtype=np.uint8)
+    reference_mask[3:9, 3:9] = 255
+    sample_mask[3:9, 3:9] = 255
+    sample_mask[3:9, 6:10] = 255
+    left_section = np.zeros((12, 12), dtype=np.uint8)
+    right_section = np.zeros((12, 12), dtype=np.uint8)
+    left_section[:, :6] = 255
+    right_section[:, 6:] = 255
+
+    distances = compute_section_edge_distances_px(reference_mask, sample_mask, [left_section, right_section], np)
+
+    assert len(distances) == 2
+    assert distances[0] < distances[1]
 
 
 def test_inspect_against_reference_raises_for_shape_mismatch() -> None:
@@ -322,6 +357,8 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
         }
 
     def fake_evaluate_metrics(metrics, inspection_cfg):
+        assert metrics['mean_edge_distance_px'] == 0.0
+        assert metrics['worst_section_edge_distance_px'] == 0.0
         assert metrics['anomaly_score'] == 0.25
         return False, {
             'required_coverage': 0.96,
@@ -330,9 +367,17 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
             'min_required_coverage': 0.92,
             'max_outside_allowed_ratio': 0.02,
             'min_section_coverage_limit': 0.85,
+            'mean_edge_distance_px': 0.0,
+            'max_mean_edge_distance_px': 1.0,
+            'effective_max_mean_edge_distance_px': 1.0,
+            'worst_section_edge_distance_px': 0.0,
+            'max_section_edge_distance_px': 0.8,
+            'effective_max_section_edge_distance_px': 0.8,
             'min_anomaly_score': 0.5,
             'effective_min_anomaly_score': 0.5,
             'inspection_mode': 'mask_and_ml',
+            'edge_distance_gate_active': True,
+            'section_edge_gate_active': True,
             'anomaly_gate_active': True,
         }
 
@@ -359,5 +404,9 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
         )
 
     assert passed is False
+    assert details['mean_edge_distance_px'] == 0.0
+    assert details['edge_distance_gate_active'] is True
+    assert details['worst_section_edge_distance_px'] == 0.0
+    assert details['section_edge_gate_active'] is True
     assert details['anomaly_score'] == 0.25
     assert details['anomaly_gate_active'] is True

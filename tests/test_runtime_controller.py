@@ -1,6 +1,6 @@
 import json
 
-from inspection_system.app.runtime_controller import get_inspection_runtime_warnings
+from inspection_system.app.runtime_controller import describe_edge_gate_status, format_operator_mode_lines, get_inspection_runtime_warnings
 
 
 def test_ml_mode_warns_when_model_and_threshold_are_missing() -> None:
@@ -32,6 +32,31 @@ def test_mask_only_mode_has_no_ml_warnings() -> None:
     )
 
     assert warnings == []
+
+
+def test_describe_edge_gate_status_reports_missing_thresholds() -> None:
+    status_line, hint = describe_edge_gate_status({"inspection": {}})
+
+    assert status_line == "Edge Gates: global off | section off"
+    assert "set Max Mean Edge Distance and Max Section Edge Distance" in hint
+
+
+def test_format_operator_mode_lines_includes_edge_gate_hint() -> None:
+    lines = format_operator_mode_lines(
+        {
+            "inspection": {
+                "inspection_mode": "mask_only",
+                "reference_strategy": "golden_only",
+                "blend_mode": "hard_only",
+                "tolerance_mode": "balanced",
+                "max_mean_edge_distance_px": 1.25,
+                "max_section_edge_distance_px": None,
+            }
+        }
+    )
+
+    assert "Edge Gates: global<=1.25px | section off" in lines
+    assert any("set Max Section Edge Distance" in line for line in lines)
 
 
 def test_ml_mode_warns_when_committed_good_samples_are_insufficient(tmp_path) -> None:

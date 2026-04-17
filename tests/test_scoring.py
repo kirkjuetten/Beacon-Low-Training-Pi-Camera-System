@@ -93,6 +93,7 @@ def test_evaluate_metrics_applies_optional_ssim_and_mse_gates() -> None:
         "required_coverage": 0.95,
         "outside_allowed_ratio": 0.01,
         "min_section_coverage": 0.9,
+        "mean_edge_distance_px": 0.6,
         "ssim": 0.91,
         "mse": 4.0,
     }
@@ -101,6 +102,7 @@ def test_evaluate_metrics_applies_optional_ssim_and_mse_gates() -> None:
         "min_required_coverage": 0.92,
         "max_outside_allowed_ratio": 0.02,
         "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": 1.0,
         "min_ssim": 0.9,
         "max_mse": 5.0,
     }
@@ -108,10 +110,54 @@ def test_evaluate_metrics_applies_optional_ssim_and_mse_gates() -> None:
     passed, summary = evaluate_metrics(metrics, inspection_cfg)
 
     assert passed is True
+    assert summary["mean_edge_distance_px"] == 0.6
+    assert summary["max_mean_edge_distance_px"] == 1.0
     assert summary["ssim"] == 0.91
     assert summary["mse"] == 4.0
     assert summary["min_ssim"] == 0.9
     assert summary["max_mse"] == 5.0
+
+
+def test_evaluate_metrics_fails_when_mean_edge_distance_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "mean_edge_distance_px": 1.8,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": 1.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["edge_distance_gate_active"] is True
+    assert summary["effective_max_mean_edge_distance_px"] == 1.0
+
+
+def test_evaluate_metrics_fails_when_worst_section_edge_distance_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_edge_distance_px": 1.4,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_edge_distance_px": 1.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["section_edge_gate_active"] is True
+    assert summary["effective_max_section_edge_distance_px"] == 1.0
 
 
 def test_evaluate_metrics_fails_when_optional_gate_is_not_met() -> None:
@@ -391,3 +437,68 @@ def test_evaluate_metrics_hard_only_ignores_learned_ranges() -> None:
 
     assert passed is False
     assert summary["effective_min_required_coverage"] == summary["min_required_coverage"]
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_edge_distance() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "mean_edge_distance_px": 1.4,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": 1.0,
+        "learned_ranges": {
+            "mean_edge_distance_px": {
+                "direction": "lower_is_better",
+                "good_min": 0.2,
+                "good_max": 1.6,
+                "good_mean": 0.9,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["edge_distance_gate_active"] is True
+    assert summary["effective_max_mean_edge_distance_px"] > summary["max_mean_edge_distance_px"]
+    assert summary["learned_ranges_active"] is True
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_section_edge_distance() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_edge_distance_px": 1.1,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_edge_distance_px": 0.8,
+        "learned_ranges": {
+            "worst_section_edge_distance_px": {
+                "direction": "lower_is_better",
+                "good_min": 0.2,
+                "good_max": 1.4,
+                "good_mean": 0.8,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_edge_gate_active"] is True
+    assert summary["effective_max_section_edge_distance_px"] > summary["max_section_edge_distance_px"]

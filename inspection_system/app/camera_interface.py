@@ -98,6 +98,8 @@ DEFAULT_CONFIG = {
         "max_outside_allowed_ratio": 0.02,
         "min_required_coverage": 0.92,
         "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": None,
+        "max_section_edge_distance_px": None,
         "section_columns": 12,
     },
     "alignment": {
