@@ -3,22 +3,10 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
-import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-
-try:
-    from PIL import Image, ImageStat, ImageTk
-    PIL_AVAILABLE = True
-except ImportError:
-    Image = None
-    ImageStat = None
-    ImageTk = None
-    PIL_AVAILABLE = False
 
 from inspection_system.app.camera_interface import (
     create_project,
@@ -31,141 +19,20 @@ from inspection_system.app.camera_interface import (
     load_config,
     switch_project,
 )
+from inspection_system.app.command_runner import launch_monitored_command, stream_command
+from inspection_system.app.config_service import read_json_file
 from inspection_system.app.dataset_capture import TestDataCollectorDialog
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
+from inspection_system.app.preview_service import describe_preview_image, find_preview_image
 from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_center_gate_status, describe_section_width_gate_status
 from inspection_system.app.runtime_controller import format_commissioning_status_lines, get_commissioning_status
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_SCRIPT = REPO_ROOT / "inspection_system" / "app" / "capture_test.py"
-PREVIEW_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-LIVE_PREVIEW_NAME = "dashboard_live_preview.png"
-REFERENCE_PREVIEW_NAME = "golden_reference_image.png"
-CONFIG_FIELD_SPECS = [
-    ("capture.timeout_ms", "Capture Timeout (ms)", int),
-    ("capture.shutter_us", "Shutter (us)", int),
-    ("inspection.inspection_mode", "Inspection Mode", str),
-    ("inspection.reference_strategy", "Reference Strategy", str),
-    ("inspection.blend_mode", "Blend Mode", str),
-    ("inspection.tolerance_mode", "Tolerance Mode", str),
-    ("inspection.threshold_mode", "Threshold Mode", str),
-    ("inspection.threshold_value", "Threshold Value", int),
-    ("inspection.blur_kernel", "Blur Kernel (pixels)", int),
-    ("inspection.reference_erode_iterations", "Reference Erode Iterations", int),
-    ("inspection.reference_dilate_iterations", "Reference Dilate Iterations", int),
-    ("inspection.sample_erode_iterations", "Sample Erode Iterations", int),
-    ("inspection.sample_dilate_iterations", "Sample Dilate Iterations", int),
-    ("inspection.min_feature_pixels", "Min Feature Pixels", int),
-    ("inspection.min_required_coverage", "Min Required Coverage", float),
-    ("inspection.max_outside_allowed_ratio", "Max Outside Allowed", float),
-    ("inspection.min_section_coverage", "Min Section Coverage", float),
-    ("inspection.max_mean_edge_distance_px", "Max Mean Edge Distance (px, optional)", float),
-    ("inspection.max_section_edge_distance_px", "Max Section Edge Distance (px, optional)", float),
-    ("inspection.max_section_width_delta_ratio", "Max Section Width Drift (ratio, optional)", float),
-    ("inspection.max_section_center_offset_px", "Max Section Center Offset (px, optional)", float),
-    ("inspection.min_ssim", "Min SSIM (optional)", float),
-    ("inspection.max_mse", "Max MSE (optional)", float),
-    ("inspection.min_anomaly_score", "Min Anomaly Score (optional)", float),
-    ("inspection.image_display_mode", "Image Display Mode", str),
-    ("inspection.save_debug_images", "Save Debug Images", bool),
-    ("alignment.enabled", "Alignment Enabled", bool),
-    ("alignment.tolerance_profile", "Alignment Profile", str),
-    ("indicator_led.enabled", "Indicator LED Enabled", bool),
-]
-
-CONFIG_DROPDOWN_OPTIONS = {
-    "inspection.inspection_mode": ["mask_only", "mask_and_ssim", "mask_and_ml", "full"],
-    "inspection.reference_strategy": ["golden_only", "hybrid", "multi_good_experimental"],
-    "inspection.blend_mode": ["hard_only", "blend_conservative", "blend_balanced", "blend_aggressive"],
-    "inspection.tolerance_mode": ["strict", "balanced", "forgiving", "custom"],
-    "inspection.threshold_mode": ["fixed", "fixed_inv", "otsu", "otsu_inv"],
-    "inspection.image_display_mode": ["raw", "processed", "split"],
-    "inspection.save_debug_images": ["True", "False"],
-    "alignment.enabled": ["True", "False"],
-    "alignment.tolerance_profile": ["strict", "balanced", "forgiving"],
-    "indicator_led.enabled": ["True", "False"],
-}
-
-OPTIONAL_FLOAT_FIELDS = {
-    "inspection.max_mean_edge_distance_px",
-    "inspection.max_section_edge_distance_px",
-    "inspection.max_section_width_delta_ratio",
-    "inspection.max_section_center_offset_px",
-    "inspection.min_ssim",
-    "inspection.max_mse",
-    "inspection.min_anomaly_score",
-}
 
 COMPACT_LAYOUT_MAX_WIDTH = 1100
 COMPACT_LAYOUT_MAX_HEIGHT = 700
-
-
-def read_json_file(file_path: Path) -> dict:
-    if not file_path.exists():
-        return {}
-    return json.loads(file_path.read_text(encoding="utf-8"))
-
-
-def write_json_file(file_path: Path, data: dict) -> None:
-    file_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def get_nested_config_value(config: dict, dotted_path: str):
-    current = config
-    for part in dotted_path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    return current
-
-
-def set_nested_config_value(config: dict, dotted_path: str, value) -> None:
-    parts = dotted_path.split(".")
-    current = config
-    for part in parts[:-1]:
-        current = current.setdefault(part, {})
-    current[parts[-1]] = value
-
-
-def parse_config_value(raw_value: str, expected_type: type):
-    text = raw_value.strip()
-    if expected_type is bool:
-        normalized = text.lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off"}:
-            return False
-        raise ValueError(f"Invalid boolean value: {raw_value}")
-    if expected_type is int:
-        return int(text)
-    if expected_type is float:
-        return float(text)
-    return text
-
-
-def apply_config_updates(config: dict, raw_updates: dict[str, str]) -> dict:
-    updated = json.loads(json.dumps(config))
-    for dotted_path, _, expected_type in CONFIG_FIELD_SPECS:
-        if dotted_path not in raw_updates:
-            continue
-        raw_value = raw_updates[dotted_path]
-        if dotted_path in OPTIONAL_FLOAT_FIELDS and raw_value.strip() == "":
-            set_nested_config_value(updated, dotted_path, None)
-            continue
-        if raw_value.strip() == "":
-            # Keep existing value unchanged when a field is blank in sparse legacy configs.
-            continue
-        set_nested_config_value(updated, dotted_path, parse_config_value(raw_value, expected_type))
-    return updated
-
-
-def build_config_editor_values(config: dict) -> dict[str, str]:
-    values = {}
-    for dotted_path, _, _ in CONFIG_FIELD_SPECS:
-        value = get_nested_config_value(config, dotted_path)
-        values[dotted_path] = "" if value is None else str(value)
-    return values
 
 
 def build_dashboard_hint_text(config: dict, active_paths: Path | dict | None = None) -> str:
@@ -185,76 +52,6 @@ def build_dashboard_hint_text(config: dict, active_paths: Path | dict | None = N
     if not edge_hint and not width_hint and not center_hint:
         lines.append("All geometry gates active.")
     return "\n".join(lines)
-
-
-def is_informative_preview_image(image_path: Path) -> bool:
-    """Return False for likely blank/black preview images."""
-    if not PIL_AVAILABLE:
-        return True
-    try:
-        image = Image.open(image_path).convert("L")
-        min_px, max_px = image.getextrema()
-        mean_px = float(ImageStat.Stat(image).mean[0])
-    except Exception:
-        return False
-
-    contrast = int(max_px) - int(min_px)
-    return contrast >= 6 and mean_px >= 6.0
-
-
-def find_preview_image(reference_dir: Path, is_informative_fn=None) -> Path | None:
-    if not reference_dir.exists():
-        return None
-
-    is_informative = is_informative_fn or is_informative_preview_image
-
-    # Live preview is transient; no longer persisted
-    # live_preview = reference_dir / LIVE_PREVIEW_NAME
-    # if live_preview.exists() and is_informative(live_preview):
-    #     return live_preview
-
-    preferred = reference_dir / REFERENCE_PREVIEW_NAME
-    if preferred.exists() and is_informative(preferred):
-        return preferred
-
-    candidates = [
-        path for path in reference_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in PREVIEW_EXTENSIONS
-    ]
-    if not candidates:
-        return None
-
-    # Avoid showing debug diff/mask snapshots when a real sample image is available.
-    non_debug = [
-        path for path in candidates
-        if not path.name.endswith("_diff.png") and not path.name.endswith("_mask.png")
-    ]
-
-    informative_non_debug = [path for path in non_debug if is_informative(path)]
-    if informative_non_debug:
-        return max(informative_non_debug, key=lambda path: path.stat().st_mtime)
-
-    informative_candidates = [path for path in candidates if is_informative(path)]
-    if informative_candidates:
-        return max(informative_candidates, key=lambda path: path.stat().st_mtime)
-
-    if non_debug:
-        return max(non_debug, key=lambda path: path.stat().st_mtime)
-    return max(candidates, key=lambda path: path.stat().st_mtime)
-
-
-def describe_preview_image(preview_path: Path) -> str:
-    name = preview_path.name
-    # Live preview is transient; no longer persisted
-    # if name == LIVE_PREVIEW_NAME:
-    #     return "live capture"
-    if name == REFERENCE_PREVIEW_NAME:
-        return "reference"
-    if name.endswith("_diff.png"):
-        return "difference debug"
-    if name.endswith("_mask.png"):
-        return "mask debug"
-    return "latest sample"
 
 
 def should_use_compact_layout(screen_width: int, screen_height: int) -> bool:
@@ -517,30 +314,24 @@ class OperatorDashboard:
 
         self.append_console(f"\n> Running {mode}\n")
         self.set_busy(True, f"Running {mode}...")
-        thread = threading.Thread(target=self._run_command_thread, args=(mode,), daemon=True)
-        thread.start()
+        command = [sys.executable, str(CAPTURE_SCRIPT), mode]
 
-    def _run_command_thread(self, mode: str) -> None:
-        process = subprocess.Popen(
-            [sys.executable, str(CAPTURE_SCRIPT), mode],
-            cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-
-        assert process.stdout is not None
-        for line in process.stdout:
-            self.root.after(0, self.append_console, line)
-
-        return_code = process.wait()
-
-        def finish() -> None:
+        def finish(return_code: int) -> None:
             status = f"{mode} completed" if return_code == 0 else f"{mode} failed (exit {return_code})"
             self.set_busy(False, status)
             self.refresh_dashboard()
 
-        self.root.after(0, finish)
+        def handle_error(exc: OSError) -> None:
+            self.set_busy(False, f"{mode} failed to start")
+            messagebox.showerror("Run failed", f"Could not run {mode}: {exc}")
+
+        stream_command(
+            command,
+            cwd=REPO_ROOT,
+            on_output=lambda line: self.root.after(0, self.append_console, line),
+            on_complete=lambda return_code: self.root.after(0, finish, return_code),
+            on_error=lambda exc: self.root.after(0, handle_error, exc),
+        )
 
     def launch_training(self) -> None:
         self._launch_tool("train", "training GUI")
@@ -569,26 +360,14 @@ class OperatorDashboard:
 
     def _launch_tool(self, mode: str, label: str) -> None:
         try:
-            process = subprocess.Popen(
+            process = launch_monitored_command(
                 [sys.executable, str(CAPTURE_SCRIPT), mode],
-                cwd=str(REPO_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+                cwd=REPO_ROOT,
+                on_output=lambda line: self.root.after(0, self.append_console, f"[{mode}] {line}"),
+                on_exit=lambda return_code: self.root.after(0, self._handle_launched_tool_exit, mode, label, return_code),
             )
             self.append_console(f"\n> Launched {label}.\n")
             self.status_var.set(f"Launched {label}")
-
-            def monitor_output() -> None:
-                assert process.stdout is not None
-                for line in process.stdout:
-                    self.root.after(0, self.append_console, f"[{mode}] {line}")
-                return_code = process.wait()
-                if return_code != 0:
-                    self.root.after(0, self.append_console, f"> {label} exited with code {return_code}\n")
-                    self.root.after(0, self.status_var.set, f"{label} failed (exit {return_code})")
-
-            threading.Thread(target=monitor_output, daemon=True).start()
 
             if should_close_dashboard_on_launch(mode):
                 if mode == "project-manager":
@@ -605,6 +384,11 @@ class OperatorDashboard:
                 self.root.after(500, maybe_close)
         except OSError as exc:
             messagebox.showerror("Launch failed", f"Could not launch {label}: {exc}")
+
+    def _handle_launched_tool_exit(self, mode: str, label: str, return_code: int) -> None:
+        if return_code != 0:
+            self.append_console(f"> {label} exited with code {return_code}\n")
+            self.status_var.set(f"{label} failed (exit {return_code})")
 
     def switch_selected_project(self) -> None:
         project_name = self.project_select_var.get().strip()

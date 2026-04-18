@@ -16,7 +16,7 @@ from inspection_system.app.camera_interface import get_active_runtime_paths, loa
 from inspection_system.app.interactive_training import ThresholdTrainer
 from inspection_system.app.reference_service import clear_anomaly_training_artifacts, clear_reference_variants
 from inspection_system.app.replay_inspection import inspect_file
-from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
+from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS, REGISTRATION_FAILED
 from inspection_system.app.runtime_controller import get_commissioning_status, load_anomaly_detector
 
 EPISODE_STATUS = {"good": PASS, "reject": FAIL, "invalid_capture": INVALID_CAPTURE}
@@ -270,6 +270,19 @@ def _diagnose_result(record: dict, result: dict) -> dict:
             "closest_pass_gates": [],
             "alignment_warnings": [],
         }
+    if status == REGISTRATION_FAILED:
+        registration_reason = result.get("registration_rejection_reason") or result.get("reason") or "Registration failed"
+        alignment_warnings = _alignment_warnings(result)
+        summary_parts = [str(registration_reason)]
+        if alignment_warnings:
+            summary_parts.append(alignment_warnings[0])
+        return {
+            "primary_cause": "registration_failure",
+            "summary": "; ".join(summary_parts),
+            "failure_modes": list(result.get("registration_quality_gate_failures", [])),
+            "closest_pass_gates": [],
+            "alignment_warnings": alignment_warnings,
+        }
 
     failure_modes = []
     closest_pass_gates = []
@@ -382,6 +395,21 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
     recommendations = []
     spec_by_code = {spec["code"]: spec for spec in GATE_SPECS}
     for cause_code, count in false_reject_cause_counts.most_common(2):
+        if cause_code == "registration_failure":
+            recommendations.append(
+                _build_recommendation(
+                    "high" if count == len(false_rejects) and count > 0 else "medium",
+                    "registration_review",
+                    "Review registration quality gates",
+                    f"{count} expected-good images failed during registration before part-level gates could be trusted.",
+                    [
+                        "Review anchor placement or registration mode if samples are not localizing consistently.",
+                        "Relax registration quality gates only after confirming the transform is otherwise stable on approved-good samples.",
+                    ],
+                    {"false_reject_count": count, "cause_code": cause_code},
+                )
+            )
+            continue
         spec = spec_by_code.get(cause_code)
         if spec is None:
             continue

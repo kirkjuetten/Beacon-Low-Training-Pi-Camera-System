@@ -17,6 +17,8 @@ from inspection_pipeline import (
 class FakeCv2:
     IMREAD_GRAYSCALE = 0  
     IMREAD_COLOR = 1
+    INTER_NEAREST = "INTER_NEAREST"
+    BORDER_CONSTANT = "BORDER_CONSTANT"
 
     def __init__(self, grayscale_image, color_image=None):
         self.grayscale_image = grayscale_image
@@ -29,6 +31,14 @@ class FakeCv2:
             return self.grayscale_image
         else:
             return self.color_image
+
+    def getRotationMatrix2D(self, center, angle_deg, scale):
+        self.calls.append(("getRotationMatrix2D", center, angle_deg, scale))
+        return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    def warpAffine(self, mask, matrix, size, flags=None, borderMode=None, borderValue=None):
+        self.calls.append(("warpAffine", matrix, size, flags, borderMode, borderValue))
+        return mask
 
 
 def test_inspect_against_reference_returns_expected_details() -> None:
@@ -112,6 +122,13 @@ def test_inspect_against_reference_returns_expected_details() -> None:
     assert details["best_angle_deg"] == 1.25
     assert details["best_shift_x"] == 2
     assert details["best_shift_y"] == -1
+    assert details["registration"]["status"] == "aligned"
+    assert details["registration"]["runtime_mode"] == "moments"
+    assert details["registration"]["requested_strategy"] == "moments"
+    assert details["registration"]["applied_strategy"] == "moments"
+    assert details["registration"]["transform"]["angle_deg"] == 1.25
+    assert details["registration"]["observed_anchors"] == []
+    assert details["edge_measurement_frame"] == "datum"
     assert details["required_coverage"] == 0.95
     assert details["outside_allowed_ratio"] == 0.01
     assert details["min_section_coverage"] == 0.90
@@ -290,9 +307,184 @@ def test_inspect_against_reference_applies_alignment_profile_defaults() -> None:
 
     assert passed is True
     assert details["alignment_profile"] == "forgiving"
+    assert details["registration"]["runtime_mode"] == "moments"
     assert seen_alignment_cfg["max_angle_deg"] == 1.8
     assert seen_alignment_cfg["max_shift_x"] == 7
     assert seen_alignment_cfg["max_shift_y"] == 5
+
+
+def test_inspect_against_reference_reports_staged_registration_strategy_when_runtime_remains_moments() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[5:15, 5:15] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[5:15, 5:15] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_align_sample_mask(sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module):
+        return sample_mask_arg, 0.0, 0, 0
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        return {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.90,
+            "section_coverages": [0.90],
+            "sample_white_pixels": 4,
+            "missing_required_mask": np.zeros((20, 20), dtype=bool),
+            "outside_allowed_mask": np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        return True, {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.90,
+            "min_required_coverage": 0.92,
+            "max_outside_allowed_ratio": 0.02,
+            "min_section_coverage_limit": 0.85,
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    with mock.patch('inspection_system.app.anomaly_detection_utils.compute_ssim', return_value=0.95):
+        with mock.patch('inspection_system.app.anomaly_detection_utils.compute_histogram_similarity', return_value=0.92):
+            passed, details = inspect_against_reference(
+                {
+                    "inspection": {"save_debug_images": False},
+                    "alignment": {
+                        "mode": "moments",
+                        "registration": {
+                            "strategy": "anchor_pair",
+                            "transform_model": "similarity",
+                            "anchor_mode": "pair",
+                            "subpixel_refinement": "phase_correlation",
+                        },
+                    },
+                },
+                Path("sample.jpg"),
+                fake_make_binary_mask,
+                Path("reference.png"),
+                Path("reference_image.png"),
+                fake_align_sample_mask,
+                fake_build_reference_regions,
+                fake_compute_section_masks,
+                fake_score_sample,
+                fake_evaluate_metrics,
+                lambda stem, aligned_sample_mask, diff: {},
+                fake_import_cv2_and_numpy,
+                lambda mask, iterations, cv2, np_module: mask,
+                lambda mask, iterations, cv2, np_module: mask,
+            )
+
+    assert passed is True
+    assert details["registration"]["requested_strategy"] == "anchor_pair"
+    assert details["registration"]["applied_strategy"] == "moments"
+    assert details["registration"]["fallback_reason"] == (
+        "Requested registration strategy 'anchor_pair' is staged but runtime is using 'moments'."
+    )
+
+
+def test_inspect_against_reference_supports_anchor_translation_runtime_summary() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[8:10, 7:9] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[8:10, 9:11] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        assert aligned_sample_mask.shape == sample_mask.shape
+        return {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.90,
+            "section_coverages": [0.90],
+            "sample_white_pixels": 4,
+            "missing_required_mask": np.zeros((20, 20), dtype=bool),
+            "outside_allowed_mask": np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        return True, {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.90,
+            "min_required_coverage": 0.92,
+            "max_outside_allowed_ratio": 0.02,
+            "min_section_coverage_limit": 0.85,
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    with mock.patch('inspection_system.app.anomaly_detection_utils.compute_ssim', return_value=0.95):
+        with mock.patch('inspection_system.app.anomaly_detection_utils.compute_histogram_similarity', return_value=0.92):
+            passed, details = inspect_against_reference(
+                {
+                    "inspection": {"save_debug_images": False},
+                    "alignment": {
+                        "mode": "anchor_translation",
+                        "max_shift_x": 10,
+                        "max_shift_y": 10,
+                        "registration": {
+                            "strategy": "anchor_translation",
+                            "anchor_mode": "single",
+                            "anchors": [
+                                {
+                                    "anchor_id": "anchor_a",
+                                    "reference_point": {"x": 10, "y": 10},
+                                    "search_window": {"x": 6, "y": 7, "width": 6, "height": 6},
+                                }
+                            ],
+                        },
+                    },
+                },
+                Path("sample.jpg"),
+                fake_make_binary_mask,
+                Path("reference.png"),
+                Path("reference_image.png"),
+                lambda *args: (_ for _ in ()).throw(AssertionError("moments aligner should not be called")),
+                fake_build_reference_regions,
+                fake_compute_section_masks,
+                fake_score_sample,
+                fake_evaluate_metrics,
+                lambda stem, aligned_sample_mask, diff: {},
+                fake_import_cv2_and_numpy,
+                lambda mask, iterations, cv2, np_module: mask,
+                lambda mask, iterations, cv2, np_module: mask,
+            )
+
+    assert passed is True
+    assert details["registration"]["runtime_mode"] == "anchor_translation"
+    assert details["registration"]["applied_strategy"] == "anchor_translation"
+    assert details["best_shift_x"] == 2
+    assert details["best_shift_y"] == 2
+    assert details["registration"]["quality"]["confidence"] > 0.0
+    assert details["registration"]["transform"]["shift_x"] == 2
+    assert details["registration"]["observed_anchors"][0]["anchor_id"] == "anchor_a"
+    assert details["edge_measurement_frame"] == "datum"
+    assert details["section_measurement_frame"] == "datum"
+    assert details["section_measurements"][0]["sample_detected"] is True
 
 
 def test_inspect_against_references_selects_best_passing_reference() -> None:
@@ -360,6 +552,32 @@ def test_inspect_against_references_selects_best_passing_reference() -> None:
     assert passed is True
     assert details['reference_id'] == 'candidate_1'
     assert details['reference_label'] == 'Approved Good 1'
+    assert len(details['reference_candidate_summaries']) == 2
+    assert details['reference_candidate_summaries'][0]['reference_id'] == 'golden'
+    assert details['reference_candidate_summaries'][1]['reference_id'] == 'candidate_1'
+    assert details['reference_candidate_summaries'][1]['passed'] is True
+
+
+def test_reference_candidate_rank_ignores_nonfinite_optional_gate_values() -> None:
+    rank = inspection_pipeline._reference_candidate_rank(
+        False,
+        {
+            'required_coverage': 0.95,
+            'effective_min_required_coverage': 0.92,
+            'outside_allowed_ratio': 0.03,
+            'effective_max_outside_allowed_ratio': 0.02,
+            'min_section_coverage': 0.9,
+            'effective_min_section_coverage': 0.85,
+            'section_center_gate_active': False,
+            'section_width_gate_active': False,
+            'section_edge_gate_active': False,
+            'edge_distance_gate_active': False,
+            'worst_section_center_offset_px': float('inf'),
+            'effective_max_section_center_offset_px': float('inf'),
+        },
+    )
+
+    assert rank == (0, -1, 0.07)
 
 
 def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_decision() -> None:
@@ -461,3 +679,167 @@ def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_deci
     assert details['section_center_gate_active'] is True
     assert details['anomaly_score'] == 0.25
     assert details['anomaly_gate_active'] is True
+
+
+def test_inspect_against_reference_uses_aligned_mask_measurements_when_registration_is_not_aligned() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[5:15, 5:15] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[5:15, 5:15] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        return {
+            'required_coverage': 0.96,
+            'outside_allowed_ratio': 0.01,
+            'min_section_coverage': 0.92,
+            'section_coverages': [0.92],
+            'sample_white_pixels': 25,
+            'missing_required_mask': np.zeros((20, 20), dtype=bool),
+            'outside_allowed_mask': np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        assert metrics['worst_section_width_delta_ratio'] == 0.0
+        assert metrics['worst_section_center_offset_px'] == 0.0
+        return True, {
+            'required_coverage': 0.96,
+            'outside_allowed_ratio': 0.01,
+            'min_section_coverage': 0.92,
+            'min_required_coverage': 0.92,
+            'max_outside_allowed_ratio': 0.02,
+            'min_section_coverage_limit': 0.85,
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    def fake_align_sample_mask(sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module):
+        assert alignment_cfg['mode'] == 'moments'
+        return sample_mask_arg, 0.0, 0, 0
+
+    passed, details = inspect_against_reference(
+        {
+            'inspection': {'save_debug_images': False},
+            'alignment': {
+                'mode': 'rigid_refined',
+                'registration': {'strategy': 'rigid_refined', 'subpixel_refinement': 'template'},
+            },
+        },
+        Path('sample.jpg'),
+        fake_make_binary_mask,
+        Path('reference.png'),
+        Path('reference_image.png'),
+        fake_align_sample_mask,
+        fake_build_reference_regions,
+        fake_compute_section_masks,
+        fake_score_sample,
+        fake_evaluate_metrics,
+        lambda stem, aligned_sample_mask, diff: {},
+        fake_import_cv2_and_numpy,
+        lambda mask, iterations, cv2, np_module: mask,
+        lambda mask, iterations, cv2, np_module: mask,
+    )
+
+    assert passed is True
+    assert details['registration']['status'] == 'aligned'
+    assert details['registration']['applied_strategy'] == 'rigid_refined'
+    assert details['registration']['subpixel_refinement'] == 'template'
+    assert details['edge_measurement_frame'] == 'datum'
+    assert details['section_measurement_frame'] == 'datum'
+
+
+def test_inspect_against_reference_rejects_when_registration_quality_gate_fails() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[8:10, 7:9] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[8:10, 9:11] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        return {
+            'required_coverage': 0.95,
+            'outside_allowed_ratio': 0.01,
+            'min_section_coverage': 0.90,
+            'section_coverages': [0.90],
+            'sample_white_pixels': 4,
+            'missing_required_mask': np.zeros((20, 20), dtype=bool),
+            'outside_allowed_mask': np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        return True, {
+            'required_coverage': 0.95,
+            'outside_allowed_ratio': 0.01,
+            'min_section_coverage': 0.90,
+            'min_required_coverage': 0.92,
+            'max_outside_allowed_ratio': 0.02,
+            'min_section_coverage_limit': 0.85,
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    passed, details = inspect_against_reference(
+        {
+            'inspection': {'save_debug_images': False},
+            'alignment': {
+                'mode': 'anchor_translation',
+                'max_shift_x': 10,
+                'max_shift_y': 10,
+                'registration': {
+                    'strategy': 'anchor_translation',
+                    'anchor_mode': 'single',
+                    'quality_gates': {'min_confidence': 1.1},
+                    'anchors': [
+                        {
+                            'anchor_id': 'anchor_a',
+                            'reference_point': {'x': 10, 'y': 10},
+                            'search_window': {'x': 6, 'y': 7, 'width': 6, 'height': 6},
+                        }
+                    ],
+                },
+            },
+        },
+        Path('sample.jpg'),
+        fake_make_binary_mask,
+        Path('reference.png'),
+        Path('reference_image.png'),
+        lambda *args: (_ for _ in ()).throw(AssertionError('moments aligner should not be called')),
+        fake_build_reference_regions,
+        fake_compute_section_masks,
+        fake_score_sample,
+        fake_evaluate_metrics,
+        lambda stem, aligned_sample_mask, diff: {},
+        fake_import_cv2_and_numpy,
+        lambda mask, iterations, cv2, np_module: mask,
+        lambda mask, iterations, cv2, np_module: mask,
+    )
+
+    assert passed is False
+    assert details['registration']['status'] == 'quality_gate_failed'
+    assert details['registration']['rejection_reason'] is not None
+    assert details['registration']['quality_gate_failures'][0]['gate_key'] == 'min_confidence'
+    assert details['failure_stage'] == 'registration'
+    assert details['edge_measurement_frame'] == 'aligned_mask'
+    assert details['section_measurement_frame'] == 'aligned_mask'

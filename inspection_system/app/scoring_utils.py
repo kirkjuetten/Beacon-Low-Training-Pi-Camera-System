@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 
 INSPECTION_MODE_GATES = {
     "mask_only": frozenset(),
@@ -55,9 +57,12 @@ def _optional_float(value):
     if isinstance(value, str) and value.strip() == "":
         return None
     try:
-        return float(value)
+        numeric_value = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(numeric_value):
+        return None
+    return numeric_value
 
 
 def normalize_inspection_mode(value) -> str:

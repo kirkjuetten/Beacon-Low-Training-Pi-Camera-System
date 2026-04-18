@@ -1,12 +1,15 @@
 from inspection_system.app.production_screen import (
+    CounterScope,
+)
+from inspection_system.app.result_interpreter import (
     GOOD,
     REASON_EXTRA_PRINT,
     REASON_MISSING_PRINT,
+    REASON_REGISTRATION_FAILURE,
     REASON_REFERENCE_MISMATCH,
     REASON_UNEVEN_PRINT,
     REJECT,
     REVIEW,
-    CounterScope,
     determine_operator_outcome,
 )
 
@@ -160,6 +163,26 @@ def test_determine_operator_outcome_uses_reference_mismatch_for_section_center_g
 
     assert outcome.status == REJECT
     assert outcome.primary_reason == REASON_REFERENCE_MISMATCH
+
+
+def test_determine_operator_outcome_routes_registration_failures_to_reload_review() -> None:
+    details = _base_details()
+    details.update(
+        {
+            "failure_stage": "registration",
+            "registration": {
+                "rejection_reason": "Registration confidence 0.500 was below required minimum 0.900.",
+            },
+        }
+    )
+
+    outcome = determine_operator_outcome(False, details)
+
+    assert outcome.status == REVIEW
+    assert outcome.banner_text == "CHECK PLACEMENT"
+    assert outcome.primary_reason == REASON_REGISTRATION_FAILURE
+    assert outcome.summary_lines[0] == "Part position could not be verified."
+    assert "Registration confidence 0.500 was below required minimum 0.900." in outcome.summary_lines[1]
 
 
 def test_counter_scope_records_and_resets() -> None:

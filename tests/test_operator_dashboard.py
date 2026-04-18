@@ -4,19 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from inspection_system.app.operator_dashboard import (
+from inspection_system.app.config_service import (
     CONFIG_DROPDOWN_OPTIONS,
     CONFIG_FIELD_SPECS,
     apply_config_updates,
-    build_dashboard_hint_text,
     build_config_editor_values,
-    describe_preview_image,
-    find_preview_image,
     get_nested_config_value,
     parse_config_value,
+)
+from inspection_system.app.operator_dashboard import (
+    build_dashboard_hint_text,
     should_use_compact_layout,
     should_close_dashboard_on_launch,
 )
+from inspection_system.app.preview_service import describe_preview_image, find_preview_image
 
 
 def test_parse_config_value_supports_bool_int_and_float() -> None:
@@ -45,7 +46,25 @@ def test_apply_config_updates_updates_nested_fields() -> None:
             "max_section_center_offset_px": None,
             "save_debug_images": True,
         },
-        "alignment": {"enabled": True},
+        "alignment": {
+            "enabled": True,
+            "mode": "moments",
+            "registration": {
+                "strategy": "moments",
+                "transform_model": "rigid",
+                "anchor_mode": "none",
+                "subpixel_refinement": "off",
+                "search_margin_px": 24,
+                "quality_gates": {
+                    "min_confidence": None,
+                    "max_mean_residual_px": None,
+                },
+                "datum_frame": {
+                    "origin": "roi_top_left",
+                    "orientation": "part_axis",
+                },
+            },
+        },
         "indicator_led": {"enabled": False},
     }
 
@@ -65,6 +84,16 @@ def test_apply_config_updates_updates_nested_fields() -> None:
             "inspection.max_section_center_offset_px": "0.6",
             "inspection.save_debug_images": "false",
             "alignment.enabled": "false",
+            "alignment.mode": "anchor_pair",
+            "alignment.registration.strategy": "anchor_pair",
+            "alignment.registration.transform_model": "similarity",
+            "alignment.registration.anchor_mode": "pair",
+            "alignment.registration.subpixel_refinement": "phase_correlation",
+            "alignment.registration.search_margin_px": "32",
+            "alignment.registration.quality_gates.min_confidence": "0.91",
+            "alignment.registration.quality_gates.max_mean_residual_px": "1.4",
+            "alignment.registration.datum_frame.origin": "anchor_primary",
+            "alignment.registration.datum_frame.orientation": "anchor_pair",
         },
     )
 
@@ -81,6 +110,16 @@ def test_apply_config_updates_updates_nested_fields() -> None:
     assert get_nested_config_value(updated, "inspection.max_section_center_offset_px") == 0.6
     assert get_nested_config_value(updated, "inspection.save_debug_images") is False
     assert get_nested_config_value(updated, "alignment.enabled") is False
+    assert get_nested_config_value(updated, "alignment.mode") == "anchor_pair"
+    assert get_nested_config_value(updated, "alignment.registration.strategy") == "anchor_pair"
+    assert get_nested_config_value(updated, "alignment.registration.transform_model") == "similarity"
+    assert get_nested_config_value(updated, "alignment.registration.anchor_mode") == "pair"
+    assert get_nested_config_value(updated, "alignment.registration.subpixel_refinement") == "phase_correlation"
+    assert get_nested_config_value(updated, "alignment.registration.search_margin_px") == 32
+    assert get_nested_config_value(updated, "alignment.registration.quality_gates.min_confidence") == 0.91
+    assert get_nested_config_value(updated, "alignment.registration.quality_gates.max_mean_residual_px") == 1.4
+    assert get_nested_config_value(updated, "alignment.registration.datum_frame.origin") == "anchor_primary"
+    assert get_nested_config_value(updated, "alignment.registration.datum_frame.orientation") == "anchor_pair"
     assert get_nested_config_value(config, "capture.timeout_ms") == 200
 
 
@@ -100,6 +139,7 @@ def test_apply_config_updates_ignores_blank_non_optional_values() -> None:
             "inspection.threshold_mode": "fixed",
             "inspection.threshold_value": "",
             "inspection.save_debug_images": "",
+            "alignment.registration.quality_gates.min_confidence": "",
         },
     )
 
@@ -108,6 +148,7 @@ def test_apply_config_updates_ignores_blank_non_optional_values() -> None:
     assert get_nested_config_value(updated, "inspection.threshold_mode") == "fixed"
     assert get_nested_config_value(updated, "inspection.threshold_value") is None
     assert get_nested_config_value(updated, "inspection.save_debug_images") is None
+    assert get_nested_config_value(updated, "alignment.registration.quality_gates.min_confidence") is None
 
 
 def test_build_config_editor_values_returns_string_values() -> None:
@@ -143,7 +184,47 @@ def test_build_config_editor_values_returns_string_values() -> None:
     assert values["inspection.max_section_width_delta_ratio"] == "0.1"
     assert values["inspection.max_section_center_offset_px"] == "0.5"
     assert values["alignment.enabled"] == "True"
+    assert values["alignment.mode"] == ""
+    assert values["alignment.registration.strategy"] == ""
+    assert values["alignment.registration.quality_gates.min_confidence"] == ""
     assert values["indicator_led.enabled"] == "False"
+
+
+def test_build_config_editor_values_includes_registration_scalar_fields() -> None:
+    config = {
+        "alignment": {
+            "enabled": True,
+            "mode": "anchor_pair",
+            "registration": {
+                "strategy": "anchor_pair",
+                "transform_model": "similarity",
+                "anchor_mode": "pair",
+                "subpixel_refinement": "phase_correlation",
+                "search_margin_px": 28,
+                "quality_gates": {
+                    "min_confidence": 0.87,
+                    "max_mean_residual_px": 1.2,
+                },
+                "datum_frame": {
+                    "origin": "anchor_primary",
+                    "orientation": "anchor_pair",
+                },
+            },
+        }
+    }
+
+    values = build_config_editor_values(config)
+
+    assert values["alignment.mode"] == "anchor_pair"
+    assert values["alignment.registration.strategy"] == "anchor_pair"
+    assert values["alignment.registration.transform_model"] == "similarity"
+    assert values["alignment.registration.anchor_mode"] == "pair"
+    assert values["alignment.registration.subpixel_refinement"] == "phase_correlation"
+    assert values["alignment.registration.search_margin_px"] == "28"
+    assert values["alignment.registration.quality_gates.min_confidence"] == "0.87"
+    assert values["alignment.registration.quality_gates.max_mean_residual_px"] == "1.2"
+    assert values["alignment.registration.datum_frame.origin"] == "anchor_primary"
+    assert values["alignment.registration.datum_frame.orientation"] == "anchor_pair"
 
 
 def test_build_dashboard_hint_text_reports_inactive_edge_gate() -> None:
@@ -199,9 +280,9 @@ def test_build_dashboard_hint_text_includes_commissioning_status_when_runtime_pa
         },
     )
 
-    assert "Workflow: Stage 3/5 - Baseline Build" in hint
-    assert "Instruction: Load known-good part. More good examples needed: 9 of 10 remaining." in hint
-    assert "Commissioning: NOT READY | golden ok | good 1/10" in hint
+    assert "Workflow: Stage 2/5 - Capture Registration Baseline" in hint
+    assert "Instruction: Press Update to commit 1 pending approved-good parts." in hint
+    assert "Commissioning: NOT READY | golden ok | reg ok | baseline pending | good 1/10" in hint
     assert "Next: Press Update to commit 1 pending approved-good parts." in hint
     assert "Edge Gates: global off | section off" in hint
 
@@ -216,6 +297,13 @@ def test_dropdown_options_cover_expected_fixed_choice_fields() -> None:
     assert "inspection.threshold_mode" in CONFIG_DROPDOWN_OPTIONS
     assert "inspection.save_debug_images" in CONFIG_DROPDOWN_OPTIONS
     assert "alignment.enabled" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.mode" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.registration.strategy" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.registration.transform_model" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.registration.anchor_mode" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.registration.subpixel_refinement" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.registration.datum_frame.origin" in CONFIG_DROPDOWN_OPTIONS
+    assert "alignment.registration.datum_frame.orientation" in CONFIG_DROPDOWN_OPTIONS
     assert "indicator_led.enabled" in CONFIG_DROPDOWN_OPTIONS
     assert set(CONFIG_DROPDOWN_OPTIONS).issubset(field_paths)
 
@@ -350,3 +438,12 @@ def test_describe_preview_image_categories() -> None:
     assert describe_preview_image(Path("temp_capture_diff.png")) == "difference debug"
     assert describe_preview_image(Path("temp_capture_mask.png")) == "mask debug"
     assert describe_preview_image(Path("capture_latest.png")) == "latest sample"
+
+
+def test_config_editor_depends_on_shared_services_not_dashboard() -> None:
+    source_path = Path(__file__).resolve().parents[1] / "inspection_system" / "app" / "config_editor_page.py"
+    source_text = source_path.read_text(encoding="utf-8")
+
+    assert "from inspection_system.app.operator_dashboard import" not in source_text
+    assert "from inspection_system.app.config_service import" in source_text
+    assert "from inspection_system.app.preview_service import" in source_text

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest import mock
 
 from inspection_system.app.runtime_controller import (
     describe_edge_gate_status,
@@ -8,7 +9,39 @@ from inspection_system.app.runtime_controller import (
     format_operator_mode_lines,
     get_commissioning_status,
     get_inspection_runtime_warnings,
+    print_inspection_result,
 )
+
+
+def _default_registration_baseline() -> dict:
+    return {
+        "runtime_mode": "moments",
+        "strategy": "moments",
+        "transform_model": "rigid",
+        "anchor_mode": "none",
+        "required_anchor_count": 0,
+        "enabled_anchor_count": 0,
+        "anchor_ids": [],
+        "search_margin_px": 24,
+        "datum_origin": "roi_top_left",
+        "datum_orientation": "part_axis",
+        "requires_datum_confirmation": False,
+        "datum_confirmed": False,
+        "requires_expected_transform_validation": False,
+        "expected_transform_confirmed": False,
+        "expected_transform": {"max_angle_deg": 1.0, "max_shift_x": 4, "max_shift_y": 3},
+        "quality_gates": {"min_confidence": None, "max_mean_residual_px": None},
+        "checklist": [
+            {"key": "anchors", "label": "Anchor placement", "required": False, "ready": True, "summary": "not required"},
+            {"key": "search_windows", "label": "Search windows", "required": False, "ready": True, "summary": "not required"},
+            {"key": "datum", "label": "Datum confirmation", "required": False, "ready": True, "summary": "default datum"},
+            {"key": "expected_transform", "label": "Expected transform validation", "required": False, "ready": True, "summary": "default moments tolerance"},
+        ],
+        "ready": True,
+        "issues": [],
+        "actions": [],
+        "summary": "runtime moments | requested moments | anchors off | datum roi_top_left/part_axis",
+    }
 
 
 def _build_runtime_paths(tmp_path) -> dict:
@@ -160,6 +193,16 @@ def test_get_commissioning_status_tracks_hybrid_progress_and_pending_update_acti
     active_paths = _build_runtime_paths(tmp_path)
     active_paths["reference_mask"].write_bytes(b"mask")
     active_paths["reference_image"].write_bytes(b"image")
+    (active_paths["reference_dir"] / "ref_meta.json").write_text(
+        json.dumps(
+            {
+                "registration_baseline": _default_registration_baseline()
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     active_variant_root = active_paths["reference_dir"] / "reference_variants" / "active"
     pending_variant_root = active_paths["reference_dir"] / "reference_variants" / "pending"
@@ -191,7 +234,10 @@ def test_get_commissioning_status_tracks_hybrid_progress_and_pending_update_acti
     assert "Commissioning: NOT READY" in status["summary_line"]
     assert status["workflow_stage_title"] == "Commit Baseline"
     assert status["workflow_instruction"] == "Baseline captured. Press Update to commit 2 pending approved-good parts."
+    assert status["registration_summary"] == "runtime moments | requested moments | anchors off | datum roi_top_left/part_axis"
     assert "golden ok" in status["summary_line"]
+    assert "reg ok" in status["summary_line"]
+    assert "baseline ok" in status["summary_line"]
     assert "good 4/6" in status["summary_line"]
     assert "refs 1/3" in status["summary_line"]
     assert "Press Update to commit 2 pending approved-good parts." in status["actions"]
@@ -219,7 +265,7 @@ def test_mask_only_mode_warns_when_golden_only_commissioning_is_incomplete(tmp_p
     )
 
     assert warnings == [
-        "Commissioning is incomplete for golden_only: approved-good baseline 3/10. Collect 7 more approved-good parts."
+        "Commissioning is incomplete for golden_only: registration baseline not captured; approved-good baseline 3/10. Collect 7 more approved-good parts."
     ]
 
 
@@ -227,6 +273,16 @@ def test_format_operator_mode_lines_include_commissioning_summary_and_actions(tm
     active_paths = _build_runtime_paths(tmp_path)
     active_paths["reference_mask"].write_bytes(b"mask")
     active_paths["reference_image"].write_bytes(b"image")
+    (active_paths["reference_dir"] / "ref_meta.json").write_text(
+        json.dumps(
+            {
+                "registration_baseline": _default_registration_baseline()
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     _write_training_records(
         active_paths,
         [
@@ -242,14 +298,80 @@ def test_format_operator_mode_lines_include_commissioning_summary_and_actions(tm
 
     assert "Workflow: Stage 3/5 - Baseline Build" in lines
     assert "Instruction: Load known-good part. More good examples needed: 8 of 10 remaining." in lines
-    assert any(line.startswith("Commissioning: NOT READY | golden ok | good 2/10") for line in lines)
+    assert "Registration: runtime moments | requested moments | anchors off | datum roi_top_left/part_axis" in lines
+    assert any(line.startswith("Commissioning: NOT READY | golden ok | reg ok | baseline ok | good 2/10") for line in lines)
     assert "Next: Collect 8 more approved-good parts." in lines
+
+
+def test_get_commissioning_status_surfaces_registration_setup_stage(tmp_path) -> None:
+    active_paths = _build_runtime_paths(tmp_path)
+    active_paths["reference_mask"].write_bytes(b"mask")
+    active_paths["reference_image"].write_bytes(b"image")
+    (active_paths["reference_dir"] / "ref_meta.json").write_text(
+        json.dumps(
+            {
+                "registration_baseline": {
+                    "ready": False,
+                    "summary": "runtime anchor_pair | requested anchor_pair | anchors 1/2 | datum anchor_primary/anchor_pair | datum pending | transform pending",
+                    "issues": [
+                        "enabled anchors 1/2 for pair registration",
+                        "search windows missing for left_pad",
+                        "datum frame not confirmed",
+                        "expected transform limits not validated",
+                    ],
+                    "actions": [
+                        "Define at least 2 enabled registration anchors before relying on anchor_pair.",
+                        "Define search windows for the enabled registration anchors.",
+                        "Confirm the datum frame in Registration Setup after reviewing the anchor-origin/orientation mapping.",
+                        "Review the expected angle/shift limits and confirm them in Registration Setup.",
+                    ],
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = get_commissioning_status(
+        {
+            "inspection": {"reference_strategy": "golden_only", "inspection_mode": "mask_only"},
+            "alignment": {
+                "mode": "anchor_pair",
+                "registration": {
+                    "strategy": "anchor_pair",
+                    "anchor_mode": "pair",
+                    "datum_frame": {"origin": "anchor_primary", "orientation": "anchor_pair"},
+                    "anchors": [
+                        {
+                            "anchor_id": "left_pad",
+                            "enabled": True,
+                            "reference_point": {"x": 10, "y": 12},
+                            "search_window": {"x": 0, "y": 0, "width": 0, "height": 0},
+                        }
+                    ],
+                },
+            },
+            "training": {"golden_only_min_good_samples": 10},
+        },
+        active_paths,
+    )
+
+    assert status["registration_ready"] is False
+    assert status["workflow_stage_title"] == "Registration Setup"
+    assert status["workflow_instruction"] == "Define at least 2 enabled registration anchors before relying on anchor_pair."
+    assert "reg setup" in status["summary_line"]
+    assert "registration setup incomplete" in status["warning"]
 
 
 def test_get_commissioning_status_marks_hybrid_activation_prompt_when_golden_only_is_ready(tmp_path) -> None:
     active_paths = _build_runtime_paths(tmp_path)
     active_paths["reference_mask"].write_bytes(b"mask")
     active_paths["reference_image"].write_bytes(b"image")
+    (active_paths["reference_dir"] / "ref_meta.json").write_text(
+        json.dumps({"registration_baseline": _default_registration_baseline()}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     _write_training_records(
         active_paths,
         [{"feedback": "approve", "final_class": "good", "learning_state": "committed"} for _ in range(10)],
@@ -265,3 +387,38 @@ def test_get_commissioning_status_marks_hybrid_activation_prompt_when_golden_onl
     assert status["workflow_upgrade_prompt"] == (
         "Hybrid now available. Activate if molded-part variation needs multiple approved-good references."
     )
+
+
+def test_print_inspection_result_calls_out_registration_rejection() -> None:
+    details = {
+        "inspection_mode": "mask_only",
+        "registration": {
+            "status": "quality_gate_failed",
+            "applied_strategy": "anchor_translation",
+            "rejection_reason": "Registration confidence 0.500 was below required minimum 0.900.",
+            "quality_gate_failures": [
+                {
+                    "summary": "Registration confidence 0.500 was below required minimum 0.900.",
+                }
+            ],
+        },
+        "failure_stage": "registration",
+        "roi": {"x": 0, "y": 0, "width": 20, "height": 20},
+        "best_angle_deg": 0.0,
+        "best_shift_x": 0,
+        "best_shift_y": 0,
+        "required_coverage": 0.95,
+        "min_required_coverage": 0.92,
+        "outside_allowed_ratio": 0.01,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.90,
+        "min_section_coverage_limit": 0.85,
+        "sample_white_pixels": 42,
+    }
+
+    with mock.patch("builtins.print") as print_mock:
+        print_inspection_result(False, details)
+
+    printed = "\n".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
+    assert "Registration: quality_gate_failed via anchor_translation" in printed
+    assert "Registration rejection: Registration confidence 0.500 was below required minimum 0.900." in printed

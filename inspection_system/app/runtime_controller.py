@@ -11,15 +11,20 @@ from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_service import (
     MIN_ANOMALY_TRAINING_SAMPLES,
+    build_registration_commissioning_summary,
     get_anomaly_model_artifact_paths,
     get_anomaly_model_metadata,
     get_reference_variant_directories,
     list_anomaly_training_samples,
+    load_reference_metadata,
+    registration_baseline_matches_config,
 )
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
 from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
+from inspection_system.app.inspection_runtime_context import build_inspection_runtime_context
+from inspection_system.app.training_labels import resolve_learning_class
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
 
 
@@ -67,18 +72,6 @@ def _append_unique(lines: list[str], text: str) -> None:
         lines.append(text)
 
 
-def _resolve_learning_class(record: dict) -> str | None:
-    final_class = record.get("final_class")
-    if final_class in {"good", "reject"}:
-        return final_class
-    feedback = str(record.get("feedback", "")).strip().lower()
-    if feedback == "approve":
-        return "good"
-    if feedback == "reject":
-        return "reject"
-    return None
-
-
 def _load_training_records(active_paths: dict) -> list[dict]:
     config_path = active_paths.get("config_file")
     if config_path is None:
@@ -101,7 +94,7 @@ def _count_good_training_records(active_paths: dict) -> dict[str, int]:
         "pending_good_records": 0,
     }
     for record in _load_training_records(active_paths):
-        if _resolve_learning_class(record) != "good":
+        if resolve_learning_class(record) != "good":
             continue
         learning_state = str(record.get("learning_state", "committed")).strip().lower()
         if learning_state == "pending":
@@ -166,6 +159,22 @@ def _annotate_commissioning_workflow(status: dict) -> dict:
     if status.get("requires_golden_reference") and not status.get("golden_reference_present"):
         stage_title = "Capture Golden Reference"
         instruction = "Capture one golden reference. Then load a clearly known-good part to verify the setup."
+    elif not status.get("registration_ready", True):
+        stage_index = 2
+        stage_title = "Registration Setup"
+        instruction = (
+            status.get("registration_actions", []) or [
+                "Complete the registration anchor and datum setup before relying on production results."
+            ]
+        )[0]
+    elif status.get("golden_reference_present") and not status.get("registration_baseline_captured", False):
+        stage_index = 2
+        stage_title = "Capture Registration Baseline"
+        instruction = (
+            status.get("actions", []) or [
+                "Re-capture the golden reference to stamp the current registration baseline."
+            ]
+        )[0]
     elif committed_good_records <= 0:
         stage_index = 2
         stage_title = "Golden Check"
@@ -239,6 +248,11 @@ def get_commissioning_status(
         "committed_good_records": 0,
         "pending_good_records": 0,
         "ml_ready": True,
+        "registration_ready": True,
+        "registration_baseline_captured": False,
+        "registration_summary": build_registration_commissioning_summary(config).get("summary", "registration unknown"),
+        "registration_issues": [],
+        "registration_actions": [],
         "summary_line": "Commissioning: training targets unavailable",
         "issues": [],
         "actions": [],
@@ -267,6 +281,24 @@ def get_commissioning_status(
 
     issues: list[str] = []
     actions: list[str] = []
+    follow_up_actions: list[str] = []
+
+    registration_summary = build_registration_commissioning_summary(config)
+    registration_baseline_captured = False
+    if golden_reference_present:
+        reference_metadata = load_reference_metadata(Path(active_paths["reference_dir"]) / "ref_meta.json") or {}
+        baseline_from_metadata = reference_metadata.get("registration_baseline")
+        if registration_baseline_matches_config(baseline_from_metadata, registration_summary):
+            registration_baseline_captured = True
+        else:
+            _append_unique(follow_up_actions, "Re-capture the golden reference to stamp the current registration baseline.")
+
+        if not bool(registration_summary.get("ready", True)):
+            issues.append("registration setup incomplete")
+            for action in registration_summary.get("actions", []):
+                _append_unique(actions, action)
+        elif not registration_baseline_captured:
+            issues.append("registration baseline not captured")
 
     if status["requires_golden_reference"] and not golden_reference_present:
         issues.append("golden reference missing")
@@ -302,10 +334,16 @@ def get_commissioning_status(
         if anomaly_status["pending_good_samples"] or anomaly_status["model_stale"]:
             _append_unique(actions, "Press Update to rebuild the anomaly model for the current approved-good sample library.")
 
+    for action in follow_up_actions:
+        _append_unique(actions, action)
+
     ready = not issues and ml_ready
     summary_parts = []
     if status["requires_golden_reference"]:
         summary_parts.append("golden ok" if golden_reference_present else "golden missing")
+    summary_parts.append("reg ok" if registration_summary.get("ready", True) else "reg setup")
+    if golden_reference_present:
+        summary_parts.append("baseline ok" if registration_baseline_captured else "baseline pending")
     summary_parts.append(f"good {committed_good_records}/{min_good_samples}")
     if min_active_variants > 0:
         summary_parts.append(f"refs {active_reference_variants}/{min_active_variants}")
@@ -321,6 +359,11 @@ def get_commissioning_status(
             "committed_good_records": committed_good_records,
             "pending_good_records": pending_good_records,
             "ml_ready": ml_ready,
+            "registration_ready": bool(registration_summary.get("ready", True)),
+            "registration_baseline_captured": registration_baseline_captured,
+            "registration_summary": str(registration_summary.get("summary", "registration unknown")),
+            "registration_issues": list(registration_summary.get("issues", [])),
+            "registration_actions": list(registration_summary.get("actions", [])),
             "issues": issues,
             "actions": actions,
             "ready": ready,
@@ -346,6 +389,7 @@ def format_commissioning_status_lines(status: dict) -> list[str]:
         f"Stage {status.get('workflow_stage_index', 1)}/{status.get('workflow_stage_total', COMMISSIONING_WORKFLOW_TOTAL_STAGES)}"
         f" - {status.get('workflow_stage_title', 'Setup')}",
         f"Instruction: {status.get('workflow_instruction', 'Review the commissioning steps for this project.')}",
+        f"Registration: {status.get('registration_summary', 'registration unknown')}",
         status.get("summary_line", "Commissioning: unknown"),
     ]
     upgrade_prompt = status.get("workflow_upgrade_prompt")
@@ -598,6 +642,19 @@ def run_production_mode(config: dict, indicator) -> int:
 def print_inspection_result(passed: bool, details: dict) -> None:
     print("Inspection result:", "PASS" if passed else "FAIL")
     print(f"Inspection mode: {details.get('inspection_mode', 'mask_only')}")
+    registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
+    if registration:
+        print(
+            "Registration: "
+            f"{registration.get('status', 'unknown')} via {registration.get('applied_strategy', registration.get('runtime_mode', 'unknown'))}"
+        )
+    if details.get("failure_stage") == "registration":
+        rejection_reason = registration.get("rejection_reason") or "Registration failed before part-level inspection could be trusted."
+        print(f"Registration rejection: {rejection_reason}")
+        for failure in registration.get("quality_gate_failures", [])[:2]:
+            summary = failure.get("summary")
+            if summary:
+                print(f"Registration gate: {summary}")
     if details.get("reference_label"):
         print(
             f"Selected reference: {details.get('reference_label')}"
@@ -716,19 +773,22 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
         return result_code
 
     try:
-        active_paths = get_active_runtime_paths()
-        anomaly_detector = load_anomaly_detector(active_paths)
-        for warning in get_inspection_runtime_warnings(config, anomaly_detector, active_paths):
+        runtime_context = build_inspection_runtime_context(
+            config,
+            active_paths_loader=get_active_runtime_paths,
+            reference_candidates_loader=list_runtime_reference_candidates,
+            anomaly_detector_loader=load_anomaly_detector,
+        )
+        for warning in get_inspection_runtime_warnings(config, runtime_context.anomaly_detector, runtime_context.active_paths):
             print(f"Warning: {warning}")
-        reference_candidates = list_runtime_reference_candidates(config, active_paths)
-        if not reference_candidates:
+        if not runtime_context.reference_candidates:
             print("No active runtime references are available. Capture a golden reference first.")
             indicator.pulse_fail()
             return 1
         passed, details = inspect_against_references(
             config,
             image_path,
-            reference_candidates,
+            runtime_context.reference_candidates,
             make_binary_mask,
             align_sample_mask,
             build_reference_regions,
@@ -739,7 +799,7 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
             import_cv2_and_numpy,
             dilate_mask,
             erode_mask,
-            anomaly_detector=anomaly_detector,
+            anomaly_detector=runtime_context.anomaly_detector,
         )
         print_inspection_result(passed, details)
         if passed:

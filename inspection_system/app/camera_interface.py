@@ -111,6 +111,26 @@ DEFAULT_CONFIG = {
         "max_angle_deg": 1.0,
         "max_shift_x": 4,
         "max_shift_y": 3,
+        "registration": {
+            "strategy": "moments",
+            "transform_model": "rigid",
+            "anchor_mode": "none",
+            "subpixel_refinement": "off",
+            "search_margin_px": 24,
+            "anchors": [],
+            "quality_gates": {
+                "min_confidence": None,
+                "max_mean_residual_px": None,
+            },
+            "datum_frame": {
+                "origin": "roi_top_left",
+                "orientation": "part_axis",
+            },
+            "commissioning": {
+                "datum_confirmed": False,
+                "expected_transform_confirmed": False,
+            },
+        },
     },
     "training": {
         "early_review_parts": 25,

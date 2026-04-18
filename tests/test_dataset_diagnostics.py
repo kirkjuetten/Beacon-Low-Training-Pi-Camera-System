@@ -5,6 +5,8 @@ from inspection_system.app.dataset_diagnostics import (
     FAIL,
     INVALID_CAPTURE,
     PASS,
+    REGISTRATION_FAILED,
+    _diagnose_result,
     build_active_paths_from_project_root,
     build_diagnostic_output_path,
     duplicate_training_records,
@@ -100,6 +102,27 @@ def test_duplicate_training_records_expands_and_shuffles() -> None:
 def test_expected_status_for_record_uses_bucket_fallback() -> None:
     assert expected_status_for_record({"bucket": "good", "expected_inspection_status": None}) == PASS
     assert expected_status_for_record({"bucket": "reject"}) == FAIL
+
+
+def test_diagnose_result_distinguishes_registration_failure() -> None:
+    diagnosis = _diagnose_result(
+        {},
+        {
+            "status": REGISTRATION_FAILED,
+            "registration_rejection_reason": "Registration confidence 0.500 was below required minimum 0.900.",
+            "registration_quality_gate_failures": [
+                {
+                    "cause_code": "registration_failure",
+                    "gate_key": "min_confidence",
+                    "summary": "Registration confidence 0.500 was below required minimum 0.900.",
+                }
+            ],
+        },
+    )
+
+    assert diagnosis["primary_cause"] == "registration_failure"
+    assert diagnosis["failure_modes"][0]["gate_key"] == "min_confidence"
+    assert "Registration confidence" in diagnosis["summary"]
 
 
 def test_resolve_project_context_uses_project_snapshot_near_source(tmp_path: Path) -> None:

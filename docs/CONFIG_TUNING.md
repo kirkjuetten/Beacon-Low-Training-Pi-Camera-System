@@ -91,6 +91,64 @@ These are active only if the selected inspection mode includes them and a value 
 - `true`: Better robustness to slight pose shifts.
 - `false`: More sensitive to shift/rotation.
 
+### Active Registration Runtime (`alignment.mode`)
+- Purpose: Selects which registration implementation the live inspection loop actually runs.
+- `moments`: current compatibility mode.
+- `anchor_translation`: uses one commissioning anchor to estimate translation.
+- `anchor_pair`: uses two commissioning anchors to estimate rotation plus translation.
+- `rigid_refined`: reserved for a later rollout stage.
+
+Keep this distinct from `alignment.registration.strategy`: the strategy field is the project contract, while `alignment.mode` is the currently enabled runtime implementation.
+
+## Registration Commissioning Settings
+
+These settings define the project registration contract that commissioning and stored reference metadata use.
+
+Current rollout note: the live inspection loop now supports `moments`, `anchor_translation`, and `anchor_pair`. `rigid_refined` remains staged for a later slice. The registration settings below continue to define the commissioning contract that the runtime works from.
+
+### Registration Strategy (`alignment.registration.strategy`)
+- Purpose: Target registration workflow for the project.
+- `moments`: compatibility/default contract.
+- `anchor_translation`, `anchor_pair`, `rigid_refined`: staged strategies for future registration engine rollout.
+
+### Registration Transform Model (`alignment.registration.transform_model`)
+- Purpose: Expected transform family for the part during registration.
+- `rigid`: translation + rotation only.
+- `similarity`: translation + rotation + uniform scale.
+- `affine`: more flexible transform for more dynamic setups.
+
+### Registration Anchor Mode (`alignment.registration.anchor_mode`)
+- Purpose: Declares whether registration should rely on zero, one, two, or many anchors.
+- `none`: pure global compatibility mode.
+- `single`, `pair`, `multi`: staged anchor-driven modes.
+
+### Subpixel Refinement (`alignment.registration.subpixel_refinement`)
+- Purpose: Declares the intended refinement method once anchor-driven registration is enabled.
+- `off`: no refinement.
+- `phase_correlation`, `template`: staged refined modes.
+
+### Registration Search Margin (px) (`alignment.registration.search_margin_px`)
+- Purpose: Default search padding around anchor search windows.
+- Increase when: expected placement drift is larger.
+- Decrease when: search needs to stay local and fast.
+
+### Registration Min Confidence (optional) (`alignment.registration.quality_gates.min_confidence`)
+- Purpose: Minimum acceptable registration confidence once confidence scoring is active.
+- Blank means: no explicit confidence gate yet.
+
+### Registration Max Mean Residual (px, optional) (`alignment.registration.quality_gates.max_mean_residual_px`)
+- Purpose: Maximum acceptable mean registration residual once residual scoring is active.
+- Lower value: stricter registration fit.
+- Blank means: no explicit residual gate yet.
+
+### Datum Frame Origin (`alignment.registration.datum_frame.origin`)
+- Purpose: Declares where part coordinates should originate after registration.
+- Examples: `roi_top_left`, `anchor_primary`, `part_centroid`.
+
+### Datum Frame Orientation (`alignment.registration.datum_frame.orientation`)
+- Purpose: Declares how the part coordinate frame should be oriented after registration.
+- Examples: `part_axis`, `image_axes`, `anchor_pair`.
+
 ### Indicator LED Enabled (`indicator_led.enabled`)
 - Purpose: Enable GPIO pass/fail LED signaling on Pi.
 - Does not change scoring logic.

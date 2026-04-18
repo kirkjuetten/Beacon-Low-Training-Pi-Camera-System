@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
-from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS
+from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS, REGISTRATION_FAILED
 
 VALID_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -52,7 +53,54 @@ def _get_reference_image_path() -> Path:
 def _round_optional_float(value):
     if value is None:
         return None
-    return round(float(value), 6)
+    numeric_value = float(value)
+    if not math.isfinite(numeric_value):
+        return None
+    return round(numeric_value, 6)
+
+
+def _serialize_reference_candidate_summaries(summaries: list[dict] | None) -> list[dict]:
+    serialized = []
+    for summary in summaries or []:
+        rank = summary.get("rank", {}) if isinstance(summary, dict) else {}
+        serialized.append(
+            {
+                "reference_id": summary.get("reference_id"),
+                "reference_label": summary.get("reference_label"),
+                "reference_role": summary.get("reference_role"),
+                "passed": bool(summary.get("passed", False)),
+                "rank": {
+                    "passed_score": int(rank.get("passed_score", 0)),
+                    "failed_gate_score": int(rank.get("failed_gate_score", 0)),
+                    "margin_score": _round_optional_float(rank.get("margin_score")),
+                },
+                "registration_status": summary.get("registration_status"),
+                "registration_runtime_mode": summary.get("registration_runtime_mode"),
+                "registration_applied_strategy": summary.get("registration_applied_strategy"),
+                "registration_datum_frame": summary.get("registration_datum_frame"),
+                "registration_rejected": bool(summary.get("registration_rejected", False)),
+                "registration_rejection_reason": summary.get("registration_rejection_reason"),
+                "edge_measurement_frame": summary.get("edge_measurement_frame"),
+                "section_measurement_frame": summary.get("section_measurement_frame"),
+                "required_coverage": _round_optional_float(summary.get("required_coverage")),
+                "outside_allowed_ratio": _round_optional_float(summary.get("outside_allowed_ratio")),
+                "min_section_coverage": _round_optional_float(summary.get("min_section_coverage")),
+                "mean_edge_distance_px": _round_optional_float(summary.get("mean_edge_distance_px")),
+                "worst_section_edge_distance_px": _round_optional_float(summary.get("worst_section_edge_distance_px")),
+                "worst_section_width_delta_ratio": _round_optional_float(summary.get("worst_section_width_delta_ratio")),
+                "worst_section_center_offset_px": _round_optional_float(summary.get("worst_section_center_offset_px")),
+            }
+        )
+    return serialized
+
+
+def _resolve_result_status(passed: bool, details: dict) -> str:
+    registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
+    if passed:
+        return PASS
+    if registration.get("rejection_reason"):
+        return REGISTRATION_FAILED
+    return FAIL
 
 
 def classify_invalid_capture(config: dict, image_path: Path, active_paths: dict | None = None) -> str | None:
@@ -137,7 +185,17 @@ def inspect_file(config: dict, image_path: Path, active_paths: dict | None = Non
 
     return {
         "image": str(image_path),
-        "status": PASS if passed else FAIL,
+        "status": _resolve_result_status(passed, details),
+        "reference_id": details.get("reference_id"),
+        "reference_label": details.get("reference_label"),
+        "reference_role": details.get("reference_role"),
+        "reference_strategy": details.get("reference_strategy"),
+        "reference_candidate_count": int(details.get("reference_candidate_count", 0)),
+        "evaluated_reference_ids": list(details.get("evaluated_reference_ids", [])),
+        "reference_candidate_errors": list(details.get("reference_candidate_errors", [])),
+        "reference_candidate_summaries": _serialize_reference_candidate_summaries(
+            details.get("reference_candidate_summaries")
+        ),
         "required_coverage": round(float(details.get("required_coverage", 0.0)), 6),
         "outside_allowed_ratio": round(float(details.get("outside_allowed_ratio", 0.0)), 6),
         "min_section_coverage": round(float(details.get("min_section_coverage", 0.0)), 6),
@@ -151,6 +209,16 @@ def inspect_file(config: dict, image_path: Path, active_paths: dict | None = Non
         "best_angle_deg": round(float(details.get("best_angle_deg", 0.0)), 6),
         "best_shift_x": int(details.get("best_shift_x", 0)),
         "best_shift_y": int(details.get("best_shift_y", 0)),
+        "registration_status": details.get("registration", {}).get("status"),
+        "registration_runtime_mode": details.get("registration", {}).get("runtime_mode"),
+        "registration_applied_strategy": details.get("registration", {}).get("applied_strategy"),
+        "registration_datum_frame": details.get("registration", {}).get("datum_frame"),
+        "registration_rejected": bool(details.get("registration", {}).get("rejection_reason")),
+        "registration_rejection_reason": details.get("registration", {}).get("rejection_reason"),
+        "registration_quality_gate_failures": list(details.get("registration", {}).get("quality_gate_failures", [])),
+        "failure_stage": details.get("failure_stage"),
+        "edge_measurement_frame": details.get("edge_measurement_frame"),
+        "section_measurement_frame": details.get("section_measurement_frame"),
         "mean_edge_distance_px": _round_optional_float(details.get("mean_edge_distance_px")),
         "max_mean_edge_distance_px": _round_optional_float(details.get("max_mean_edge_distance_px")),
         "effective_max_mean_edge_distance_px": _round_optional_float(details.get("effective_max_mean_edge_distance_px")),
@@ -201,7 +269,7 @@ def inspect_folder(config: dict, folder: Path) -> int:
     for image_path in image_paths:
         result = inspect_file(config, image_path)
         print(json.dumps(result, sort_keys=True))
-        if result["status"] in {FAIL, INVALID_CAPTURE, CONFIG_ERROR}:
+        if result["status"] in {FAIL, REGISTRATION_FAILED, INVALID_CAPTURE, CONFIG_ERROR}:
             exit_code = 1
 
     return exit_code

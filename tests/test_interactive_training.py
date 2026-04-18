@@ -629,6 +629,39 @@ def test_reset_commissioning_state_can_clear_reference_assets(tmp_path, monkeypa
     assert not metadata_path.exists()
 
 
+def test_build_reference_preview_text_calls_out_baseline_registration() -> None:
+    metric_lines, description = interactive_training.build_reference_preview_text(
+        {
+            'alignment': {
+                'mode': 'moments',
+                'registration': {
+                    'strategy': 'anchor_pair',
+                    'anchor_mode': 'pair',
+                    'datum_frame': {
+                        'origin': 'anchor_primary',
+                        'orientation': 'anchor_pair',
+                    },
+                    'anchors': [
+                        {
+                            'anchor_id': 'left_pad',
+                            'enabled': True,
+                            'reference_point': {'x': 10, 'y': 12},
+                            'search_window': {'x': 0, 'y': 0, 'width': 0, 'height': 0},
+                        }
+                    ],
+                },
+            }
+        },
+        has_reference=False,
+        reference_button_label='SET REF',
+    )
+
+    assert metric_lines[0] == 'Reference file: missing'
+    assert metric_lines[2] == 'Registration: runtime moments | requested anchor_pair | anchors 1/2 | datum anchor_primary/anchor_pair | datum pending | transform pending'
+    assert 'baseline registration frame and inspection mask' in description
+    assert 'Define at least 2 enabled registration anchors before relying on anchor_pair.' in description
+
+
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config = {

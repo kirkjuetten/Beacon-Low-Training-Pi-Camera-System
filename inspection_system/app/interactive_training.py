@@ -27,6 +27,10 @@ from inspection_system.app.camera_interface import (
     get_active_runtime_paths,
 )
 from inspection_system.app.frame_acquisition import cleanup_temp_image, capture_to_temp
+from inspection_system.app.inspection_runtime_context import (
+    build_inspection_runtime_context,
+    refresh_inspection_runtime_context,
+)
 from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
@@ -34,9 +38,21 @@ from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
+from inspection_system.app.training_assets import (
+    commit_pending_training_records,
+    discard_pending_training_records,
+    stage_training_assets,
+)
+from inspection_system.app.training_labels import default_final_class, resolve_learning_class
+from inspection_system.app.training_schema import (
+    build_config_fingerprint,
+    build_training_record,
+    normalize_record_schema,
+)
 from inspection_system.app.reference_service import (
     activate_anomaly_training_sample,
     activate_reference_candidate,
+    build_registration_commissioning_summary,
     clear_reference_variants,
     clear_anomaly_training_artifacts,
     discard_anomaly_training_sample,
@@ -623,6 +639,26 @@ class InspectionDisplay:
         """Deprecated compatibility wrapper for older callers."""
         return 'capture'
 
+
+def build_reference_preview_text(config: dict, has_reference: bool, reference_button_label: str) -> tuple[list[str], str]:
+    registration_summary = build_registration_commissioning_summary(config)
+    next_step = (
+        registration_summary.get("actions", ["Capture the baseline registration frame for this project."])[0]
+        if not registration_summary.get("ready", True)
+        else "Capture the baseline registration frame for this project."
+    )
+    metric_lines = [
+        f"Reference file: {'present' if has_reference else 'missing'}",
+        f"Action: {reference_button_label}",
+        f"Registration: {registration_summary.get('summary', 'registration unknown')}",
+    ]
+    description = (
+        "Point the camera at the golden reference sample. "
+        "This capture defines the baseline registration frame and inspection mask. "
+        f"{next_step}"
+    )
+    return metric_lines, description
+
     def run_reference_preview(self, config: dict, has_reference: bool) -> str:
         """Show a live-ish preview loop until the operator captures/replaces the reference."""
         self.set_ui_mode("setup_reference")
@@ -653,11 +689,7 @@ class InspectionDisplay:
                 placeholder_rect = placeholder.get_rect(center=image_rect.center)
                 self.screen.blit(placeholder, placeholder_rect)
 
-            metric_lines = [
-                f"Reference file: {'present' if has_reference else 'missing'}",
-                f"Action: {self.reference_button_label}",
-                "Camera preview refreshes automatically.",
-            ]
+            metric_lines, description = build_reference_preview_text(config, has_reference, self.reference_button_label)
             y = metrics_rect.y
             line_height = self.small_font.get_linesize() + 2
             for line in metric_lines:
@@ -665,10 +697,6 @@ class InspectionDisplay:
                 self.screen.blit(text, (metrics_rect.x, y))
                 y += line_height
 
-            description = (
-                "Point the camera at the golden reference sample. "
-                f"Press {self.reference_button_label} when the framing looks correct."
-            )
             self.draw_description(description, description_rect)
             self.draw_buttons()
 
@@ -1130,82 +1158,23 @@ class ThresholdTrainer:
 
     @staticmethod
     def _default_final_class(feedback: str) -> str | None:
-        normalized = str(feedback).strip().lower()
-        if normalized == 'approve':
-            return 'good'
-        if normalized == 'reject':
-            return 'reject'
-        return None
+        return default_final_class(feedback)
 
     def _build_config_fingerprint(self, config: dict | None = None) -> dict:
-        source = config or self._load_current_config()
-        inspection_cfg = source.get('inspection', {}) if isinstance(source, dict) else {}
-        alignment_cfg = source.get('alignment', {}) if isinstance(source, dict) else {}
-        return {
-            'inspection_mode': inspection_cfg.get('inspection_mode', 'mask_only'),
-            'reference_strategy': inspection_cfg.get('reference_strategy', 'golden_only'),
-            'blend_mode': inspection_cfg.get('blend_mode', 'hard_only'),
-            'tolerance_mode': inspection_cfg.get('tolerance_mode', 'balanced'),
-            'threshold_mode': inspection_cfg.get('threshold_mode'),
-            'threshold_value': inspection_cfg.get('threshold_value'),
-            'min_required_coverage': inspection_cfg.get('min_required_coverage'),
-            'max_outside_allowed_ratio': inspection_cfg.get('max_outside_allowed_ratio'),
-            'min_section_coverage': inspection_cfg.get('min_section_coverage'),
-            'max_mean_edge_distance_px': inspection_cfg.get('max_mean_edge_distance_px'),
-            'max_section_edge_distance_px': inspection_cfg.get('max_section_edge_distance_px'),
-            'max_section_width_delta_ratio': inspection_cfg.get('max_section_width_delta_ratio'),
-            'max_section_center_offset_px': inspection_cfg.get('max_section_center_offset_px'),
-            'min_ssim': inspection_cfg.get('min_ssim'),
-            'max_mse': inspection_cfg.get('max_mse'),
-            'min_anomaly_score': inspection_cfg.get('min_anomaly_score'),
-            'alignment_profile': alignment_cfg.get('tolerance_profile', 'balanced'),
-        }
+        return build_config_fingerprint(config or self._load_current_config())
 
     def _normalize_record_schema(self, record: dict) -> bool:
-        changed = False
-        if record.get('schema_version') != TRAINING_DATA_SCHEMA_VERSION:
-            record['schema_version'] = TRAINING_DATA_SCHEMA_VERSION
-            changed = True
-        if 'final_class' not in record:
-            record['final_class'] = self._default_final_class(record.get('feedback', ''))
-            changed = True
-        if 'defect_category' not in record:
-            record['defect_category'] = None
-            changed = True
-        if 'classification_reason' not in record:
-            record['classification_reason'] = None
-            changed = True
-        if 'config_fingerprint' not in record:
-            record['config_fingerprint'] = self._build_config_fingerprint()
-            changed = True
-        if 'record_id' not in record:
-            record['record_id'] = f"legacy_{int(record.get('timestamp', time.time()) * 1000)}"
-            changed = True
-        if 'reference_candidate_id' not in record:
-            record['reference_candidate_id'] = None
-            changed = True
-        if 'reference_candidate_state' not in record:
-            record['reference_candidate_state'] = None
-            changed = True
-        if 'anomaly_sample_id' not in record:
-            record['anomaly_sample_id'] = None
-            changed = True
-        if 'anomaly_sample_state' not in record:
-            record['anomaly_sample_state'] = None
-            changed = True
-        return changed
+        return normalize_record_schema(
+            record,
+            schema_version=TRAINING_DATA_SCHEMA_VERSION,
+            default_final_class=self._default_final_class,
+            config_fingerprint=self._build_config_fingerprint(),
+            timestamp_provider=time.time,
+        )
 
     @staticmethod
     def _resolve_learning_class(record: dict) -> str | None:
-        final_class = record.get('final_class')
-        if final_class in {'good', 'reject'}:
-            return final_class
-        feedback = str(record.get('feedback', '')).strip().lower()
-        if feedback == 'approve':
-            return 'good'
-        if feedback == 'reject':
-            return 'reject'
-        return None
+        return resolve_learning_class(record)
 
     def record_feedback(
         self,
@@ -1218,84 +1187,31 @@ class ThresholdTrainer:
         label_info = label_info or {}
         final_class = label_info.get('final_class', self._default_final_class(feedback))
         record_id = f"feedback_{int(time.time() * 1000)}_{len(self.training_data) + 1}"
-        record = {
-            'schema_version': TRAINING_DATA_SCHEMA_VERSION,
-            'record_id': record_id,
-            'timestamp': time.time(),
-            'feedback': feedback,
-            'final_class': final_class,
-            'defect_category': label_info.get('defect_category'),
-            'classification_reason': label_info.get('classification_reason'),
-            'learning_state': 'pending',
-            'config_fingerprint': self._build_config_fingerprint(),
-            'reference_candidate_id': None,
-            'reference_candidate_state': None,
-            'anomaly_sample_id': None,
-            'anomaly_sample_state': None,
-            'metrics': {
-                'required_coverage': details.get('required_coverage', 0),
-                'outside_allowed_ratio': details.get('outside_allowed_ratio', 0),
-                'min_section_coverage': details.get('min_section_coverage', 0),
-                'mean_edge_distance_px': details.get('mean_edge_distance_px'),
-                'worst_section_edge_distance_px': details.get('worst_section_edge_distance_px'),
-                'worst_section_width_delta_ratio': details.get('worst_section_width_delta_ratio'),
-                'worst_section_center_offset_px': details.get('worst_section_center_offset_px'),
-                'ssim': details.get('ssim'),
-                'mse': details.get('mse'),
-                'anomaly_score': details.get('anomaly_score'),
-                'histogram_similarity': details.get('histogram_similarity'),
-                'best_angle_deg': details.get('best_angle_deg', 0),
-                'best_shift_x': details.get('best_shift_x', 0),
-                'best_shift_y': details.get('best_shift_y', 0),
-                'inspection_mode': details.get('inspection_mode', 'mask_only'),
-            }
-        }
+        record = build_training_record(
+            details,
+            feedback,
+            schema_version=TRAINING_DATA_SCHEMA_VERSION,
+            record_id=record_id,
+            timestamp=time.time(),
+            final_class=final_class,
+            label_info=label_info,
+            config_fingerprint=self._build_config_fingerprint(),
+        )
 
         current_config = self._load_current_config()
         inspection_cfg = current_config.get('inspection', {})
         reference_strategy = str(inspection_cfg.get('reference_strategy', 'golden_only')).strip().lower()
-        if (
-            final_class == 'good'
-            and image_path is not None
-            and reference_strategy in {'hybrid', 'multi_good_experimental'}
-        ):
-            if self.active_paths is None:
-                staged_ok, staged_result = stage_reference_candidate_from_image(
-                    current_config,
-                    image_path,
-                    label=f"Approved Good {len(self.training_data) + 1}",
-                    source_record_id=record_id,
-                )
-            else:
-                staged_ok, staged_result = stage_reference_candidate_from_image(
-                    current_config,
-                    image_path,
-                    active_paths=self.active_paths,
-                    label=f"Approved Good {len(self.training_data) + 1}",
-                    source_record_id=record_id,
-                )
-            if staged_ok:
-                record['reference_candidate_id'] = staged_result['reference_id']
-                record['reference_candidate_state'] = staged_result['state']
-        if final_class == 'good' and image_path is not None:
-            if self.active_paths is None:
-                sample_ok, sample_result = stage_anomaly_training_sample_from_image(
-                    current_config,
-                    image_path,
-                    label=f"Approved Good Sample {len(self.training_data) + 1}",
-                    source_record_id=record_id,
-                )
-            else:
-                sample_ok, sample_result = stage_anomaly_training_sample_from_image(
-                    current_config,
-                    image_path,
-                    active_paths=self.active_paths,
-                    label=f"Approved Good Sample {len(self.training_data) + 1}",
-                    source_record_id=record_id,
-                )
-            if sample_ok:
-                record['anomaly_sample_id'] = sample_result['sample_id']
-                record['anomaly_sample_state'] = sample_result['state']
+        stage_training_assets(
+            record,
+            current_config,
+            final_class=final_class,
+            image_path=image_path,
+            record_label_index=len(self.training_data) + 1,
+            reference_strategy=reference_strategy,
+            active_paths=self.active_paths,
+            stage_reference_candidate=stage_reference_candidate_from_image,
+            stage_anomaly_training_sample=stage_anomaly_training_sample_from_image,
+        )
         self.training_data.append(record)
         self.save_training_data()
 
@@ -1525,58 +1441,25 @@ class ThresholdTrainer:
 
     def commit_pending_feedback(self) -> int:
         """Mark pending records as committed after applying threshold updates."""
-        updated = 0
-        for record in self.training_data:
-            if record.get('learning_state', 'committed') == 'pending':
-                candidate_id = record.get('reference_candidate_id')
-                candidate_state = record.get('reference_candidate_state')
-                learning_class = self._resolve_learning_class(record)
-                if candidate_id and candidate_state == 'pending' and learning_class == 'good':
-                    if self.active_paths is None:
-                        activated = activate_reference_candidate(candidate_id)
-                    else:
-                        activated = activate_reference_candidate(candidate_id, active_paths=self.active_paths)
-                    if not activated:
-                        continue
-                    record['reference_candidate_state'] = 'active'
-                sample_id = record.get('anomaly_sample_id')
-                sample_state = record.get('anomaly_sample_state')
-                if sample_id and sample_state == 'pending' and learning_class == 'good':
-                    if self.active_paths is None:
-                        activated_sample = activate_anomaly_training_sample(sample_id)
-                    else:
-                        activated_sample = activate_anomaly_training_sample(sample_id, active_paths=self.active_paths)
-                    if activated_sample:
-                        record['anomaly_sample_state'] = 'active'
-                record['learning_state'] = 'committed'
-                updated += 1
+        updated = commit_pending_training_records(
+            self.training_data,
+            active_paths=self.active_paths,
+            resolve_learning_class=self._resolve_learning_class,
+            activate_reference_candidate=activate_reference_candidate,
+            activate_anomaly_training_sample=activate_anomaly_training_sample,
+        )
         if updated:
             self.save_training_data()
         return updated
 
     def discard_pending_feedback(self) -> int:
         """Exclude pending records from learning while preserving audit history."""
-        updated = 0
-        for record in self.training_data:
-            if record.get('learning_state', 'committed') == 'pending':
-                candidate_id = record.get('reference_candidate_id')
-                candidate_state = record.get('reference_candidate_state')
-                if candidate_id and candidate_state == 'pending':
-                    if self.active_paths is None:
-                        discard_reference_candidate(candidate_id, state='pending')
-                    else:
-                        discard_reference_candidate(candidate_id, active_paths=self.active_paths, state='pending')
-                    record['reference_candidate_state'] = 'discarded'
-                sample_id = record.get('anomaly_sample_id')
-                sample_state = record.get('anomaly_sample_state')
-                if sample_id and sample_state == 'pending':
-                    if self.active_paths is None:
-                        discard_anomaly_training_sample(sample_id, state='pending')
-                    else:
-                        discard_anomaly_training_sample(sample_id, active_paths=self.active_paths, state='pending')
-                    record['anomaly_sample_state'] = 'discarded'
-                record['learning_state'] = 'discarded'
-                updated += 1
+        updated = discard_pending_training_records(
+            self.training_data,
+            active_paths=self.active_paths,
+            discard_reference_candidate=discard_reference_candidate,
+            discard_anomaly_training_sample=discard_anomaly_training_sample,
+        )
         if updated:
             self.save_training_data()
         return updated
@@ -1770,7 +1653,7 @@ def save_reference_from_image(config: dict, image_path: Path) -> tuple[bool, str
         clear_reference_variants(active_paths)
         clear_anomaly_training_artifacts(active_paths)
         save_reference_metadata(config)
-        return True, f"Reference saved ({feature_pixels} feature pixels)"
+        return True, f"Reference saved ({feature_pixels} feature pixels). Baseline registration captured."
     except Exception as exc:
         return False, f"Reference save error: {exc}"
 
@@ -1823,10 +1706,29 @@ def run_interactive_training(config: dict) -> int:
         print("pygame is required for interactive training. Install with: pip install pygame")
         return 1
 
-    active_paths = get_active_runtime_paths()
-    reference_candidates = list_runtime_reference_candidates(config, active_paths)
+    runtime_context = build_inspection_runtime_context(
+        config,
+        active_paths_loader=get_active_runtime_paths,
+        reference_candidates_loader=list_runtime_reference_candidates,
+        anomaly_detector_loader=load_anomaly_detector,
+    )
+    active_paths = runtime_context.active_paths
+    reference_candidates = runtime_context.reference_candidates
+    anomaly_detector = runtime_context.anomaly_detector
 
-    anomaly_detector = load_anomaly_detector(active_paths)
+    def refresh_runtime_state() -> None:
+        nonlocal runtime_context, active_paths, reference_candidates, anomaly_detector
+        runtime_context = refresh_inspection_runtime_context(
+            runtime_context,
+            config=config,
+            active_paths_loader=get_active_runtime_paths,
+            reference_candidates_loader=list_runtime_reference_candidates,
+            anomaly_detector_loader=load_anomaly_detector,
+        )
+        active_paths = runtime_context.active_paths
+        reference_candidates = runtime_context.reference_candidates
+        anomaly_detector = runtime_context.anomaly_detector
+
     for warning in get_inspection_runtime_warnings(config, anomaly_detector, active_paths):
         print(f"Warning: {warning}")
 
@@ -1836,7 +1738,7 @@ def run_interactive_training(config: dict) -> int:
     logger.start_session()
 
     display = InspectionDisplay()
-    trainer = ThresholdTrainer(active_paths["config_file"], logger)
+    trainer = ThresholdTrainer(active_paths["config_file"], logger, active_paths=active_paths)
     display.set_alignment_profile_label(config.get("alignment", {}).get("tolerance_profile", "balanced"))
     def build_review_warnings() -> list[str]:
         settings_match, reference_warning = check_reference_settings_match(config)
@@ -1909,8 +1811,8 @@ def run_interactive_training(config: dict) -> int:
                 success, msg = save_reference_from_image(config, Path(action))
                 cleanup_temp_image()
                 print(msg)
-                active_paths = get_active_runtime_paths()
-                reference_candidates = list_runtime_reference_candidates(config, active_paths)
+                refresh_runtime_state()
+                trainer.active_paths = active_paths
                 if success:
                     display.show_message("Reference saved. Starting training...", display.GREEN)
                     time.sleep(1)
@@ -1929,7 +1831,7 @@ def run_interactive_training(config: dict) -> int:
             try:
                 # Run inspection
                 try:
-                    reference_candidates = list_runtime_reference_candidates(config, active_paths)
+                    reference_candidates = runtime_context.reference_candidates
                     passed, details = inspect_against_references(
                         config,
                         image_path,
@@ -1967,7 +1869,8 @@ def run_interactive_training(config: dict) -> int:
                             success, msg = save_reference_from_image(config, Path(action))
                             cleanup_temp_image()
                             print(msg)
-                            active_paths = get_active_runtime_paths()
+                            refresh_runtime_state()
+                            trainer.active_paths = active_paths
                             color = display.GREEN if success else display.RED
                             display.show_message(msg, color)
                             time.sleep(1.5)
@@ -2011,7 +1914,8 @@ def run_interactive_training(config: dict) -> int:
                         success, msg = save_reference_from_image(config, Path(action))
                         cleanup_temp_image()
                         print(msg)
-                        active_paths = get_active_runtime_paths()
+                        refresh_runtime_state()
+                        trainer.active_paths = active_paths
                         color = display.GREEN if success else display.RED
                         display.show_message(msg, color)
                         time.sleep(1.5)
@@ -2063,7 +1967,8 @@ def run_interactive_training(config: dict) -> int:
                             print(f"Discarded {discarded} pending training records.")
                         elif action == 'reset':
                             reset_result = trainer.reset_commissioning_state(config)
-                            anomaly_detector = load_anomaly_detector(active_paths)
+                            refresh_runtime_state()
+                            trainer.active_paths = active_paths
                             print(
                                 "Reset learned training state: "
                                 f"cleared {reset_result['cleared_records']} records, cleared reference variants, and cleared anomaly artifacts."
@@ -2085,7 +1990,8 @@ def run_interactive_training(config: dict) -> int:
 
                                 committed = trainer.commit_pending_feedback()
                                 model_result = trainer.rebuild_anomaly_model(config)
-                                anomaly_detector = load_anomaly_detector(active_paths)
+                                refresh_runtime_state()
+                                trainer.active_paths = active_paths
 
                                 if applied['threshold_updates']:
                                     print("Applied threshold updates:")

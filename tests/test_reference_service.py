@@ -7,6 +7,7 @@ from inspection_system.app.reference_service import (
     list_anomaly_training_samples,
     train_anomaly_model_from_samples,
 )
+from inspection_system.app.registration_schema import build_alignment_metadata
 
 
 def test_check_reference_settings_match_reports_context_mismatches(monkeypatch) -> None:
@@ -22,7 +23,36 @@ def test_check_reference_settings_match_reports_context_mismatches(monkeypatch) 
                 'blend_mode': 'hard_only',
                 'tolerance_mode': 'balanced',
             },
-            'alignment': {'tolerance_profile': 'balanced'},
+            'alignment': {
+                'enabled': True,
+                'mode': 'moments',
+                'tolerance_profile': 'balanced',
+                'registration': {
+                    'strategy': 'anchor_pair',
+                    'transform_model': 'similarity',
+                    'anchor_mode': 'pair',
+                    'subpixel_refinement': 'phase_correlation',
+                    'search_margin_px': 24,
+                    'quality_gates': {
+                        'min_confidence': 0.82,
+                        'max_mean_residual_px': 1.5,
+                    },
+                    'datum_frame': {
+                        'origin': 'anchor_primary',
+                        'orientation': 'anchor_pair',
+                    },
+                    'anchors': [
+                        {
+                            'anchor_id': 'left_pad',
+                            'label': 'Left Pad',
+                            'kind': 'corner',
+                            'enabled': True,
+                            'reference_point': {'x': 12, 'y': 18},
+                            'search_window': {'x': 0, 'y': 0, 'width': 30, 'height': 40},
+                        }
+                    ],
+                },
+            },
         },
     )
 
@@ -39,7 +69,25 @@ def test_check_reference_settings_match_reports_context_mismatches(monkeypatch) 
                 'blend_mode': 'blend_balanced',
                 'tolerance_mode': 'forgiving',
             },
-            'alignment': {'tolerance_profile': 'strict'},
+            'alignment': {
+                'tolerance_profile': 'strict',
+                'registration': {
+                    'strategy': 'moments',
+                    'transform_model': 'rigid',
+                    'anchor_mode': 'none',
+                    'subpixel_refinement': 'off',
+                    'search_margin_px': 40,
+                    'quality_gates': {
+                        'min_confidence': None,
+                        'max_mean_residual_px': None,
+                    },
+                    'datum_frame': {
+                        'origin': 'roi_top_left',
+                        'orientation': 'image_axes',
+                    },
+                    'anchors': [],
+                },
+            },
         }
     )
 
@@ -52,6 +100,165 @@ def test_check_reference_settings_match_reports_context_mismatches(monkeypatch) 
     assert 'blend mode mismatch' in warning
     assert 'tolerance mode mismatch' in warning
     assert 'alignment tolerance profile mismatch' in warning
+    assert 'registration strategy mismatch' in warning
+    assert 'registration transform model mismatch' in warning
+    assert 'registration anchor mode mismatch' in warning
+    assert 'registration subpixel refinement mismatch' in warning
+    assert 'registration search margin mismatch' in warning
+    assert 'registration quality gates mismatch' in warning
+    assert 'registration datum frame mismatch' in warning
+    assert 'registration anchors mismatch' in warning
+
+
+def test_build_reference_metadata_includes_registration_context() -> None:
+    config = {
+        'inspection': {
+            'roi': {'x': 1, 'y': 2, 'width': 300, 'height': 200},
+            'threshold_mode': 'otsu',
+            'threshold_value': 180,
+            'blur_kernel': 3,
+            'reference_erode_iterations': 1,
+            'reference_dilate_iterations': 2,
+            'inspection_mode': 'mask_only',
+            'reference_strategy': 'hybrid',
+            'blend_mode': 'blend_balanced',
+            'tolerance_mode': 'balanced',
+        },
+        'alignment': {
+            'enabled': True,
+            'mode': 'moments',
+            'tolerance_profile': 'balanced',
+            'max_angle_deg': 1.5,
+            'max_shift_x': 5,
+            'max_shift_y': 6,
+            'registration': {
+                'strategy': 'anchor_pair',
+                'transform_model': 'similarity',
+                'anchor_mode': 'pair',
+                'subpixel_refinement': 'phase_correlation',
+                'search_margin_px': 32,
+                'quality_gates': {
+                    'min_confidence': 0.9,
+                    'max_mean_residual_px': 1.25,
+                },
+                'datum_frame': {
+                    'origin': 'anchor_primary',
+                    'orientation': 'anchor_pair',
+                },
+                'commissioning': {
+                    'datum_confirmed': True,
+                    'expected_transform_confirmed': True,
+                },
+                'anchors': [
+                    {
+                        'anchor_id': 'anchor_a',
+                        'label': 'Anchor A',
+                        'kind': 'feature',
+                        'reference_point': {'x': 18, 'y': 21},
+                        'search_window': {'x': 10, 'y': 11, 'width': 40, 'height': 50},
+                    },
+                    {
+                        'anchor_id': 'anchor_b',
+                        'label': 'Anchor B',
+                        'kind': 'feature',
+                        'reference_point': {'x': 28, 'y': 31},
+                        'search_window': {'x': 20, 'y': 21, 'width': 40, 'height': 50},
+                    }
+                ],
+            },
+        },
+    }
+
+    metadata = reference_service._build_reference_metadata(config)
+
+    assert metadata['alignment'] == build_alignment_metadata(config)
+    assert metadata['alignment']['registration']['strategy'] == 'anchor_pair'
+    assert metadata['alignment']['registration']['anchors'][0]['anchor_id'] == 'anchor_a'
+    assert metadata['alignment']['registration']['datum_frame']['origin'] == 'anchor_primary'
+    assert metadata['registration_baseline']['strategy'] == 'anchor_pair'
+    assert metadata['registration_baseline']['enabled_anchor_count'] == 2
+    assert metadata['registration_baseline']['datum_confirmed'] is True
+    assert metadata['registration_baseline']['expected_transform_confirmed'] is True
+    assert metadata['registration_baseline']['ready'] is True
+
+
+def test_build_registration_commissioning_summary_flags_missing_anchor_setup() -> None:
+    summary = reference_service.build_registration_commissioning_summary(
+        {
+            'alignment': {
+                'mode': 'moments',
+                'registration': {
+                    'strategy': 'anchor_pair',
+                    'anchor_mode': 'pair',
+                    'datum_frame': {
+                        'origin': 'anchor_primary',
+                        'orientation': 'anchor_pair',
+                    },
+                    'anchors': [
+                        {
+                            'anchor_id': 'left_pad',
+                            'enabled': True,
+                            'reference_point': {'x': 10, 'y': 12},
+                            'search_window': {'x': 0, 'y': 0, 'width': 0, 'height': 0},
+                        }
+                    ],
+                },
+            }
+        }
+    )
+
+    assert summary['ready'] is False
+    assert 'enabled anchors 1/2 for pair registration' in summary['issues']
+    assert 'search windows missing for left_pad' in summary['issues']
+    assert summary['actions'][0].startswith('Define at least 2 enabled registration anchors')
+    assert 'datum frame not confirmed' in summary['issues']
+    assert 'expected transform limits not validated' in summary['issues']
+
+
+def test_registration_baseline_matches_config_requires_confirmed_limits_and_matching_values() -> None:
+    current = reference_service.build_registration_commissioning_summary(
+        {
+            'alignment': {
+                'mode': 'anchor_pair',
+                'max_angle_deg': 1.2,
+                'max_shift_x': 5,
+                'max_shift_y': 4,
+                'registration': {
+                    'strategy': 'anchor_pair',
+                    'anchor_mode': 'pair',
+                    'datum_frame': {
+                        'origin': 'anchor_primary',
+                        'orientation': 'anchor_pair',
+                    },
+                    'commissioning': {
+                        'datum_confirmed': True,
+                        'expected_transform_confirmed': True,
+                    },
+                    'anchors': [
+                        {
+                            'anchor_id': 'anchor_a',
+                            'enabled': True,
+                            'reference_point': {'x': 10, 'y': 10},
+                            'search_window': {'x': 5, 'y': 5, 'width': 20, 'height': 20},
+                        },
+                        {
+                            'anchor_id': 'anchor_b',
+                            'enabled': True,
+                            'reference_point': {'x': 30, 'y': 12},
+                            'search_window': {'x': 24, 'y': 5, 'width': 20, 'height': 20},
+                        },
+                    ],
+                },
+            }
+        }
+    )
+
+    assert reference_service.registration_baseline_matches_config(dict(current), current) is True
+
+    stale = dict(current)
+    stale['expected_transform'] = dict(current['expected_transform'])
+    stale['expected_transform']['max_shift_x'] = 7
+    assert reference_service.registration_baseline_matches_config(stale, current) is False
 
 
 def test_list_runtime_reference_candidates_hybrid_includes_golden_and_active_variant(tmp_path) -> None:

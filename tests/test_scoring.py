@@ -202,6 +202,33 @@ def test_evaluate_metrics_fails_when_section_center_offset_exceeds_threshold() -
     assert summary["effective_max_section_center_offset_px"] == 0.6
 
 
+def test_evaluate_metrics_treats_infinite_thresholds_as_disabled() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_edge_distance_px": float("inf"),
+        "worst_section_center_offset_px": float("inf"),
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_edge_distance_px": float("inf"),
+        "max_section_center_offset_px": float("inf"),
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_edge_gate_active"] is False
+    assert summary["section_center_gate_active"] is False
+    assert summary["effective_max_section_edge_distance_px"] is None
+    assert summary["effective_max_section_center_offset_px"] is None
+    assert summary["worst_section_edge_distance_px"] is None
+    assert summary["worst_section_center_offset_px"] is None
+
+
 def test_evaluate_metrics_fails_when_optional_gate_is_not_met() -> None:
     metrics = {
         "required_coverage": 0.95,

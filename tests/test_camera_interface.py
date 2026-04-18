@@ -56,6 +56,14 @@ def test_load_and_write_default_config_creates_file(monkeypatch, tmp_path) -> No
     assert config["inspection"]["max_section_edge_distance_px"] is None
     assert config["inspection"]["max_section_width_delta_ratio"] is None
     assert config["inspection"]["max_section_center_offset_px"] is None
+    assert config["alignment"]["registration"]["strategy"] == "moments"
+    assert config["alignment"]["registration"]["transform_model"] == "rigid"
+    assert config["alignment"]["registration"]["anchor_mode"] == "none"
+    assert config["alignment"]["registration"]["search_margin_px"] == 24
+    assert config["alignment"]["registration"]["quality_gates"]["min_confidence"] is None
+    assert config["alignment"]["registration"]["datum_frame"]["origin"] == "roi_top_left"
+    assert config["alignment"]["registration"]["commissioning"]["datum_confirmed"] is False
+    assert config["alignment"]["registration"]["commissioning"]["expected_transform_confirmed"] is False
 
 
 def test_load_config_merges_new_defaults_into_legacy_project_config(monkeypatch, tmp_path) -> None:
@@ -102,6 +110,9 @@ def test_load_config_merges_new_defaults_into_legacy_project_config(monkeypatch,
     assert config["inspection"]["max_section_edge_distance_px"] is None
     assert config["inspection"]["max_section_width_delta_ratio"] is None
     assert config["inspection"]["max_section_center_offset_px"] is None
+    assert config["alignment"]["registration"]["strategy"] == "moments"
+    assert config["alignment"]["registration"]["transform_model"] == "rigid"
+    assert config["alignment"]["registration"]["anchors"] == []
 
 
 def test_get_active_runtime_paths_uses_current_project_registry(monkeypatch, tmp_path) -> None:

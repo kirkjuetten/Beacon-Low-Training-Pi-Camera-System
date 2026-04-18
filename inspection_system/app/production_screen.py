@@ -17,11 +17,26 @@ from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.camera_interface import get_active_runtime_paths, import_cv2_and_numpy
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
+from inspection_system.app.inspection_runtime_context import build_inspection_runtime_context
 from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
+from inspection_system.app.result_interpreter import (
+    GOOD,
+    REASON_EXTRA_PRINT,
+    REASON_REGISTRATION_FAILURE,
+    REASON_LABELS,
+    REASON_MISSING_PRINT,
+    REASON_ORDER,
+    REASON_REFERENCE_MISMATCH,
+    REASON_UNEVEN_PRINT,
+    REJECT,
+    REVIEW,
+    ProductionOutcome,
+    determine_operator_outcome,
+)
 from inspection_system.app.runtime_controller import (
     format_operator_mode_lines,
     get_inspection_runtime_warnings,
@@ -29,38 +44,6 @@ from inspection_system.app.runtime_controller import (
 )
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
-
-
-GOOD = "good"
-REJECT = "reject"
-REVIEW = "review"
-
-REASON_MISSING_PRINT = "missing_print"
-REASON_EXTRA_PRINT = "extra_print"
-REASON_UNEVEN_PRINT = "uneven_print"
-REASON_REFERENCE_MISMATCH = "reference_mismatch"
-
-REASON_ORDER = [
-    REASON_MISSING_PRINT,
-    REASON_EXTRA_PRINT,
-    REASON_UNEVEN_PRINT,
-    REASON_REFERENCE_MISMATCH,
-]
-
-REASON_LABELS = {
-    REASON_MISSING_PRINT: "Missing Print",
-    REASON_EXTRA_PRINT: "Extra Print",
-    REASON_UNEVEN_PRINT: "Uneven Print",
-    REASON_REFERENCE_MISMATCH: "Reference Mismatch",
-}
-
-
-@dataclass(frozen=True)
-class ProductionOutcome:
-    status: str
-    banner_text: str
-    primary_reason: Optional[str]
-    summary_lines: list[str]
 
 
 @dataclass
@@ -107,291 +90,6 @@ class ProductionSessionState:
         self.shift_totals.record(outcome)
         self.last_outcome = outcome
         self.last_details = details
-
-
-def _threshold_ratio(value: Optional[float], threshold: Optional[float], high_is_bad: bool) -> float:
-    if value is None or threshold is None:
-        return 0.0
-    if threshold <= 0:
-        return 1.0
-    if high_is_bad:
-        return threshold / max(value, 1e-9)
-    return value / threshold
-
-
-def _metric_exceeds_limit(details: dict, value_key: str, threshold_key: str, *, high_is_bad: bool = True) -> bool:
-    value = details.get(value_key)
-    threshold = details.get(threshold_key)
-    if value is None or threshold is None:
-        return True
-    if high_is_bad:
-        return float(value) > float(threshold)
-    return float(value) < float(threshold)
-
-
-def _failed_checks(details: dict) -> list[str]:
-    failures: list[str] = []
-
-    if float(details.get("required_coverage", 0.0)) < float(details.get("min_required_coverage", 0.0)):
-        failures.append(REASON_MISSING_PRINT)
-    if float(details.get("outside_allowed_ratio", 0.0)) > float(details.get("max_outside_allowed_ratio", 0.0)):
-        failures.append(REASON_EXTRA_PRINT)
-
-    min_section_limit = float(details.get("min_section_coverage_limit", 0.0))
-    if min_section_limit > 0 and float(details.get("min_section_coverage", 0.0)) < min_section_limit:
-        failures.append(REASON_UNEVEN_PRINT)
-
-    mismatch_failure = False
-    if bool(details.get("section_center_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "worst_section_center_offset_px",
-            "max_section_center_offset_px",
-        )
-    if bool(details.get("section_width_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "worst_section_width_delta_ratio",
-            "max_section_width_delta_ratio",
-        )
-    if bool(details.get("section_edge_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "worst_section_edge_distance_px",
-            "max_section_edge_distance_px",
-        )
-    if bool(details.get("ssim_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "ssim",
-            "min_ssim",
-            high_is_bad=False,
-        )
-    if bool(details.get("mse_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "mse",
-            "max_mse",
-        )
-    if bool(details.get("edge_distance_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "mean_edge_distance_px",
-            "max_mean_edge_distance_px",
-        )
-    if bool(details.get("anomaly_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "anomaly_score",
-            "min_anomaly_score",
-            high_is_bad=False,
-        )
-
-    if mismatch_failure:
-        failures.append(REASON_REFERENCE_MISMATCH)
-
-    return failures
-
-
-def _is_borderline_failure(details: dict, failure: str) -> bool:
-    if failure == REASON_MISSING_PRINT:
-        return _threshold_ratio(
-            float(details.get("required_coverage", 0.0)),
-            float(details.get("min_required_coverage", 0.0)),
-            high_is_bad=False,
-        ) >= 0.9
-
-    if failure == REASON_EXTRA_PRINT:
-        return _threshold_ratio(
-            float(details.get("outside_allowed_ratio", 0.0)),
-            float(details.get("max_outside_allowed_ratio", 0.0)),
-            high_is_bad=True,
-        ) >= (1.0 / 1.1)
-
-    if failure == REASON_UNEVEN_PRINT:
-        return _threshold_ratio(
-            float(details.get("min_section_coverage", 0.0)),
-            float(details.get("min_section_coverage_limit", 0.0)),
-            high_is_bad=False,
-        ) >= 0.9
-
-    if failure == REASON_REFERENCE_MISMATCH:
-        if bool(details.get("section_center_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "worst_section_center_offset_px",
-            "max_section_center_offset_px",
-        ):
-            return _threshold_ratio(
-                details.get("worst_section_center_offset_px"),
-                details.get("max_section_center_offset_px"),
-                high_is_bad=True,
-            ) >= (1.0 / 1.1)
-        if bool(details.get("section_width_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "worst_section_width_delta_ratio",
-            "max_section_width_delta_ratio",
-        ):
-            return _threshold_ratio(
-                details.get("worst_section_width_delta_ratio"),
-                details.get("max_section_width_delta_ratio"),
-                high_is_bad=True,
-            ) >= (1.0 / 1.1)
-        if bool(details.get("section_edge_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "worst_section_edge_distance_px",
-            "max_section_edge_distance_px",
-        ):
-            return _threshold_ratio(
-                details.get("worst_section_edge_distance_px"),
-                details.get("max_section_edge_distance_px"),
-                high_is_bad=True,
-            ) >= (1.0 / 1.1)
-        if bool(details.get("edge_distance_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "mean_edge_distance_px",
-            "max_mean_edge_distance_px",
-        ):
-            return _threshold_ratio(
-                details.get("mean_edge_distance_px"),
-                details.get("max_mean_edge_distance_px"),
-                high_is_bad=True,
-            ) >= (1.0 / 1.1)
-        if bool(details.get("ssim_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "ssim",
-            "min_ssim",
-            high_is_bad=False,
-        ):
-            return _threshold_ratio(details.get("ssim"), details.get("min_ssim"), high_is_bad=False) >= 0.95
-        if bool(details.get("mse_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "mse",
-            "max_mse",
-        ):
-            return _threshold_ratio(details.get("mse"), details.get("max_mse"), high_is_bad=True) >= (1.0 / 1.1)
-        if bool(details.get("anomaly_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "anomaly_score",
-            "min_anomaly_score",
-            high_is_bad=False,
-        ):
-            return _threshold_ratio(
-                details.get("anomaly_score"),
-                details.get("min_anomaly_score"),
-                high_is_bad=False,
-            ) >= 0.95
-        return True
-
-    return False
-
-
-def _make_summary_lines(status: str, primary_reason: Optional[str], details: dict) -> list[str]:
-    required_coverage = float(details.get("required_coverage", 0.0))
-    min_required_coverage = float(details.get("min_required_coverage", 0.0))
-    outside_allowed_ratio = float(details.get("outside_allowed_ratio", 0.0))
-    max_outside_allowed_ratio = float(details.get("max_outside_allowed_ratio", 0.0))
-    min_section_coverage = float(details.get("min_section_coverage", 0.0))
-    min_section_limit = float(details.get("min_section_coverage_limit", 0.0))
-
-    if status == GOOD:
-        return [
-            "Approved part.",
-            f"Coverage {required_coverage:.1%} / {min_required_coverage:.1%}",
-            f"Outside print {outside_allowed_ratio:.1%} / {max_outside_allowed_ratio:.1%}",
-        ]
-
-    if status == REVIEW:
-        return [
-            "Borderline part.",
-            "Manual review required.",
-            f"Place in red bin: {REASON_LABELS.get(primary_reason or REASON_REFERENCE_MISMATCH, 'Needs Review')}",
-        ]
-
-    lines = []
-    if primary_reason == REASON_MISSING_PRINT:
-        lines.append("Missing print area.")
-        lines.append(f"Coverage {required_coverage:.1%} / {min_required_coverage:.1%}")
-    elif primary_reason == REASON_EXTRA_PRINT:
-        lines.append("Extra print outside allowed zone.")
-        lines.append(f"Outside print {outside_allowed_ratio:.1%} / {max_outside_allowed_ratio:.1%}")
-    elif primary_reason == REASON_UNEVEN_PRINT:
-        lines.append("Print is uneven across the part.")
-        lines.append(f"Weakest section {min_section_coverage:.1%} / {min_section_limit:.1%}")
-    else:
-        lines.append("Part does not match reference.")
-        if (
-            bool(details.get("section_center_gate_active", False))
-            and _metric_exceeds_limit(details, "worst_section_center_offset_px", "max_section_center_offset_px")
-            and details.get("worst_section_center_offset_px") is not None
-            and details.get("max_section_center_offset_px") is not None
-        ):
-            lines.append(
-                f"Section center offset {float(details['worst_section_center_offset_px']):.2f}px / {float(details['max_section_center_offset_px']):.2f}px"
-            )
-        elif (
-            bool(details.get("section_width_gate_active", False))
-            and _metric_exceeds_limit(details, "worst_section_width_delta_ratio", "max_section_width_delta_ratio")
-            and details.get("worst_section_width_delta_ratio") is not None
-            and details.get("max_section_width_delta_ratio") is not None
-        ):
-            lines.append(
-                f"Section width drift {float(details['worst_section_width_delta_ratio']):.1%} / {float(details['max_section_width_delta_ratio']):.1%}"
-            )
-        elif (
-            bool(details.get("section_edge_gate_active", False))
-            and _metric_exceeds_limit(details, "worst_section_edge_distance_px", "max_section_edge_distance_px")
-            and details.get("worst_section_edge_distance_px") is not None
-            and details.get("max_section_edge_distance_px") is not None
-        ):
-            lines.append(
-                f"Section edge drift {float(details['worst_section_edge_distance_px']):.2f}px / {float(details['max_section_edge_distance_px']):.2f}px"
-            )
-        elif (
-            bool(details.get("edge_distance_gate_active", False))
-            and _metric_exceeds_limit(details, "mean_edge_distance_px", "max_mean_edge_distance_px")
-            and details.get("mean_edge_distance_px") is not None
-            and details.get("max_mean_edge_distance_px") is not None
-        ):
-            lines.append(
-                f"Edge drift {float(details['mean_edge_distance_px']):.2f}px / {float(details['max_mean_edge_distance_px']):.2f}px"
-            )
-        elif bool(details.get("ssim_gate_active", False)) and _metric_exceeds_limit(details, "ssim", "min_ssim", high_is_bad=False) and details.get("ssim") is not None and details.get("min_ssim") is not None:
-            lines.append(f"Similarity {float(details['ssim']):.3f} / {float(details['min_ssim']):.3f}")
-        elif bool(details.get("mse_gate_active", False)) and _metric_exceeds_limit(details, "mse", "max_mse") and details.get("mse") is not None and details.get("max_mse") is not None:
-            lines.append(f"Difference {float(details['mse']):.1f} / {float(details['max_mse']):.1f}")
-        elif bool(details.get("anomaly_gate_active", False)) and _metric_exceeds_limit(details, "anomaly_score", "min_anomaly_score", high_is_bad=False) and details.get("anomaly_score") is not None and details.get("min_anomaly_score") is not None:
-            lines.append(
-                f"Anomaly {float(details['anomaly_score']):.3f} / {float(details['min_anomaly_score']):.3f}"
-            )
-
-    if len(lines) < 3:
-        lines.append(f"Coverage {required_coverage:.1%} / {min_required_coverage:.1%}")
-    if len(lines) < 3:
-        lines.append(f"Outside print {outside_allowed_ratio:.1%} / {max_outside_allowed_ratio:.1%}")
-    return lines[:3]
-
-
-def determine_operator_outcome(passed: bool, details: dict) -> ProductionOutcome:
-    if passed:
-        return ProductionOutcome(GOOD, "GOOD", None, _make_summary_lines(GOOD, None, details))
-
-    failures = _failed_checks(details)
-    primary_reason = failures[0] if failures else REASON_REFERENCE_MISMATCH
-
-    if failures and len(failures) == 1 and _is_borderline_failure(details, primary_reason):
-        return ProductionOutcome(
-            REVIEW,
-            "NEEDS REVIEW - RED BIN",
-            primary_reason,
-            _make_summary_lines(REVIEW, primary_reason, details),
-        )
-
-    return ProductionOutcome(
-        REJECT,
-        "REJECT",
-        primary_reason,
-        _make_summary_lines(REJECT, primary_reason, details),
-    )
 
 class ProductionDisplay:
     MIN_WIDTH = 640
@@ -600,11 +298,19 @@ class ProductionDisplay:
             self.screen.blit(totals_surface, (rect.x + 14, y))
             y += line_height + 2
 
-            reason_pairs = [
-                f"Miss:{scope.reject_reasons.get(REASON_MISSING_PRINT, 0)}  Extra:{scope.reject_reasons.get(REASON_EXTRA_PRINT, 0)}",
-                f"Uneven:{scope.reject_reasons.get(REASON_UNEVEN_PRINT, 0)}  Match:{scope.reject_reasons.get(REASON_REFERENCE_MISMATCH, 0)}",
-            ]
-            for row in reason_pairs:
+            compact_reason_labels = {
+                REASON_MISSING_PRINT: "Miss",
+                REASON_EXTRA_PRINT: "Extra",
+                REASON_UNEVEN_PRINT: "Uneven",
+                REASON_REFERENCE_MISMATCH: "Match",
+                REASON_REGISTRATION_FAILURE: "Place",
+            }
+            for index in range(0, len(REASON_ORDER), 2):
+                reasons = REASON_ORDER[index : index + 2]
+                row = "  ".join(
+                    f"{compact_reason_labels.get(reason, reason[:5])}:{scope.reject_reasons.get(reason, 0)}"
+                    for reason in reasons
+                )
                 line = self.small_font.render(row, True, self.WHITE)
                 self.screen.blit(line, (rect.x + 14, y))
                 y += line_height
@@ -750,8 +456,7 @@ class ProductionDisplay:
 
 def _perform_inspection(
     config: dict,
-    active_paths: dict,
-    anomaly_detector,
+    runtime_context,
 ) -> tuple[Optional[ProductionOutcome], dict, Optional[Path], Optional[str]]:
     result_code, image_path, stderr_text = capture_to_temp(config)
     if result_code != 0:
@@ -759,7 +464,7 @@ def _perform_inspection(
         return None, {}, None, stderr_text or "Capture failed."
 
     try:
-        reference_candidates = list_runtime_reference_candidates(config, active_paths)
+        reference_candidates = runtime_context.reference_candidates
         if not reference_candidates:
             return None, {}, None, "No active runtime references are available. Capture a golden reference first."
         passed, details = inspect_against_references(
@@ -776,7 +481,7 @@ def _perform_inspection(
             import_cv2_and_numpy,
             dilate_mask,
             erode_mask,
-            anomaly_detector=anomaly_detector,
+            anomaly_detector=runtime_context.anomaly_detector,
         )
         return determine_operator_outcome(passed, details), details, image_path, None
     except Exception as exc:
@@ -789,8 +494,14 @@ def run_production_mode(config: dict, indicator) -> int:
         print("pygame is required for production mode. Install with: pip install pygame")
         return 1
 
-    active_paths = get_active_runtime_paths()
-    if not list_runtime_reference_candidates(config, active_paths):
+    runtime_context = build_inspection_runtime_context(
+        config,
+        active_paths_loader=get_active_runtime_paths,
+        reference_candidates_loader=list_runtime_reference_candidates,
+        anomaly_detector_loader=load_anomaly_detector,
+    )
+    active_paths = runtime_context.active_paths
+    if not runtime_context.reference_candidates:
         print("Production mode requires an active reference image and mask.")
         print("Capture a reference first from the dashboard.")
         return 1
@@ -801,9 +512,8 @@ def run_production_mode(config: dict, indicator) -> int:
     processed_surface: Optional[pygame.Surface] = None
     status_message = "Ready. Press MANUAL INSPECT to inspect the next part."
     session.display_mode = str(config.get("inspection", {}).get("image_display_mode", "raw")).strip().lower() or "raw"
-    anomaly_detector = load_anomaly_detector(active_paths)
-    mode_warnings = get_inspection_runtime_warnings(config, anomaly_detector, active_paths)
-    mode_lines = format_operator_mode_lines(config, active_paths, anomaly_detector)
+    mode_warnings = get_inspection_runtime_warnings(config, runtime_context.anomaly_detector, active_paths)
+    mode_lines = format_operator_mode_lines(config, active_paths, runtime_context.anomaly_detector)
     if mode_warnings:
         for warning in mode_warnings:
             print(f"Warning: {warning}")
@@ -825,7 +535,7 @@ def run_production_mode(config: dict, indicator) -> int:
                     pos = event.pos
                     if display.buttons["manual_inspect"].collidepoint(pos):
                         display.show_message("INSPECTING...", display.YELLOW)
-                        outcome, details, image_path, error_message = _perform_inspection(config, active_paths, anomaly_detector)
+                        outcome, details, image_path, error_message = _perform_inspection(config, runtime_context)
                         if error_message is not None:
                             source_surface = None
                             processed_surface = None
