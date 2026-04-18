@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from scoring_utils import evaluate_metrics, score_sample
+from scoring_utils import (
+    evaluate_metrics,
+    normalize_blend_mode,
+    normalize_inspection_mode,
+    normalize_tolerance_mode,
+    resolve_inspection_mode_details,
+    score_sample,
+)
 
 
 def test_score_sample_computes_expected_metrics() -> None:
@@ -79,3 +86,552 @@ def test_evaluate_metrics_applies_thresholds() -> None:
     assert summary["min_required_coverage"] == 0.92
     assert summary["max_outside_allowed_ratio"] == 0.02
     assert summary["min_section_coverage_limit"] == 0.85
+
+
+def test_evaluate_metrics_applies_optional_ssim_and_mse_gates() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "mean_edge_distance_px": 0.6,
+        "ssim": 0.91,
+        "mse": 4.0,
+    }
+    inspection_cfg = {
+        "inspection_mode": "full",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": 1.0,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["mean_edge_distance_px"] == 0.6
+    assert summary["max_mean_edge_distance_px"] == 1.0
+    assert summary["ssim"] == 0.91
+    assert summary["mse"] == 4.0
+    assert summary["min_ssim"] == 0.9
+    assert summary["max_mse"] == 5.0
+
+
+def test_evaluate_metrics_fails_when_mean_edge_distance_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "mean_edge_distance_px": 1.8,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": 1.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["edge_distance_gate_active"] is True
+    assert summary["effective_max_mean_edge_distance_px"] == 1.0
+
+
+def test_evaluate_metrics_fails_when_worst_section_edge_distance_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_edge_distance_px": 1.4,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_edge_distance_px": 1.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["section_edge_gate_active"] is True
+    assert summary["effective_max_section_edge_distance_px"] == 1.0
+
+
+def test_evaluate_metrics_fails_when_section_width_delta_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_width_delta_ratio": 0.18,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_width_delta_ratio": 0.1,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["section_width_gate_active"] is True
+    assert summary["effective_max_section_width_delta_ratio"] == 0.1
+
+
+def test_evaluate_metrics_fails_when_section_center_offset_exceeds_threshold() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_center_offset_px": 1.2,
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_center_offset_px": 0.6,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["section_center_gate_active"] is True
+    assert summary["effective_max_section_center_offset_px"] == 0.6
+
+
+def test_evaluate_metrics_treats_infinite_thresholds_as_disabled() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_edge_distance_px": float("inf"),
+        "worst_section_center_offset_px": float("inf"),
+    }
+    inspection_cfg = {
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_edge_distance_px": float("inf"),
+        "max_section_center_offset_px": float("inf"),
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_edge_gate_active"] is False
+    assert summary["section_center_gate_active"] is False
+    assert summary["effective_max_section_edge_distance_px"] is None
+    assert summary["effective_max_section_center_offset_px"] is None
+    assert summary["worst_section_edge_distance_px"] is None
+    assert summary["worst_section_center_offset_px"] is None
+
+
+def test_evaluate_metrics_fails_when_optional_gate_is_not_met() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.75,
+        "mse": 9.0,
+        "anomaly_score": -0.2,
+    }
+    inspection_cfg = {
+        "inspection_mode": "full",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["min_anomaly_score"] == 0.0
+
+
+def test_evaluate_metrics_mask_only_ignores_optional_gates() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.1,
+        "mse": 999.0,
+        "anomaly_score": -5.0,
+    }
+    inspection_cfg = {
+        "inspection_mode": "mask_only",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["inspection_mode"] == "mask_only"
+    assert summary["ssim_gate_active"] is False
+    assert summary["mse_gate_active"] is False
+    assert summary["anomaly_gate_active"] is False
+
+
+def test_evaluate_metrics_mask_and_ssim_applies_only_ssim_mse_gates() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.95,
+        "mse": 3.0,
+        "anomaly_score": -5.0,
+    }
+    inspection_cfg = {
+        "inspection_mode": "mask_and_ssim",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["ssim_gate_active"] is True
+    assert summary["mse_gate_active"] is True
+    assert summary["anomaly_gate_active"] is False
+
+
+def test_evaluate_metrics_mask_and_ml_applies_only_anomaly_gate() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.1,
+        "mse": 999.0,
+        "anomaly_score": 0.25,
+    }
+    inspection_cfg = {
+        "inspection_mode": "mask_and_ml",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["ssim_gate_active"] is False
+    assert summary["mse_gate_active"] is False
+    assert summary["anomaly_gate_active"] is True
+
+
+def test_evaluate_metrics_full_only_activates_optional_gates_with_thresholds() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.1,
+        "mse": 999.0,
+        "anomaly_score": 0.25,
+    }
+    inspection_cfg = {
+        "inspection_mode": "full",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["ssim_gate_active"] is False
+    assert summary["mse_gate_active"] is False
+    assert summary["anomaly_gate_active"] is True
+
+
+def test_evaluate_metrics_full_applies_all_optional_gates() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "ssim": 0.95,
+        "mse": 3.0,
+        "anomaly_score": -0.2,
+    }
+    inspection_cfg = {
+        "inspection_mode": "full",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "min_ssim": 0.9,
+        "max_mse": 5.0,
+        "min_anomaly_score": 0.0,
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["ssim_gate_active"] is True
+    assert summary["mse_gate_active"] is True
+    assert summary["anomaly_gate_active"] is True
+
+
+def test_normalize_inspection_mode_falls_back_to_mask_only() -> None:
+    assert normalize_inspection_mode("full") == "full"
+    assert normalize_inspection_mode("MASK_AND_ML") == "mask_and_ml"
+    assert normalize_inspection_mode("unknown") == "mask_only"
+
+
+def test_resolve_inspection_mode_details_reports_explicit_gate_combination() -> None:
+    details = resolve_inspection_mode_details(
+        {
+            "inspection_mode": "mask_and_ml",
+            "min_ssim": 0.9,
+            "max_mse": 5.0,
+            "min_anomaly_score": 0.1,
+        }
+    )
+
+    assert details["inspection_mode"] == "mask_and_ml"
+    assert details["included_gates"] == {"anomaly"}
+    assert details["ssim_gate_active"] is False
+    assert details["mse_gate_active"] is False
+    assert details["anomaly_gate_active"] is True
+
+
+def test_normalize_blend_and_tolerance_modes_fall_back_to_defaults() -> None:
+    assert normalize_blend_mode("blend_balanced") == "blend_balanced"
+    assert normalize_blend_mode("unknown") == "hard_only"
+    assert normalize_tolerance_mode("forgiving") == "forgiving"
+    assert normalize_tolerance_mode("unknown") == "balanced"
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_required_coverage() -> None:
+    metrics = {
+        "required_coverage": 0.84,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "learned_ranges": {
+            "required_coverage": {
+                "direction": "higher_is_better",
+                "good_min": 0.8,
+                "good_max": 0.96,
+                "good_mean": 0.9,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["effective_min_required_coverage"] < summary["min_required_coverage"]
+    assert summary["learned_ranges_active"] is True
+
+
+def test_evaluate_metrics_blend_mode_can_activate_optional_gate_from_learned_ranges() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "anomaly_score": 0.2,
+    }
+    inspection_cfg = {
+        "inspection_mode": "mask_and_ml",
+        "blend_mode": "blend_aggressive",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "learned_ranges": {
+            "anomaly_score": {
+                "direction": "higher_is_better",
+                "good_min": 0.3,
+                "good_max": 0.7,
+                "good_mean": 0.5,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["anomaly_gate_active"] is True
+    assert summary["effective_min_anomaly_score"] is not None
+
+
+def test_evaluate_metrics_hard_only_ignores_learned_ranges() -> None:
+    metrics = {
+        "required_coverage": 0.84,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+    }
+    inspection_cfg = {
+        "blend_mode": "hard_only",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "learned_ranges": {
+            "required_coverage": {
+                "direction": "higher_is_better",
+                "good_min": 0.8,
+                "good_max": 0.96,
+                "good_mean": 0.9,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is False
+    assert summary["effective_min_required_coverage"] == summary["min_required_coverage"]
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_edge_distance() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "mean_edge_distance_px": 1.4,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": 1.0,
+        "learned_ranges": {
+            "mean_edge_distance_px": {
+                "direction": "lower_is_better",
+                "good_min": 0.2,
+                "good_max": 1.6,
+                "good_mean": 0.9,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["edge_distance_gate_active"] is True
+    assert summary["effective_max_mean_edge_distance_px"] > summary["max_mean_edge_distance_px"]
+    assert summary["learned_ranges_active"] is True
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_section_edge_distance() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_edge_distance_px": 1.1,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_edge_distance_px": 0.8,
+        "learned_ranges": {
+            "worst_section_edge_distance_px": {
+                "direction": "lower_is_better",
+                "good_min": 0.2,
+                "good_max": 1.4,
+                "good_mean": 0.8,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_edge_gate_active"] is True
+    assert summary["effective_max_section_edge_distance_px"] > summary["max_section_edge_distance_px"]
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_section_width_delta() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_width_delta_ratio": 0.12,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_width_delta_ratio": 0.08,
+        "learned_ranges": {
+            "worst_section_width_delta_ratio": {
+                "direction": "lower_is_better",
+                "good_min": 0.02,
+                "good_max": 0.14,
+                "good_mean": 0.09,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_width_gate_active"] is True
+    assert summary["effective_max_section_width_delta_ratio"] > summary["max_section_width_delta_ratio"]
+
+
+def test_evaluate_metrics_blend_mode_uses_learned_ranges_for_section_center_offset() -> None:
+    metrics = {
+        "required_coverage": 0.95,
+        "outside_allowed_ratio": 0.01,
+        "min_section_coverage": 0.9,
+        "worst_section_center_offset_px": 0.9,
+    }
+    inspection_cfg = {
+        "blend_mode": "blend_balanced",
+        "tolerance_mode": "balanced",
+        "min_required_coverage": 0.92,
+        "max_outside_allowed_ratio": 0.02,
+        "min_section_coverage": 0.85,
+        "max_section_center_offset_px": 0.5,
+        "learned_ranges": {
+            "worst_section_center_offset_px": {
+                "direction": "lower_is_better",
+                "good_min": 0.1,
+                "good_max": 1.0,
+                "good_mean": 0.6,
+                "good_count": 10,
+            }
+        },
+    }
+
+    passed, summary = evaluate_metrics(metrics, inspection_cfg)
+
+    assert passed is True
+    assert summary["section_center_gate_active"] is True
+    assert summary["effective_max_section_center_offset_px"] > summary["max_section_center_offset_px"]

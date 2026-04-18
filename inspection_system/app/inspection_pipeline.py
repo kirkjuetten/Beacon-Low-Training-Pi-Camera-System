@@ -1,7 +1,28 @@
 from __future__ import annotations
 
+import logging
+import math
 from pathlib import Path
 from inspection_system.app.anomaly_detection_utils import detect_anomalies
+from inspection_system.app.datum_measurement_utils import compute_datum_section_measurements
+from inspection_system.app.registration_engine import register_sample_mask
+from inspection_system.app.registration_transform import apply_transform_to_mask
+from inspection_system.app.reference_service import check_reference_settings_match
+
+
+logger = logging.getLogger(__name__)
+
+
+def _finite_float(value):
+    if value is None:
+        return None
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric_value):
+        return None
+    return numeric_value
 
 
 ALIGNMENT_PROFILES = {
@@ -38,6 +59,172 @@ def resolve_alignment_config(config: dict) -> tuple[dict, str]:
     return alignment_cfg, profile_name
 
 
+def _compute_edge_mask(mask, np_module):
+    white = mask > 0
+    if not white.any():
+        return white
+
+    padded = np_module.pad(white, 1, mode="constant", constant_values=False)
+    interior = white.copy()
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            interior &= padded[1 + dy : 1 + dy + white.shape[0], 1 + dx : 1 + dx + white.shape[1]]
+    return white & (~interior)
+
+
+def _mean_nearest_edge_distance(edge_source, edge_target, np_module, cv2_module=None) -> float:
+    source_count = int(edge_source.sum())
+    target_count = int(edge_target.sum())
+    if source_count == 0 and target_count == 0:
+        return 0.0
+    if source_count == 0 or target_count == 0:
+        return float("inf")
+
+    if cv2_module is not None and hasattr(cv2_module, "distanceTransform"):
+        distance_input = (~edge_target).astype(np_module.uint8)
+        distance_map = cv2_module.distanceTransform(
+            distance_input,
+            getattr(cv2_module, "DIST_L2", 2),
+            getattr(cv2_module, "DIST_MASK_PRECISE", 0),
+        )
+        return float(distance_map[edge_source].mean())
+
+    source_points = np_module.argwhere(edge_source).astype(np_module.float32)
+    target_points = np_module.argwhere(edge_target).astype(np_module.float32)
+    deltas = source_points[:, None, :] - target_points[None, :, :]
+    distances = np_module.sqrt(np_module.sum(deltas * deltas, axis=2))
+    return float(distances.min(axis=1).mean())
+
+
+def compute_mean_edge_distance_px(reference_mask, sample_mask, np_module, cv2_module=None) -> float:
+    reference_edges = _compute_edge_mask(reference_mask, np_module)
+    sample_edges = _compute_edge_mask(sample_mask, np_module)
+    forward_distance = _mean_nearest_edge_distance(sample_edges, reference_edges, np_module, cv2_module)
+    reverse_distance = _mean_nearest_edge_distance(reference_edges, sample_edges, np_module, cv2_module)
+    return float((forward_distance + reverse_distance) / 2.0)
+
+
+def compute_section_edge_distances_px(reference_mask, sample_mask, section_masks, np_module, cv2_module=None):
+    distances = []
+    for section_mask in section_masks:
+        section_white = section_mask > 0
+        if not section_white.any():
+            continue
+        section_reference_mask = np_module.where(section_white, reference_mask, 0).astype(reference_mask.dtype, copy=False)
+        section_sample_mask = np_module.where(section_white, sample_mask, 0).astype(sample_mask.dtype, copy=False)
+        distances.append(compute_mean_edge_distance_px(section_reference_mask, section_sample_mask, np_module, cv2_module))
+    return distances
+
+
+def compute_section_width_ratios(reference_mask, sample_mask, section_masks, np_module):
+    ratios = []
+    reference_white = reference_mask > 0
+    sample_white = sample_mask > 0
+    for section_mask in section_masks:
+        section_points = np_module.argwhere(section_mask > 0)
+        if section_points.size == 0:
+            continue
+        y0, x0 = section_points.min(axis=0)
+        y1, x1 = section_points.max(axis=0) + 1
+        reference_count = int(reference_white[y0:y1, x0:x1].sum())
+        if reference_count == 0:
+            continue
+        sample_count = int(sample_white[y0:y1, x0:x1].sum())
+        ratios.append(sample_count / reference_count)
+    return ratios
+
+
+def compute_section_center_offsets_px(reference_mask, sample_mask, section_masks, np_module):
+    offsets = []
+    reference_white = reference_mask > 0
+    sample_white = sample_mask > 0
+    for section_mask in section_masks:
+        section_white = section_mask > 0
+        if not section_white.any():
+            continue
+        reference_points = np_module.argwhere(reference_white & section_white)
+        if reference_points.size == 0:
+            continue
+        sample_points = np_module.argwhere(sample_white & section_white)
+        if sample_points.size == 0:
+            offsets.append(float("inf"))
+            continue
+        reference_center_x = float(reference_points[:, 1].mean())
+        sample_center_x = float(sample_points[:, 1].mean())
+        offsets.append(abs(sample_center_x - reference_center_x))
+    return offsets
+
+
+def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, float]:
+    margins = [
+        _finite_float(details.get("required_coverage")) - _finite_float(details.get("effective_min_required_coverage", details.get("min_required_coverage", 0.0))),
+        _finite_float(details.get("effective_max_outside_allowed_ratio", details.get("max_outside_allowed_ratio", 0.0))) - _finite_float(details.get("outside_allowed_ratio")),
+        _finite_float(details.get("min_section_coverage")) - _finite_float(details.get("effective_min_section_coverage", details.get("min_section_coverage_limit", 0.0))),
+    ]
+
+    optional_gates = [
+        ("section_center_gate_active", "worst_section_center_offset_px", "effective_max_section_center_offset_px", "max_section_center_offset_px", "lower"),
+        ("section_width_gate_active", "worst_section_width_delta_ratio", "effective_max_section_width_delta_ratio", "max_section_width_delta_ratio", "lower"),
+        ("section_edge_gate_active", "worst_section_edge_distance_px", "effective_max_section_edge_distance_px", "max_section_edge_distance_px", "lower"),
+        ("edge_distance_gate_active", "mean_edge_distance_px", "effective_max_mean_edge_distance_px", "max_mean_edge_distance_px", "lower"),
+        ("ssim_gate_active", "ssim", "effective_min_ssim", "min_ssim", "higher"),
+        ("mse_gate_active", "mse", "effective_max_mse", "max_mse", "lower"),
+        ("anomaly_gate_active", "anomaly_score", "effective_min_anomaly_score", "min_anomaly_score", "higher"),
+    ]
+    for gate_key, metric_key, effective_key, fallback_key, direction in optional_gates:
+        if not details.get(gate_key):
+            continue
+        value = _finite_float(details.get(metric_key))
+        threshold = _finite_float(details.get(effective_key, details.get(fallback_key)))
+        if value is None or threshold is None:
+            margins.append(-1.0)
+            continue
+        if direction == "higher":
+            margins.append(value - threshold)
+        else:
+            margins.append(threshold - value)
+
+    registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
+    if registration.get("rejection_reason"):
+        failed_gate_count = max(1, len(registration.get("quality_gate_failures", [])))
+        return (1 if passed else 0, -failed_gate_count, -1000.0)
+
+    failed_gate_count = sum(1 for margin in margins if margin < 0)
+    return (1 if passed else 0, -failed_gate_count, round(sum(margins), 6))
+
+
+def _build_reference_candidate_summary(details: dict, passed: bool, rank: tuple[int, int, float]) -> dict:
+    registration = details.get("registration", {})
+    return {
+        "reference_id": details.get("reference_id"),
+        "reference_label": details.get("reference_label"),
+        "reference_role": details.get("reference_role"),
+        "passed": bool(passed),
+        "rank": {
+            "passed_score": int(rank[0]),
+            "failed_gate_score": int(rank[1]),
+            "margin_score": float(rank[2]),
+        },
+        "registration_status": registration.get("status"),
+        "registration_runtime_mode": registration.get("runtime_mode"),
+        "registration_applied_strategy": registration.get("applied_strategy"),
+        "registration_datum_frame": registration.get("datum_frame"),
+        "registration_rejected": bool(registration.get("rejection_reason")),
+        "registration_rejection_reason": registration.get("rejection_reason"),
+        "edge_measurement_frame": details.get("edge_measurement_frame"),
+        "section_measurement_frame": details.get("section_measurement_frame"),
+        "required_coverage": float(details.get("required_coverage", 0.0)),
+        "outside_allowed_ratio": float(details.get("outside_allowed_ratio", 0.0)),
+        "min_section_coverage": float(details.get("min_section_coverage", 0.0)),
+        "mean_edge_distance_px": details.get("mean_edge_distance_px"),
+        "worst_section_edge_distance_px": details.get("worst_section_edge_distance_px"),
+        "worst_section_width_delta_ratio": details.get("worst_section_width_delta_ratio"),
+        "worst_section_center_offset_px": details.get("worst_section_center_offset_px"),
+    }
+
+
 def inspect_against_reference(
     config: dict,
     image_path: Path,
@@ -57,6 +244,15 @@ def inspect_against_reference(
 ) -> tuple[bool, dict]:
     inspection_cfg = config.get("inspection", {})
     alignment_cfg, alignment_profile = resolve_alignment_config(config)
+    
+    # Check if reference settings match current config (with safety wrapper)
+    try:
+        settings_match, mismatch_msg = check_reference_settings_match(config)
+        if not settings_match:
+            logger.warning(f"Reference settings mismatch: {mismatch_msg}")
+    except Exception as exc:
+        logger.debug(f"Could not check reference settings: {exc}")
+    
     roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
 
     sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
@@ -80,13 +276,18 @@ def inspect_against_reference(
     # Compute anomaly metrics before alignment
     anomaly_metrics = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
 
-    aligned_sample_mask, best_angle_deg, best_shift_x, best_shift_y = align_sample_mask(
+    registration_result = register_sample_mask(
         sample_mask,
         reference_mask,
         alignment_cfg,
         cv2,
         np,
+        align_sample_mask,
     )
+    aligned_sample_mask = registration_result.aligned_mask
+    best_angle_deg = registration_result.angle_deg
+    best_shift_x = registration_result.shift_x
+    best_shift_y = registration_result.shift_y
 
     reference_allowed, reference_required = build_reference_regions(
         reference_mask,
@@ -103,7 +304,59 @@ def inspect_against_reference(
     )
 
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
-    passed, threshold_summary = evaluate_metrics(metrics, inspection_cfg)
+    datum_section_metrics = None
+    edge_measurement_mask = aligned_sample_mask
+    edge_measurement_frame = "aligned_mask"
+    if registration_result.status == "aligned":
+        datum_section_metrics = compute_datum_section_measurements(
+            sample_mask,
+            section_masks,
+            registration_result.transform,
+            np,
+        )
+        edge_measurement_mask = apply_transform_to_mask(
+            sample_mask,
+            registration_result.transform,
+            cv2,
+            np,
+        )
+        edge_measurement_frame = "datum"
+
+    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, edge_measurement_mask, np, cv2)
+    section_edge_distances_px = compute_section_edge_distances_px(
+        reference_mask,
+        edge_measurement_mask,
+        section_masks,
+        np,
+        cv2,
+    )
+    worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
+
+    if datum_section_metrics is not None:
+        section_width_ratios = datum_section_metrics["section_width_ratios"]
+        section_center_offsets_px = datum_section_metrics["section_center_offsets_px"]
+        section_measurement_frame = datum_section_metrics["frame"]
+        section_measurements = datum_section_metrics["section_measurements"]
+    else:
+        section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
+        section_center_offsets_px = compute_section_center_offsets_px(reference_mask, aligned_sample_mask, section_masks, np)
+        section_measurement_frame = "aligned_mask"
+        section_measurements = []
+
+    worst_section_width_delta_ratio = max((abs(float(ratio) - 1.0) for ratio in section_width_ratios), default=0.0)
+    worst_section_center_offset_px = max(section_center_offsets_px, default=0.0)
+    metric_inputs = {
+        **metrics,
+        "mean_edge_distance_px": mean_edge_distance_px,
+        "worst_section_edge_distance_px": worst_section_edge_distance_px,
+        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
+        "worst_section_center_offset_px": worst_section_center_offset_px,
+        **anomaly_metrics,
+    }
+    passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
+    registration_failed = bool(registration_result.rejection_reason)
+    if registration_failed:
+        passed = False
 
     required_coverage = float(threshold_summary["required_coverage"])
     outside_allowed_ratio = float(threshold_summary["outside_allowed_ratio"])
@@ -144,6 +397,25 @@ def inspect_against_reference(
         "best_shift_x": best_shift_x,
         "best_shift_y": best_shift_y,
         "alignment_profile": alignment_profile,
+        "registration": {
+            "enabled": registration_result.enabled,
+            "status": registration_result.status,
+            "runtime_mode": registration_result.runtime_mode,
+            "requested_strategy": registration_result.requested_strategy,
+            "applied_strategy": registration_result.applied_strategy,
+            "transform_model": registration_result.transform_model,
+            "anchor_mode": registration_result.anchor_mode,
+            "subpixel_refinement": registration_result.subpixel_refinement,
+            "fallback_reason": registration_result.fallback_reason,
+            "rejection_reason": registration_result.rejection_reason,
+            "quality": registration_result.quality,
+            "quality_gates": registration_result.quality_gates,
+            "quality_gate_failures": registration_result.quality_gate_failures,
+            "datum_frame": registration_result.datum_frame,
+            "transform": registration_result.transform,
+            "observed_anchors": registration_result.observed_anchors,
+        },
+        "failure_stage": "registration" if registration_failed else "inspection",
         "required_coverage": required_coverage,
         "outside_allowed_ratio": outside_allowed_ratio,
         "min_section_coverage": min_section_coverage,
@@ -152,7 +424,128 @@ def inspect_against_reference(
         "min_required_coverage": min_required_coverage,
         "max_outside_allowed_ratio": max_outside_allowed_ratio,
         "min_section_coverage_limit": min_section_coverage_limit,
+        "effective_min_required_coverage": threshold_summary.get("effective_min_required_coverage", min_required_coverage),
+        "effective_max_outside_allowed_ratio": threshold_summary.get("effective_max_outside_allowed_ratio", max_outside_allowed_ratio),
+        "effective_min_section_coverage": threshold_summary.get("effective_min_section_coverage", min_section_coverage_limit),
+        "mean_edge_distance_px": threshold_summary.get("mean_edge_distance_px", mean_edge_distance_px),
+        "edge_measurement_frame": edge_measurement_frame,
+        "max_mean_edge_distance_px": threshold_summary.get("max_mean_edge_distance_px"),
+        "effective_max_mean_edge_distance_px": threshold_summary.get("effective_max_mean_edge_distance_px"),
+        "section_edge_distances_px": section_edge_distances_px,
+        "worst_section_edge_distance_px": threshold_summary.get(
+            "worst_section_edge_distance_px",
+            worst_section_edge_distance_px,
+        ),
+        "max_section_edge_distance_px": threshold_summary.get("max_section_edge_distance_px"),
+        "effective_max_section_edge_distance_px": threshold_summary.get("effective_max_section_edge_distance_px"),
+        "section_width_ratios": section_width_ratios,
+        "section_measurement_frame": section_measurement_frame,
+        "section_measurements": section_measurements,
+        "worst_section_width_delta_ratio": threshold_summary.get(
+            "worst_section_width_delta_ratio",
+            worst_section_width_delta_ratio,
+        ),
+        "max_section_width_delta_ratio": threshold_summary.get("max_section_width_delta_ratio"),
+        "effective_max_section_width_delta_ratio": threshold_summary.get("effective_max_section_width_delta_ratio"),
+        "section_center_offsets_px": section_center_offsets_px,
+        "worst_section_center_offset_px": threshold_summary.get(
+            "worst_section_center_offset_px",
+            worst_section_center_offset_px,
+        ),
+        "max_section_center_offset_px": threshold_summary.get("max_section_center_offset_px"),
+        "effective_max_section_center_offset_px": threshold_summary.get("effective_max_section_center_offset_px"),
+        "min_ssim": threshold_summary.get("min_ssim"),
+        "max_mse": threshold_summary.get("max_mse"),
+        "min_anomaly_score": threshold_summary.get("min_anomaly_score"),
+        "effective_min_ssim": threshold_summary.get("effective_min_ssim"),
+        "effective_max_mse": threshold_summary.get("effective_max_mse"),
+        "effective_min_anomaly_score": threshold_summary.get("effective_min_anomaly_score"),
+        "inspection_mode": threshold_summary.get("inspection_mode", "mask_only"),
+        "blend_mode": threshold_summary.get("blend_mode", "hard_only"),
+        "tolerance_mode": threshold_summary.get("tolerance_mode", "balanced"),
+        "learned_ranges_active": bool(threshold_summary.get("learned_ranges_active", False)),
+        "edge_distance_gate_active": bool(threshold_summary.get("edge_distance_gate_active", False)),
+        "section_edge_gate_active": bool(threshold_summary.get("section_edge_gate_active", False)),
+        "section_width_gate_active": bool(threshold_summary.get("section_width_gate_active", False)),
+        "section_center_gate_active": bool(threshold_summary.get("section_center_gate_active", False)),
+        "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
+        "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
+        "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),
         "debug_paths": debug_paths,
         **anomaly_metrics,
     }
     return passed, details
+
+
+def inspect_against_references(
+    config: dict,
+    image_path: Path,
+    reference_candidates: list[dict],
+    make_binary_mask,
+    align_sample_mask,
+    build_reference_regions,
+    compute_section_masks,
+    score_sample,
+    evaluate_metrics,
+    save_debug_outputs,
+    import_cv2_and_numpy,
+    dilate_mask,
+    erode_mask,
+    anomaly_detector=None,
+) -> tuple[bool, dict]:
+    if not reference_candidates:
+        raise FileNotFoundError("No reference candidates are available for inspection.")
+
+    ranked_results: list[tuple[tuple[int, int, float], bool, dict]] = []
+    candidate_summaries: list[dict] = []
+    errors: list[str] = []
+    evaluated_ids: list[str] = []
+
+    for candidate in reference_candidates:
+        reference_id = str(candidate.get("reference_id", "unknown"))
+        evaluated_ids.append(reference_id)
+        try:
+            passed, details = inspect_against_reference(
+                config,
+                image_path,
+                make_binary_mask,
+                Path(candidate["reference_mask_path"]),
+                Path(candidate["reference_image_path"]),
+                align_sample_mask,
+                build_reference_regions,
+                compute_section_masks,
+                score_sample,
+                evaluate_metrics,
+                save_debug_outputs,
+                import_cv2_and_numpy,
+                dilate_mask,
+                erode_mask,
+                anomaly_detector=anomaly_detector,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            errors.append(f"{reference_id}: {exc}")
+            continue
+
+        details["reference_id"] = reference_id
+        details["reference_label"] = str(candidate.get("label", reference_id))
+        details["reference_role"] = str(candidate.get("role", "candidate"))
+        details["reference_mask_path"] = str(candidate.get("reference_mask_path"))
+        details["reference_image_path"] = str(candidate.get("reference_image_path"))
+        details["reference_candidate_count"] = len(reference_candidates)
+        details["evaluated_reference_ids"] = list(evaluated_ids)
+        details["reference_strategy"] = str(config.get("inspection", {}).get("reference_strategy", "golden_only"))
+        rank = _reference_candidate_rank(passed, details)
+        ranked_results.append((rank, passed, details))
+        candidate_summaries.append(_build_reference_candidate_summary(details, passed, rank))
+
+    if not ranked_results:
+        if errors:
+            raise ValueError("; ".join(errors))
+        raise FileNotFoundError("No usable reference candidates were found for inspection.")
+
+    _, passed, best_details = max(ranked_results, key=lambda item: item[0])
+    if errors:
+        best_details["reference_candidate_errors"] = errors
+    best_details["evaluated_reference_ids"] = evaluated_ids
+    best_details["reference_candidate_summaries"] = candidate_summaries
+    return passed, best_details

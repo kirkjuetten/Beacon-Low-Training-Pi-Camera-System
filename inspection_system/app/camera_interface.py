@@ -16,6 +16,49 @@ REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
 REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
 TEMP_IMAGE = BASE_DIR / "temp_capture.png"
 
+
+def _reset_global_runtime_paths() -> None:
+    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
+    CONFIG_FILE = CONFIG_DIR / "camera_config.json"
+    REFERENCE_DIR = BASE_DIR / "reference"
+    LOG_DIR = BASE_DIR / "logs"
+    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+
+
+def _set_global_runtime_paths(project_info: Dict) -> None:
+    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
+    CONFIG_FILE = Path(project_info["config_file"])
+    REFERENCE_DIR = Path(project_info["reference_dir"])
+    LOG_DIR = Path(project_info["log_dir"])
+    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
+    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+
+
+def _resolve_project_registry_key(registry: Dict, project_name: str) -> Optional[str]:
+    normalized_name = str(project_name).strip()
+    if normalized_name in registry["projects"]:
+        return normalized_name
+    for existing_name in registry["projects"]:
+        if str(existing_name).strip() == normalized_name:
+            return existing_name
+    return None
+
+
+def _deep_merge_defaults(defaults, config):
+    if isinstance(defaults, dict) and isinstance(config, dict):
+        merged = {}
+        for key, value in defaults.items():
+            if key in config:
+                merged[key] = _deep_merge_defaults(value, config[key])
+            else:
+                merged[key] = value
+        for key, value in config.items():
+            if key not in merged:
+                merged[key] = value
+        return merged
+    return config
+
 DEFAULT_CONFIG = {
     "capture": {
         "timeout_ms": 200,
@@ -31,11 +74,15 @@ DEFAULT_CONFIG = {
     },
     "inspection": {
         "enabled": True,
+        "inspection_mode": "mask_only",
+        "reference_strategy": "golden_only",
+        "blend_mode": "hard_only",
+        "tolerance_mode": "balanced",
         "roi": {
-            "x": 460,
-            "y": 360,
-            "width": 680,
-            "height": 220,
+            "x": 0,
+            "y": 0,
+            "width": None,
+            "height": None,
         },
         "threshold_mode": "otsu",
         "threshold_value": 180,
@@ -44,13 +91,17 @@ DEFAULT_CONFIG = {
         "reference_dilate_iterations": 1,
         "sample_erode_iterations": 1,
         "sample_dilate_iterations": 1,
-        "min_white_pixels": 100,
+        "min_feature_pixels": 100,
         "save_debug_images": True,
         "allowed_dilate_iterations": 2,
         "required_erode_iterations": 1,
         "max_outside_allowed_ratio": 0.02,
         "min_required_coverage": 0.92,
         "min_section_coverage": 0.85,
+        "max_mean_edge_distance_px": None,
+        "max_section_edge_distance_px": None,
+        "max_section_width_delta_ratio": None,
+        "max_section_center_offset_px": None,
         "section_columns": 12,
     },
     "alignment": {
@@ -60,6 +111,42 @@ DEFAULT_CONFIG = {
         "max_angle_deg": 1.0,
         "max_shift_x": 4,
         "max_shift_y": 3,
+        "registration": {
+            "strategy": "moments",
+            "transform_model": "rigid",
+            "anchor_mode": "none",
+            "subpixel_refinement": "off",
+            "search_margin_px": 24,
+            "anchors": [],
+            "quality_gates": {
+                "min_confidence": None,
+                "max_mean_residual_px": None,
+            },
+            "datum_frame": {
+                "origin": "roi_top_left",
+                "orientation": "part_axis",
+            },
+            "commissioning": {
+                "datum_confirmed": False,
+                "expected_transform_confirmed": False,
+            },
+        },
+    },
+    "training": {
+        "early_review_parts": 25,
+        "early_review_interval": 5,
+        "steady_review_interval": 10,
+        "golden_only_min_good_samples": 10,
+        "hybrid_min_good_samples": 8,
+        "hybrid_min_active_variants": 3,
+        "multi_good_experimental_min_good_samples": 6,
+        "multi_good_experimental_min_active_variants": 6,
+    },
+    "dataset_capture": {
+        "part_id": None,
+        "camera_setup_id": None,
+        "default_split": "tuning",
+        "auto_replay_after_capture": True,
     },
     "indicator_led": {
         "enabled": False,
@@ -94,7 +181,7 @@ def load_config() -> dict:
             project_config_file = Path(project_info["config_file"])
             if project_config_file.exists():
                 with project_config_file.open("r", encoding="utf-8") as f:
-                    return json.load(f)
+                    return _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
 
     # Fall back to global config
     if not CONFIG_FILE.exists():
@@ -102,7 +189,7 @@ def load_config() -> dict:
         print(f"Created default config: {CONFIG_FILE}")
 
     with CONFIG_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        return _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
 
 
 def import_cv2_and_numpy():
@@ -195,15 +282,8 @@ def switch_project(project_name: str) -> bool:
     registry["current_project"] = project_name
     save_project_registry(registry)
 
-    # Update global paths to point to current project
-    global CONFIG_FILE, REFERENCE_DIR, LOG_DIR, REFERENCE_MASK, REFERENCE_IMAGE
     project_info = registry["projects"][project_name]
-
-    CONFIG_FILE = Path(project_info["config_file"])
-    REFERENCE_DIR = Path(project_info["reference_dir"])
-    LOG_DIR = Path(project_info["log_dir"])
-    REFERENCE_MASK = REFERENCE_DIR / "golden_reference_mask.png"
-    REFERENCE_IMAGE = REFERENCE_DIR / "golden_reference_image.png"
+    _set_global_runtime_paths(project_info)
 
     print(f"Switched to project '{project_name}'")
     return True
@@ -257,26 +337,126 @@ def list_projects() -> List[Dict]:
 def delete_project(project_name: str) -> bool:
     """Delete a project and all its files."""
     registry = get_project_registry()
+    resolved_project_name = _resolve_project_registry_key(registry, project_name)
 
-    if project_name not in registry["projects"]:
-        print(f"Project '{project_name}' does not exist.")
+    if resolved_project_name is None:
+        print(f"Project '{str(project_name).strip()}' does not exist.")
         return False
 
-    if registry.get("current_project") == project_name:
-        print("Cannot delete the currently active project. Switch to another project first.")
-        return False
+    deleting_current = registry.get("current_project") == resolved_project_name
 
     # Remove project directory
-    project_dir = PROJECTS_DIR / project_name
+    project_info = registry["projects"][resolved_project_name]
+    project_dir = Path(project_info.get("config_file", PROJECTS_DIR / resolved_project_name)).parent.parent
     if project_dir.exists():
         import shutil
-        shutil.rmtree(project_dir)
+        try:
+            shutil.rmtree(project_dir)
+        except Exception as exc:
+            print(f"Failed to delete project '{resolved_project_name}': {exc}")
+            return False
 
     # Remove from registry
-    del registry["projects"][project_name]
+    del registry["projects"][resolved_project_name]
+
+    if deleting_current:
+        remaining_projects = sorted(registry["projects"])
+        if remaining_projects:
+            replacement_project = remaining_projects[0]
+            registry["current_project"] = replacement_project
+            _set_global_runtime_paths(registry["projects"][replacement_project])
+        else:
+            registry["current_project"] = None
+            _reset_global_runtime_paths()
+
     save_project_registry(registry)
 
-    print(f"Deleted project '{project_name}'")
+    print(f"Deleted project '{resolved_project_name}'")
+    return True
+
+
+def clone_project(source_project: str, new_project: str, description: Optional[str] = None) -> bool:
+    """Clone an existing project into a new project name."""
+    registry = get_project_registry()
+
+    if source_project not in registry["projects"]:
+        print(f"Project '{source_project}' does not exist.")
+        return False
+
+    if new_project in registry["projects"]:
+        print(f"Project '{new_project}' already exists.")
+        return False
+
+    source_dir = PROJECTS_DIR / source_project
+    if not source_dir.exists():
+        print(f"Source project directory does not exist: {source_dir}")
+        return False
+
+    target_dir = PROJECTS_DIR / new_project
+
+    try:
+        import shutil
+
+        shutil.copytree(source_dir, target_dir)
+    except Exception as exc:
+        print(f"Failed to clone project '{source_project}': {exc}")
+        return False
+
+    source_info = registry["projects"][source_project]
+    registry["projects"][new_project] = {
+        "description": source_info.get("description", "") if description is None else description,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "config_file": str(target_dir / "config" / "camera_config.json"),
+        "reference_dir": str(target_dir / "reference"),
+        "log_dir": str(target_dir / "logs"),
+    }
+    save_project_registry(registry)
+    print(f"Cloned project '{source_project}' to '{new_project}'")
+    return True
+
+
+def rename_project(old_name: str, new_name: str) -> bool:
+    """Rename an existing project and keep its data and active selection."""
+    registry = get_project_registry()
+
+    if old_name not in registry["projects"]:
+        print(f"Project '{old_name}' does not exist.")
+        return False
+
+    if new_name in registry["projects"]:
+        print(f"Project '{new_name}' already exists.")
+        return False
+
+    old_dir = PROJECTS_DIR / old_name
+    new_dir = PROJECTS_DIR / new_name
+
+    if not old_dir.exists():
+        print(f"Project directory does not exist: {old_dir}")
+        return False
+
+    try:
+        import shutil
+
+        shutil.move(str(old_dir), str(new_dir))
+    except Exception as exc:
+        print(f"Failed to rename project '{old_name}': {exc}")
+        return False
+
+    old_info = registry["projects"].pop(old_name)
+    registry["projects"][new_name] = {
+        "description": old_info.get("description", ""),
+        "created": old_info.get("created", time.strftime("%Y-%m-%d %H:%M:%S")),
+        "config_file": str(new_dir / "config" / "camera_config.json"),
+        "reference_dir": str(new_dir / "reference"),
+        "log_dir": str(new_dir / "logs"),
+    }
+
+    if registry.get("current_project") == old_name:
+        registry["current_project"] = new_name
+        _set_global_runtime_paths(registry["projects"][new_name])
+
+    save_project_registry(registry)
+    print(f"Renamed project '{old_name}' to '{new_name}'")
     return True
 
 

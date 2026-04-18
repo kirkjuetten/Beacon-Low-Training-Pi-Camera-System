@@ -5,13 +5,13 @@ Project Manager GUI for Beacon Inspection System
 Provides a graphical interface for managing multiple inspection projects.
 """
 
+import subprocess
 import sys
 import json
 from pathlib import Path
 from typing import List, Dict, Optional
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import threading
 
 try:
     import pygame
@@ -21,8 +21,12 @@ except ImportError:
 
 from inspection_system.app.camera_interface import (
     create_project, switch_project, get_current_project, list_projects,
-    delete_project, export_project, import_project, PROJECTS_DIR
+    delete_project, export_project, import_project, clone_project, rename_project, PROJECTS_DIR
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CAPTURE_SCRIPT = REPO_ROOT / "inspection_system" / "app" / "capture_test.py"
 
 
 class ProjectManagerGUI:
@@ -31,7 +35,7 @@ class ProjectManagerGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Beacon Inspection - Project Manager")
-        self.root.geometry("800x600")
+        self._configure_window_size()
 
         # Create main frame
         main_frame = ttk.Frame(self.root, padding="10")
@@ -87,8 +91,12 @@ class ProjectManagerGUI:
                   command=self.create_project_dialog).grid(row=0, column=0, padx=(0, 5))
         ttk.Button(left_buttons, text="Switch To",
                   command=self.switch_to_project).grid(row=0, column=1, padx=(0, 5))
+        ttk.Button(left_buttons, text="Clone",
+              command=self.clone_project_dialog).grid(row=0, column=2, padx=(0, 5))
+        ttk.Button(left_buttons, text="Rename",
+              command=self.rename_project_dialog).grid(row=0, column=3, padx=(0, 5))
         ttk.Button(left_buttons, text="Delete",
-                  command=self.delete_project).grid(row=0, column=2)
+              command=self.delete_project).grid(row=0, column=4)
 
         # Right buttons
         right_buttons = ttk.Frame(buttons_frame)
@@ -99,7 +107,11 @@ class ProjectManagerGUI:
         ttk.Button(right_buttons, text="Import",
                   command=self.import_project).grid(row=0, column=1, padx=(0, 5))
         ttk.Button(right_buttons, text="Refresh",
-                  command=self.refresh_projects).grid(row=0, column=2)
+                  command=self.refresh_projects).grid(row=0, column=2, padx=(0, 5))
+        ttk.Button(right_buttons, text="Back to Dashboard",
+                  command=self._launch_dashboard).grid(row=0, column=3, padx=(10, 0))
+        ttk.Button(right_buttons, text="Exit",
+                  command=self.root.destroy).grid(row=0, column=4, padx=(10, 0))
 
         # Status bar
         self.status_var = tk.StringVar()
@@ -113,6 +125,15 @@ class ProjectManagerGUI:
 
         # Load initial data
         self.refresh_projects()
+
+    def _configure_window_size(self) -> None:
+        self.root.attributes("-fullscreen", True)
+
+    def _launch_dashboard(self):
+        """Close project manager and open the operator dashboard."""
+        self.root.destroy()
+        from inspection_system.app.operator_dashboard import main as dashboard_main
+        dashboard_main()
 
     def refresh_projects(self):
         """Refresh the projects list."""
@@ -217,7 +238,7 @@ class ProjectManagerGUI:
             return
 
         item = self.tree.item(selection[0])
-        project_name = item['values'][0]
+        project_name = str(item['values'][0]).strip()
 
         if messagebox.askyesno("Confirm Delete",
                               f"Are you sure you want to delete project '{project_name}'?\n\n"
@@ -227,6 +248,109 @@ class ProjectManagerGUI:
                 messagebox.showinfo("Success", f"Project '{project_name}' deleted")
             else:
                 messagebox.showerror("Error", f"Failed to delete project '{project_name}'")
+
+    def clone_project_dialog(self):
+        """Clone the selected project under a new name."""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a project first")
+            return
+
+        item = self.tree.item(selection[0])
+        source_name = str(item["values"][0]).strip()
+        source_description = str(item["values"][1]).strip()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Clone Project")
+        dialog.geometry("460x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=f"Source Project: {source_name}").grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 8), sticky=tk.W)
+
+        ttk.Label(dialog, text="New Project Name:").grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+        name_var = tk.StringVar(value=f"{source_name}_copy")
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=34)
+        name_entry.grid(row=1, column=1, padx=10, pady=5, sticky=(tk.W, tk.E))
+
+        ttk.Label(dialog, text="Description:").grid(row=2, column=0, padx=10, pady=5, sticky=tk.W)
+        desc_var = tk.StringVar(value=source_description)
+        desc_entry = ttk.Entry(dialog, textvariable=desc_var, width=34)
+        desc_entry.grid(row=2, column=1, padx=10, pady=5, sticky=(tk.W, tk.E))
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=3, column=0, columnspan=2, pady=14)
+
+        def do_clone() -> None:
+            new_name = name_var.get().strip()
+            description = desc_var.get().strip()
+            if not new_name:
+                messagebox.showerror("Error", "New project name is required")
+                return
+            if new_name == source_name:
+                messagebox.showerror("Error", "New project name must be different from source")
+                return
+            if clone_project(source_name, new_name, description):
+                self.refresh_projects()
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Project '{source_name}' cloned to '{new_name}'")
+            else:
+                messagebox.showerror("Error", f"Failed to clone project '{source_name}'")
+
+        ttk.Button(button_frame, text="Clone", command=do_clone).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(row=0, column=1, padx=5)
+
+        name_entry.focus()
+        dialog.bind('<Return>', lambda _e: do_clone())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
+
+    def rename_project_dialog(self):
+        """Rename the selected project."""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a project first")
+            return
+
+        item = self.tree.item(selection[0])
+        old_name = str(item["values"][0]).strip()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Rename Project")
+        dialog.geometry("420x160")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=f"Current Name: {old_name}").grid(row=0, column=0, columnspan=2, padx=10, pady=(12, 8), sticky=tk.W)
+
+        ttk.Label(dialog, text="New Name:").grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+        name_var = tk.StringVar(value=old_name)
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=32)
+        name_entry.grid(row=1, column=1, padx=10, pady=5, sticky=(tk.W, tk.E))
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=2, column=0, columnspan=2, pady=14)
+
+        def do_rename() -> None:
+            new_name = name_var.get().strip()
+            if not new_name:
+                messagebox.showerror("Error", "New project name is required")
+                return
+            if new_name == old_name:
+                messagebox.showerror("Error", "New project name must be different")
+                return
+            if rename_project(old_name, new_name):
+                self.refresh_projects()
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Project renamed to '{new_name}'")
+            else:
+                messagebox.showerror("Error", f"Failed to rename project '{old_name}'")
+
+        ttk.Button(button_frame, text="Rename", command=do_rename).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(row=0, column=1, padx=5)
+
+        name_entry.focus()
+        dialog.bind('<Return>', lambda _e: do_rename())
+        dialog.bind('<Escape>', lambda _e: dialog.destroy())
 
     def export_project(self):
         """Export the selected project."""
@@ -318,18 +442,10 @@ def launch_training_gui():
     if not PYGAME_AVAILABLE:
         messagebox.showerror("Error", "Pygame is required for training GUI.\nInstall with: pip install pygame")
         return
-
-    def run_training():
-        try:
-            from inspection_system.app.capture_test import main as training_main
-            # Run training with 'train' argument
-            sys.argv = ['capture_test.py', 'train']
-            training_main()
-        except Exception as e:
-            print(f"Training GUI error: {e}")
-
-    # Run in separate thread to avoid blocking GUI
-    threading.Thread(target=run_training, daemon=True).start()
+    try:
+        subprocess.Popen([sys.executable, str(CAPTURE_SCRIPT), "train"], cwd=str(REPO_ROOT))
+    except OSError as exc:
+        messagebox.showerror("Error", f"Failed to launch training GUI: {exc}")
 
 
 def main():
@@ -346,12 +462,14 @@ def main():
     menubar.add_cascade(label="File", menu=file_menu)
     file_menu.add_command(label="Refresh", command=app.refresh_projects)
     file_menu.add_separator()
-    file_menu.add_command(label="Exit", command=root.quit)
+    file_menu.add_command(label="Exit", command=root.destroy)
 
     # Tools menu
     tools_menu = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label="Tools", menu=tools_menu)
     tools_menu.add_command(label="Launch Training GUI", command=launch_training_gui)
+    tools_menu.add_separator()
+    tools_menu.add_command(label="Launch Dashboard", command=app._launch_dashboard)
 
     # Help menu
     help_menu = tk.Menu(menubar, tearoff=0)

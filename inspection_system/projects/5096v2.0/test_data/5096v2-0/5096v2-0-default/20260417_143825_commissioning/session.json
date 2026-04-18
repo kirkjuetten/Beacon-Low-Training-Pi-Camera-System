@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "session_id": "20260417_143825_commissioning",
+  "project_id": "5096v2.0",
+  "part_id": "5096v2.0",
+  "camera_setup_id": "5096v2.0_default",
+  "dataset_split": "tuning",
+  "session_label": "commissioning",
+  "created_at": "2026-04-17T14:38:25",
+  "inspection_mode": "mask_only",
+  "reference_strategy": "hybrid",
+  "config_file": "/home/pi/inspection_system/projects/5096v2.0/config/camera_config.json",
+  "reference_dir": "/home/pi/inspection_system/projects/5096v2.0/reference",
+  "config_fingerprint": "a15f6ab86bda",
+  "roi_snapshot": {
+    "x": 88,
+    "y": 149,
+    "width": 1323,
+    "height": 818
+  },
+  "capture_settings": {
+    "timeout_ms": 200,
+    "awb": null,
+    "awb_gains": [
+      1.8,
+      1.8
+    ],
+    "shutter_us": 40000,
+    "gain": 0.5,
+    "width": null,
+    "height": null,
+    "rotation": 0,
+    "hflip": false,
+    "vflip": false
+  },
+  "hostname": "pi-inspect",
+  "auto_replay_after_capture": true
+}

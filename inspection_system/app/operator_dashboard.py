@@ -3,21 +3,10 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
-import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-
-try:
-    from PIL import Image, ImageTk
-    PIL_AVAILABLE = True
-except ImportError:
-    Image = None
-    ImageTk = None
-    PIL_AVAILABLE = False
 
 from inspection_system.app.camera_interface import (
     create_project,
@@ -27,99 +16,52 @@ from inspection_system.app.camera_interface import (
     get_current_project,
     import_project,
     list_projects,
+    load_config,
     switch_project,
 )
+from inspection_system.app.command_runner import launch_monitored_command, stream_command
+from inspection_system.app.config_service import read_json_file
+from inspection_system.app.dataset_capture import TestDataCollectorDialog
 from inspection_system.app.log_viewer import analyze_logs, load_training_logs
+from inspection_system.app.preview_service import describe_preview_image, find_preview_image
+from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_center_gate_status, describe_section_width_gate_status
+from inspection_system.app.runtime_controller import format_commissioning_status_lines, get_commissioning_status
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_SCRIPT = REPO_ROOT / "inspection_system" / "app" / "capture_test.py"
-PREVIEW_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-CONFIG_FIELD_SPECS = [
-    ("capture.timeout_ms", "Capture Timeout (ms)", int),
-    ("capture.shutter_us", "Shutter (us)", int),
-    ("inspection.threshold_value", "Threshold Value", int),
-    ("inspection.min_white_pixels", "Min White Pixels", int),
-    ("inspection.min_required_coverage", "Min Required Coverage", float),
-    ("inspection.max_outside_allowed_ratio", "Max Outside Allowed", float),
-    ("inspection.min_section_coverage", "Min Section Coverage", float),
-    ("inspection.save_debug_images", "Save Debug Images", bool),
-    ("alignment.enabled", "Alignment Enabled", bool),
-    ("indicator_led.enabled", "Indicator LED Enabled", bool),
-]
+
+COMPACT_LAYOUT_MAX_WIDTH = 1100
+COMPACT_LAYOUT_MAX_HEIGHT = 700
 
 
-def read_json_file(file_path: Path) -> dict:
-    if not file_path.exists():
-        return {}
-    return json.loads(file_path.read_text(encoding="utf-8"))
+def build_dashboard_hint_text(config: dict, active_paths: Path | dict | None = None) -> str:
+    edge_status_line, edge_hint = describe_edge_gate_status(config)
+    width_status_line, width_hint = describe_section_width_gate_status(config)
+    center_status_line, center_hint = describe_section_center_gate_status(config)
+    commissioning_lines = []
+    if isinstance(active_paths, dict):
+        commissioning_lines = format_commissioning_status_lines(get_commissioning_status(config, active_paths))
+    lines = commissioning_lines + [edge_status_line, width_status_line, center_status_line]
+    if edge_hint:
+        lines.append(edge_hint)
+    if width_hint:
+        lines.append(width_hint)
+    if center_hint:
+        lines.append(center_hint)
+    if not edge_hint and not width_hint and not center_hint:
+        lines.append("All geometry gates active.")
+    return "\n".join(lines)
 
 
-def write_json_file(file_path: Path, data: dict) -> None:
-    file_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+def should_use_compact_layout(screen_width: int, screen_height: int) -> bool:
+    """Return True when the screen is too small for the full dashboard layout."""
+    return screen_width < COMPACT_LAYOUT_MAX_WIDTH or screen_height < COMPACT_LAYOUT_MAX_HEIGHT
 
 
-def get_nested_config_value(config: dict, dotted_path: str):
-    current = config
-    for part in dotted_path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    return current
-
-
-def set_nested_config_value(config: dict, dotted_path: str, value) -> None:
-    parts = dotted_path.split(".")
-    current = config
-    for part in parts[:-1]:
-        current = current.setdefault(part, {})
-    current[parts[-1]] = value
-
-
-def parse_config_value(raw_value: str, expected_type: type):
-    text = raw_value.strip()
-    if expected_type is bool:
-        normalized = text.lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off"}:
-            return False
-        raise ValueError(f"Invalid boolean value: {raw_value}")
-    if expected_type is int:
-        return int(text)
-    if expected_type is float:
-        return float(text)
-    return text
-
-
-def apply_config_updates(config: dict, raw_updates: dict[str, str]) -> dict:
-    updated = json.loads(json.dumps(config))
-    for dotted_path, _, expected_type in CONFIG_FIELD_SPECS:
-        if dotted_path not in raw_updates:
-            continue
-        set_nested_config_value(updated, dotted_path, parse_config_value(raw_updates[dotted_path], expected_type))
-    return updated
-
-
-def build_config_editor_values(config: dict) -> dict[str, str]:
-    values = {}
-    for dotted_path, _, _ in CONFIG_FIELD_SPECS:
-        value = get_nested_config_value(config, dotted_path)
-        values[dotted_path] = "" if value is None else str(value)
-    return values
-
-
-def find_preview_image(reference_dir: Path) -> Path | None:
-    if not reference_dir.exists():
-        return None
-
-    candidates = [
-        path for path in reference_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in PREVIEW_EXTENSIONS
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+def should_close_dashboard_on_launch(mode: str) -> bool:
+    """Return whether dashboard should close after launching a tool."""
+    return mode in {"project-manager"}
 
 
 class OperatorDashboard:
@@ -128,22 +70,21 @@ class OperatorDashboard:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Beacon Inspection Dashboard")
-        self.root.geometry("1360x860")
-        self.root.minsize(1180, 760)
+        self.compact_layout = should_use_compact_layout(self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        self._configure_window_size()
 
         self.operation_running = False
-        self.preview_photo = None
-        self.config_vars: dict[str, tk.StringVar] = {}
+        self.test_data_dialog = None
 
         self.status_var = tk.StringVar(value="Ready")
         self.current_project_var = tk.StringVar(value="Current project: None")
         self.active_config_var = tk.StringVar(value="Config: -")
         self.active_reference_var = tk.StringVar(value="Reference: -")
         self.active_log_var = tk.StringVar(value="Logs: -")
+        self.edge_gate_hint_var = tk.StringVar(value="Edge Gates: -")
         self.project_select_var = tk.StringVar()
         self.new_project_name_var = tk.StringVar()
         self.new_project_desc_var = tk.StringVar()
-        self.preview_path_var = tk.StringVar(value="Preview: none")
 
         self.summary_vars = {
             "total_samples": tk.StringVar(value="0"),
@@ -157,25 +98,42 @@ class OperatorDashboard:
         self._build_layout()
         self.refresh_dashboard()
 
+    def _configure_window_size(self) -> None:
+        self.root.attributes("-fullscreen", True)
+
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        main = ttk.Frame(self.root, padding=14)
+        main_padding = 10 if self.compact_layout else 14
+        main = ttk.Frame(self.root, padding=main_padding)
         main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=3)
-        main.columnconfigure(2, weight=2)
-        main.rowconfigure(1, weight=1)
-        main.rowconfigure(2, weight=2)
+        main.columnconfigure(0, weight=1)
+        if not self.compact_layout:
+            main.columnconfigure(1, weight=4, uniform="top_panels")
+            main.columnconfigure(0, weight=5, uniform="top_panels")
+            main.rowconfigure(1, weight=1)
+            main.rowconfigure(2, weight=2)
+        else:
+            main.rowconfigure(2, weight=1)
 
         header = ttk.Frame(main)
-        header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         header.columnconfigure(0, weight=1)
 
-        ttk.Label(header, text="Beacon Operator Dashboard", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        header_font = ("Segoe UI", 15 if self.compact_layout else 18, "bold")
+        ttk.Label(header, text="Beacon Operator Dashboard", font=header_font).grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
 
+        if self.compact_layout:
+            self._build_compact_layout(main)
+        else:
+            self._build_standard_layout(main)
+
+        status_bar = ttk.Label(self.root, textvariable=self.current_project_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.grid(row=1, column=0, sticky="ew")
+
+    def _build_standard_layout(self, main: ttk.Frame) -> None:
         ops_frame = ttk.LabelFrame(main, text="Operations", padding=12)
         ops_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
         ops_frame.columnconfigure(0, weight=1)
@@ -186,94 +144,96 @@ class OperatorDashboard:
         project_frame.columnconfigure(0, weight=1)
         project_frame.columnconfigure(1, weight=1)
 
-        preview_frame = ttk.LabelFrame(main, text="Latest Preview", padding=12)
-        preview_frame.grid(row=1, column=2, sticky="nsew", pady=(0, 10))
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(1, weight=1)
-
         output_frame = ttk.LabelFrame(main, text="Operator Console", padding=8)
-        output_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=(0, 10))
+        output_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 10))
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
 
         insights_frame = ttk.LabelFrame(main, text="Training Insights", padding=12)
-        insights_frame.grid(row=2, column=2, sticky="nsew")
+        insights_frame.grid(row=2, column=1, sticky="nsew")
         insights_frame.columnconfigure(0, weight=1)
         insights_frame.rowconfigure(2, weight=1)
 
         self._build_operations_panel(ops_frame)
         self._build_project_panel(project_frame)
-        self._build_preview_panel(preview_frame)
         self._build_console(output_frame)
         self._build_insights_panel(insights_frame)
 
-        status_bar = ttk.Label(self.root, textvariable=self.current_project_var, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.grid(row=1, column=0, sticky="ew")
+    def _build_compact_layout(self, main: ttk.Frame) -> None:
+        ops_frame = ttk.LabelFrame(main, text="Operations", padding=10)
+        ops_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        ops_frame.columnconfigure(0, weight=1)
+        ops_frame.columnconfigure(1, weight=1)
+        self._build_operations_panel(ops_frame)
+
+        notebook = ttk.Notebook(main)
+        notebook.grid(row=2, column=0, sticky="nsew")
+
+        project_frame = ttk.Frame(notebook, padding=8)
+        project_frame.columnconfigure(0, weight=1)
+        project_frame.columnconfigure(1, weight=1)
+        self._build_project_panel(project_frame)
+
+        output_frame = ttk.Frame(notebook, padding=8)
+        output_frame.columnconfigure(0, weight=1)
+        output_frame.rowconfigure(0, weight=1)
+        self._build_console(output_frame)
+
+        insights_frame = ttk.Frame(notebook, padding=8)
+        insights_frame.columnconfigure(0, weight=1)
+        insights_frame.rowconfigure(2, weight=1)
+        self._build_insights_panel(insights_frame)
+
+        notebook.add(project_frame, text="Projects")
+        notebook.add(output_frame, text="Console")
+        notebook.add(insights_frame, text="Insights")
 
     def _build_operations_panel(self, parent: ttk.LabelFrame) -> None:
         info = ttk.Frame(parent)
-        info.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        info.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8 if self.compact_layout else 12))
         info.columnconfigure(0, weight=1)
 
-        ttk.Label(info, textvariable=self.active_config_var).grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_reference_var).grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Label(info, textvariable=self.active_log_var).grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(info, textvariable=self.active_config_var).grid(row=0, column=0, sticky="w", pady=1)
+        ttk.Label(info, textvariable=self.active_reference_var).grid(row=1, column=0, sticky="w", pady=1)
+        ttk.Label(info, textvariable=self.active_log_var).grid(row=2, column=0, sticky="w", pady=1)
+        ttk.Label(info, textvariable=self.edge_gate_hint_var, wraplength=620 if self.compact_layout else 420, justify="left").grid(row=3, column=0, sticky="w", pady=(4, 1))
 
         self.capture_button = ttk.Button(parent, text="Capture Only", command=lambda: self.run_command("capture"))
-        self.capture_button.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.reference_button = ttk.Button(parent, text="Set Reference", command=lambda: self.run_command("set-reference"))
-        self.reference_button.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
-        self.inspect_button = ttk.Button(parent, text="Inspect Part", command=lambda: self.run_command("inspect"))
-        self.inspect_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.capture_button.grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.exit_button = ttk.Button(parent, text="Exit Dashboard", command=self.exit_dashboard)
+        self.exit_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.production_button = ttk.Button(parent, text="Launch Production", command=self.launch_production)
+        self.production_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.training_button = ttk.Button(parent, text="Launch Training", command=self.launch_training)
-        self.training_button.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.training_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.config_editor_button = ttk.Button(parent, text="Open Config + Preview", command=self.launch_config_editor)
+        self.config_editor_button.grid(row=4, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.test_data_button = ttk.Button(parent, text="Collect Test Images", command=self.launch_test_data_collector)
+        self.test_data_button.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=6)
         self.project_manager_button = ttk.Button(parent, text="Open Project Manager", command=self.launch_project_manager)
-        self.project_manager_button.grid(row=3, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.project_manager_button.grid(row=5, column=0, sticky="ew", padx=(0, 6), pady=6)
         self.refresh_button = ttk.Button(parent, text="Refresh Dashboard", command=self.refresh_dashboard)
-        self.refresh_button.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=6)
-
-        config_frame = ttk.LabelFrame(parent, text="Config Editor", padding=8)
-        config_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
-        config_frame.columnconfigure(1, weight=1)
-
-        for row, (dotted_path, label, _) in enumerate(CONFIG_FIELD_SPECS):
-            ttk.Label(config_frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
-            var = tk.StringVar()
-            self.config_vars[dotted_path] = var
-            ttk.Entry(config_frame, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
-
-        buttons = ttk.Frame(config_frame)
-        buttons.grid(row=len(CONFIG_FIELD_SPECS), column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        buttons.columnconfigure(0, weight=1)
-        buttons.columnconfigure(1, weight=1)
-        ttk.Button(buttons, text="Reload Config", command=self.reload_config_editor).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(buttons, text="Save Config", command=self.save_config_editor).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.refresh_button.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=6)
 
     def _build_project_panel(self, parent: ttk.LabelFrame) -> None:
-        ttk.Label(parent, text="Active project").grid(row=0, column=0, columnspan=2, sticky="w")
+        parent.columnconfigure(0, weight=1)
+
+        ttk.Label(parent, text="Active project").grid(row=0, column=0, sticky="w")
         self.project_combo = ttk.Combobox(parent, textvariable=self.project_select_var, state="readonly")
-        self.project_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+        self.project_combo.grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
-        ttk.Button(parent, text="Switch", command=self.switch_selected_project).grid(row=2, column=0, sticky="ew", padx=(0, 4), pady=4)
-        ttk.Button(parent, text="Delete", command=self.delete_selected_project).grid(row=2, column=1, sticky="ew", padx=(4, 0), pady=4)
-        ttk.Button(parent, text="Export", command=self.export_selected_project).grid(row=3, column=0, sticky="ew", padx=(0, 4), pady=4)
-        ttk.Button(parent, text="Import", command=self.import_project_from_zip).grid(row=3, column=1, sticky="ew", padx=(4, 0), pady=4)
-
-        ttk.Separator(parent, orient="horizontal").grid(row=4, column=0, columnspan=2, sticky="ew", pady=12)
-
-        ttk.Label(parent, text="Create project").grid(row=5, column=0, columnspan=2, sticky="w")
-        ttk.Entry(parent, textvariable=self.new_project_name_var).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 8))
-        ttk.Entry(parent, textvariable=self.new_project_desc_var).grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        ttk.Button(parent, text="Create Project", command=self.create_project_from_form).grid(row=8, column=0, columnspan=2, sticky="ew")
-
-    def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
-        ttk.Label(parent, textvariable=self.preview_path_var, wraplength=280).grid(row=0, column=0, sticky="w")
-        self.preview_label = ttk.Label(parent, text="No preview image available", anchor="center")
-        self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        ttk.Button(parent, text="Refresh Preview", command=self.refresh_dashboard).grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(parent, text="Switch to Selected Project", command=self.switch_selected_project).grid(row=2, column=0, sticky="ew", pady=3)
+        ttk.Separator(parent, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=12)
+        ttk.Label(
+            parent,
+            text="Project creation, rename, delete, export, and import live in Project Manager.",
+            wraplength=520 if self.compact_layout else 320,
+            justify="left",
+        ).grid(row=4, column=0, sticky="w")
 
     def _build_console(self, parent: ttk.LabelFrame) -> None:
-        self.console = tk.Text(parent, wrap="word", height=18, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
+        console_height = 12 if self.compact_layout else 18
+        self.console = tk.Text(parent, wrap="word", height=console_height, bg="#111827", fg="#E5E7EB", insertbackground="#E5E7EB")
         self.console.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.console.yview)
@@ -304,7 +264,7 @@ class OperatorDashboard:
             ttk.Label(metrics, textvariable=self.summary_vars[key]).grid(row=row, column=column + 1, sticky="w", pady=2)
 
         ttk.Label(parent, text="Recent log activity").grid(row=1, column=0, sticky="w", pady=(12, 6))
-        self.recent_logs = tk.Listbox(parent, height=12)
+        self.recent_logs = tk.Listbox(parent, height=8 if self.compact_layout else 12)
         self.recent_logs.grid(row=2, column=0, sticky="nsew")
 
         buttons = ttk.Frame(parent)
@@ -329,8 +289,23 @@ class OperatorDashboard:
         self.operation_running = busy
         self.status_var.set(status)
         state = "disabled" if busy else "normal"
-        for button in [self.capture_button, self.reference_button, self.inspect_button, self.training_button, self.project_manager_button, self.refresh_button]:
+        for button in [
+            self.capture_button,
+            self.production_button,
+            self.training_button,
+            self.test_data_button,
+            self.project_manager_button,
+            self.config_editor_button,
+            self.refresh_button,
+            self.exit_button,
+        ]:
             button.configure(state=state)
+
+    def exit_dashboard(self) -> None:
+        if self.operation_running:
+            messagebox.showinfo("Busy", "Wait for current operation to finish before exiting.")
+            return
+        self.root.destroy()
 
     def run_command(self, mode: str) -> None:
         if self.operation_running:
@@ -339,44 +314,81 @@ class OperatorDashboard:
 
         self.append_console(f"\n> Running {mode}\n")
         self.set_busy(True, f"Running {mode}...")
-        thread = threading.Thread(target=self._run_command_thread, args=(mode,), daemon=True)
-        thread.start()
+        command = [sys.executable, str(CAPTURE_SCRIPT), mode]
 
-    def _run_command_thread(self, mode: str) -> None:
-        process = subprocess.Popen(
-            [sys.executable, str(CAPTURE_SCRIPT), mode],
-            cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-
-        assert process.stdout is not None
-        for line in process.stdout:
-            self.root.after(0, self.append_console, line)
-
-        return_code = process.wait()
-
-        def finish() -> None:
+        def finish(return_code: int) -> None:
             status = f"{mode} completed" if return_code == 0 else f"{mode} failed (exit {return_code})"
             self.set_busy(False, status)
             self.refresh_dashboard()
 
-        self.root.after(0, finish)
+        def handle_error(exc: OSError) -> None:
+            self.set_busy(False, f"{mode} failed to start")
+            messagebox.showerror("Run failed", f"Could not run {mode}: {exc}")
+
+        stream_command(
+            command,
+            cwd=REPO_ROOT,
+            on_output=lambda line: self.root.after(0, self.append_console, line),
+            on_complete=lambda return_code: self.root.after(0, finish, return_code),
+            on_error=lambda exc: self.root.after(0, handle_error, exc),
+        )
 
     def launch_training(self) -> None:
         self._launch_tool("train", "training GUI")
 
+    def launch_production(self) -> None:
+        self._launch_tool("production", "production mode")
+
     def launch_project_manager(self) -> None:
         self._launch_tool("project-manager", "project manager")
 
+    def launch_config_editor(self) -> None:
+        self._launch_tool("config-editor", "config + preview")
+
+    def launch_test_data_collector(self) -> None:
+        if self.operation_running:
+            messagebox.showinfo("Busy", "Wait for current operation to finish before opening test image collection.")
+            return
+        if self.test_data_dialog is not None and self.test_data_dialog.is_open():
+            self.test_data_dialog.focus()
+            return
+        self.test_data_dialog = TestDataCollectorDialog(
+            self.root,
+            config_loader=load_config,
+            active_paths_loader=get_active_runtime_paths,
+        )
+
     def _launch_tool(self, mode: str, label: str) -> None:
         try:
-            subprocess.Popen([sys.executable, str(CAPTURE_SCRIPT), mode], cwd=str(REPO_ROOT))
+            process = launch_monitored_command(
+                [sys.executable, str(CAPTURE_SCRIPT), mode],
+                cwd=REPO_ROOT,
+                on_output=lambda line: self.root.after(0, self.append_console, f"[{mode}] {line}"),
+                on_exit=lambda return_code: self.root.after(0, self._handle_launched_tool_exit, mode, label, return_code),
+            )
             self.append_console(f"\n> Launched {label}.\n")
             self.status_var.set(f"Launched {label}")
+
+            if should_close_dashboard_on_launch(mode):
+                if mode == "project-manager":
+                    self.append_console("> Closing dashboard; use Project Manager -> Back to Dashboard when ready.\n")
+                else:
+                    self.append_console("> Closing dashboard; use Config + Preview -> Back to Dashboard when ready.\n")
+                # Only close after we have confirmed child process is still running.
+                def maybe_close() -> None:
+                    if process.poll() is None:
+                        self.root.destroy()
+                    else:
+                        self.append_console(f"> {label} failed to stay open; dashboard remains available.\n")
+
+                self.root.after(500, maybe_close)
         except OSError as exc:
             messagebox.showerror("Launch failed", f"Could not launch {label}: {exc}")
+
+    def _handle_launched_tool_exit(self, mode: str, label: str, return_code: int) -> None:
+        if return_code != 0:
+            self.append_console(f"> {label} exited with code {return_code}\n")
+            self.status_var.set(f"{label} failed (exit {return_code})")
 
     def switch_selected_project(self) -> None:
         project_name = self.project_select_var.get().strip()
@@ -484,41 +496,6 @@ class OperatorDashboard:
         else:
             messagebox.showerror("Create failed", f"Could not create project '{project_name}'.")
 
-    def reload_config_editor(self) -> None:
-        config = read_json_file(get_active_runtime_paths()["config_file"])
-        for dotted_path, value in build_config_editor_values(config).items():
-            self.config_vars[dotted_path].set(value)
-
-    def save_config_editor(self) -> None:
-        active_paths = get_active_runtime_paths()
-        config_path = active_paths["config_file"]
-        try:
-            config = read_json_file(config_path)
-            updated = apply_config_updates(config, {key: var.get() for key, var in self.config_vars.items()})
-            write_json_file(config_path, updated)
-            self.append_console(f"\n> Saved config updates to {config_path}\n")
-            self.refresh_dashboard()
-        except ValueError as exc:
-            messagebox.showerror("Invalid config value", str(exc))
-
-    def refresh_preview(self, active_paths: dict[str, Path]) -> None:
-        preview_path = find_preview_image(active_paths["reference_dir"])
-        if preview_path is None:
-            self.preview_path_var.set("Preview: none")
-            self.preview_label.configure(text="No preview image available", image="")
-            self.preview_photo = None
-            return
-
-        self.preview_path_var.set(f"Preview: {preview_path.name}")
-        if PIL_AVAILABLE:
-            image = Image.open(preview_path)
-            image.thumbnail((320, 240))
-            self.preview_photo = ImageTk.PhotoImage(image)
-            self.preview_label.configure(image=self.preview_photo, text="")
-        else:
-            self.preview_label.configure(text=str(preview_path), image="")
-            self.preview_photo = None
-
     def refresh_dashboard(self) -> None:
         current_project = get_current_project() or "None"
         self.current_project_var.set(f"Current project: {current_project}")
@@ -527,6 +504,8 @@ class OperatorDashboard:
         self.active_config_var.set(f"Config: {active_paths['config_file']}")
         self.active_reference_var.set(f"Reference: {active_paths['reference_dir']}")
         self.active_log_var.set(f"Logs: {active_paths['log_dir']}")
+        active_config = read_json_file(active_paths["config_file"])
+        self.edge_gate_hint_var.set(build_dashboard_hint_text(active_config, active_paths))
 
         projects = list_projects()
         project_names = [project["name"] for project in projects]
@@ -537,9 +516,6 @@ class OperatorDashboard:
             self.project_select_var.set(project_names[0])
         else:
             self.project_select_var.set("")
-
-        self.reload_config_editor()
-        self.refresh_preview(active_paths)
 
         logs = load_training_logs(active_paths["log_dir"])
         summary = analyze_logs(logs) if logs else {}
@@ -553,7 +529,6 @@ class OperatorDashboard:
         self.recent_logs.delete(0, tk.END)
         for log in logs[-12:]:
             self.recent_logs.insert(tk.END, f"[{log['timestamp']}] {log['status']} -> {log['feedback']} | {log['filename']}")
-
 
 def main() -> None:
     root = tk.Tk()
