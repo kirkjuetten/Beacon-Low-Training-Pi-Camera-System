@@ -436,36 +436,43 @@ class InspectionDisplay:
             f"Shift: x={details.get('best_shift_x', 0)}, y={details.get('best_shift_y', 0)}",
         ]
 
-        if 'mean_edge_distance_px' in details:
+        mean_edge_distance = details.get('mean_edge_distance_px')
+        if mean_edge_distance is not None:
             threshold = details.get('max_mean_edge_distance_px')
             if threshold is not None:
-                metrics.append(f"Mean Edge Distance: {details['mean_edge_distance_px']:.3f}px (max {threshold:.3f}px)")
+                metrics.append(f"Mean Edge Distance: {mean_edge_distance:.3f}px (max {threshold:.3f}px)")
             else:
-                metrics.append(f"Mean Edge Distance: {details['mean_edge_distance_px']:.3f}px")
-        if 'worst_section_edge_distance_px' in details:
+                metrics.append(f"Mean Edge Distance: {mean_edge_distance:.3f}px")
+
+        worst_section_edge_distance = details.get('worst_section_edge_distance_px')
+        if worst_section_edge_distance is not None:
             threshold = details.get('max_section_edge_distance_px')
             if threshold is not None:
                 metrics.append(
-                    f"Worst Section Edge Distance: {details['worst_section_edge_distance_px']:.3f}px (max {threshold:.3f}px)"
+                    f"Worst Section Edge Distance: {worst_section_edge_distance:.3f}px (max {threshold:.3f}px)"
                 )
             else:
-                metrics.append(f"Worst Section Edge Distance: {details['worst_section_edge_distance_px']:.3f}px")
-        if 'worst_section_width_delta_ratio' in details:
+                metrics.append(f"Worst Section Edge Distance: {worst_section_edge_distance:.3f}px")
+
+        worst_section_width_delta_ratio = details.get('worst_section_width_delta_ratio')
+        if worst_section_width_delta_ratio is not None:
             threshold = details.get('max_section_width_delta_ratio')
             if threshold is not None:
                 metrics.append(
-                    f"Worst Section Width Drift: {details['worst_section_width_delta_ratio']:.1%} (max {threshold:.1%})"
+                    f"Worst Section Width Drift: {worst_section_width_delta_ratio:.1%} (max {threshold:.1%})"
                 )
             else:
-                metrics.append(f"Worst Section Width Drift: {details['worst_section_width_delta_ratio']:.1%}")
-        if 'worst_section_center_offset_px' in details:
+                metrics.append(f"Worst Section Width Drift: {worst_section_width_delta_ratio:.1%}")
+
+        worst_section_center_offset = details.get('worst_section_center_offset_px')
+        if worst_section_center_offset is not None:
             threshold = details.get('max_section_center_offset_px')
             if threshold is not None:
                 metrics.append(
-                    f"Worst Section Center Offset: {details['worst_section_center_offset_px']:.3f}px (max {threshold:.3f}px)"
+                    f"Worst Section Center Offset: {worst_section_center_offset:.3f}px (max {threshold:.3f}px)"
                 )
             else:
-                metrics.append(f"Worst Section Center Offset: {details['worst_section_center_offset_px']:.3f}px")
+                metrics.append(f"Worst Section Center Offset: {worst_section_center_offset:.3f}px")
         if 'ssim' in details:
             metrics.append(f"SSIM: {details['ssim']:.4f}")
         if 'anomaly_score' in details:
@@ -559,56 +566,6 @@ class InspectionDisplay:
         """Deprecated compatibility wrapper for older callers."""
         return 'capture'
 
-
-def build_reference_preview_text(config: dict, has_reference: bool, reference_button_label: str) -> tuple[list[str], str]:
-    registration_summary = build_registration_commissioning_summary(config)
-    next_step = (
-        registration_summary.get("actions", ["Capture the baseline registration frame for this project."])[0]
-        if not registration_summary.get("ready", True)
-        else "Capture the baseline registration frame for this project."
-    )
-    metric_lines = [
-        f"Reference file: {'present' if has_reference else 'missing'}",
-        f"Action: {reference_button_label}",
-        f"Registration: {registration_summary.get('summary', 'registration unknown')}",
-    ]
-    description = (
-        "Point the camera at the golden reference sample. "
-        "This capture defines the baseline registration frame and inspection mask. "
-        f"{next_step}"
-    )
-    return metric_lines, description
-
-
-def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str, object]:
-    outcome = determine_operator_outcome(passed, details)
-
-    if outcome.status == GOOD:
-        prefix = "✓ APPROVED"
-        status_text = "PASS"
-        severity = "pass"
-    elif outcome.primary_reason == REASON_REGISTRATION_FAILURE:
-        prefix = "⚠ CHECK PLACEMENT"
-        status_text = "CHECK PLACEMENT"
-        severity = "review"
-    elif outcome.status == REVIEW:
-        prefix = "⚠ REVIEW"
-        status_text = "NEEDS REVIEW"
-        severity = "review"
-    else:
-        prefix = "✗ REJECT"
-        status_text = "FAIL"
-        severity = "fail"
-
-    summary = ". ".join(str(line).strip() for line in outcome.summary_lines if str(line).strip())
-    description = prefix if not summary else f"{prefix}: {summary}"
-    return {
-        "status_text": status_text,
-        "severity": severity,
-        "description": description,
-        "outcome": outcome,
-    }
-
     def run_reference_preview(self, config: dict, has_reference: bool) -> str:
         """Show a live-ish preview loop until the operator captures/replaces the reference."""
         self.set_ui_mode("setup_reference")
@@ -687,7 +644,6 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
                     cleanup_temp_image()
                     return 'quit'
 
-            # Keep UI responsive before first camera frame arrives.
             if last_surface is None:
                 render()
 
@@ -703,7 +659,7 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
         reference_mask_path: Optional[Path] = None,
     ) -> tuple[Optional[str], bool]:
         """Display inspection result and wait for user input.
-        
+
         Returns: (feedback_action, ready_to_capture)
         feedback_action: 'approve', 'reject', 'review', 'set_ref', or 'quit'
         ready_to_capture: True once operator clicks CAPTURE after deciding feedback
@@ -714,13 +670,12 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
         self.set_ui_mode("inspection")
         self.set_alignment_profile_label(str(details.get("alignment_profile", "balanced")))
 
-        # Read display mode and build processed surface if needed
         display_mode = (config or {}).get("inspection", {}).get("image_display_mode", "raw")
         processed_surface: Optional[pygame.Surface] = None
         if display_mode in ("processed", "split"):
             processed_surface = self._make_processed_surface(image_path, config or {})
             if processed_surface is None:
-                display_mode = "raw"  # Fall back silently if processing fails
+                display_mode = "raw"
 
         feedback_view = build_training_inspection_feedback(passed, details)
         severity = str(feedback_view['severity'])
@@ -733,7 +688,6 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
         status_text = str(feedback_view['status_text'])
         description = str(feedback_view['description'])
 
-        # State: waiting for decision or waiting for capture trigger
         user_feedback = None
 
         def render_frame() -> None:
@@ -763,26 +717,23 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
                 display_surf = self._scale_surface_to_rect(source_surface, image_rect)
             self.draw_image_with_border(display_surf, border_color, image_rect)
 
-            # Status line: show decision if made, ready state if awaiting capture
             if user_feedback:
-                status_line = f"Status: {status_text} → Decision: {user_feedback.upper()} — Ready to capture next part"
+                status_line = f"Status: {status_text} -> Decision: {user_feedback.upper()} - Ready to capture next part"
                 status_color = self.YELLOW
             else:
-                status_line = f"Status: {status_text} — Click a decision button to proceed"
+                status_line = f"Status: {status_text} - Click a decision button to proceed"
                 status_color = border_color
-            
+
             status_surface = self.font.render(status_line, True, status_color)
             self.screen.blit(status_surface, status_rect.topleft)
 
-            # Draw metrics and description in right area
-            self.draw_metrics(details, image_rect)  
+            self.draw_metrics(details, image_rect)
             self.draw_description(description, description_rect)
             self.draw_buttons()
             pygame.display.flip()
 
         render_frame()
 
-        # Two-phase loop: Phase 1 = get user decision; Phase 2 = wait for capture trigger
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -794,8 +745,7 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
                     render_frame()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_pos = event.pos
-                    
-                    # Phase 1: Waiting for decision
+
                     if not user_feedback:
                         if self.buttons['approve'].collidepoint(mouse_pos):
                             if logger:
@@ -822,24 +772,19 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
                             if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
                                 return 'quit', False
                             return 'set_ref', False
-                    
-                    # Phase 2: Decision made, waiting for CAPTURE button
                     else:
                         if self.buttons['capture'].collidepoint(mouse_pos):
                             if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
                                 return 'quit', False
-                            return user_feedback, True  # Return decision + ready to capture
-                
+                            return user_feedback, True
+
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         return 'quit', False
                     elif event.key == pygame.K_RETURN and user_feedback:
-                        # Allow pressing Enter to trigger capture after decision
                         return user_feedback, True
 
             self.clock.tick(30)
-
-        pygame.quit()
 
     def show_training_checkpoint(
         self,
@@ -954,6 +899,56 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
                             return action
 
             self.clock.tick(30)
+
+
+def build_reference_preview_text(config: dict, has_reference: bool, reference_button_label: str) -> tuple[list[str], str]:
+    registration_summary = build_registration_commissioning_summary(config)
+    next_step = (
+        registration_summary.get("actions", ["Capture the baseline registration frame for this project."])[0]
+        if not registration_summary.get("ready", True)
+        else "Capture the baseline registration frame for this project."
+    )
+    metric_lines = [
+        f"Reference file: {'present' if has_reference else 'missing'}",
+        f"Action: {reference_button_label}",
+        f"Registration: {registration_summary.get('summary', 'registration unknown')}",
+    ]
+    description = (
+        "Point the camera at the golden reference sample. "
+        "This capture defines the baseline registration frame and inspection mask. "
+        f"{next_step}"
+    )
+    return metric_lines, description
+
+
+def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str, object]:
+    outcome = determine_operator_outcome(passed, details)
+
+    if outcome.status == GOOD:
+        prefix = "✓ APPROVED"
+        status_text = "PASS"
+        severity = "pass"
+    elif outcome.primary_reason == REASON_REGISTRATION_FAILURE:
+        prefix = "⚠ CHECK PLACEMENT"
+        status_text = "CHECK PLACEMENT"
+        severity = "review"
+    elif outcome.status == REVIEW:
+        prefix = "⚠ REVIEW"
+        status_text = "NEEDS REVIEW"
+        severity = "review"
+    else:
+        prefix = "✗ REJECT"
+        status_text = "FAIL"
+        severity = "fail"
+
+    summary = ". ".join(str(line).strip() for line in outcome.summary_lines if str(line).strip())
+    description = prefix if not summary else f"{prefix}: {summary}"
+    return {
+        "status_text": status_text,
+        "severity": severity,
+        "description": description,
+        "outcome": outcome,
+    }
 
 
 class TrainingLogger:
