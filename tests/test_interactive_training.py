@@ -662,6 +662,54 @@ def test_build_reference_preview_text_calls_out_baseline_registration() -> None:
     assert 'Define at least 2 enabled registration anchors before relying on anchor_pair.' in description
 
 
+def test_build_training_inspection_feedback_routes_registration_failures_to_placement_check() -> None:
+    feedback = interactive_training.build_training_inspection_feedback(
+        False,
+        {
+            'required_coverage': 0.99,
+            'min_required_coverage': 0.92,
+            'outside_allowed_ratio': 0.0,
+            'max_outside_allowed_ratio': 0.02,
+            'min_section_coverage': 0.98,
+            'min_section_coverage_limit': 0.85,
+            'failure_stage': 'registration',
+            'registration': {
+                'rejection_reason': 'Registration confidence 0.500 was below required minimum 0.900.',
+            },
+        },
+    )
+
+    assert feedback['status_text'] == 'CHECK PLACEMENT'
+    assert feedback['severity'] == 'review'
+    assert 'Part position could not be verified.' in feedback['description']
+    assert 'Registration confidence 0.500 was below required minimum 0.900.' in feedback['description']
+
+
+def test_build_training_inspection_feedback_marks_borderline_failures_for_review() -> None:
+    feedback = interactive_training.build_training_inspection_feedback(
+        False,
+        {
+            'required_coverage': 0.89,
+            'min_required_coverage': 0.92,
+            'outside_allowed_ratio': 0.002,
+            'max_outside_allowed_ratio': 0.02,
+            'min_section_coverage': 0.94,
+            'min_section_coverage_limit': 0.85,
+            'edge_distance_gate_active': False,
+            'section_width_gate_active': False,
+            'section_center_gate_active': False,
+            'section_edge_gate_active': False,
+            'ssim_gate_active': False,
+            'mse_gate_active': False,
+            'anomaly_gate_active': False,
+        },
+    )
+
+    assert feedback['status_text'] == 'NEEDS REVIEW'
+    assert feedback['severity'] == 'review'
+    assert feedback['description'].startswith('⚠ REVIEW: Borderline part.')
+
+
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config = {

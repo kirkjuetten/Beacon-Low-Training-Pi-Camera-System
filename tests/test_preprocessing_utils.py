@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from preprocessing_utils import get_roi, make_binary_mask
+from preprocessing_utils import build_registration_image, get_roi, make_binary_mask
 
 
 class FakeCv2:
@@ -132,3 +132,24 @@ def test_make_binary_mask_supports_fixed_inv() -> None:
         255,
         fake_cv2.THRESH_BINARY_INV,
     )
+
+
+def test_build_registration_image_emphasizes_masked_feature_signal() -> None:
+    gray = np.array(
+        [
+            [10, 10, 10, 10, 10],
+            [10, 25, 90, 25, 10],
+            [10, 35, 140, 35, 10],
+            [10, 25, 90, 25, 10],
+            [10, 10, 10, 10, 10],
+        ],
+        dtype=np.uint8,
+    )
+    mask = np.zeros((5, 5), dtype=np.uint8)
+    mask[1:4, 1:4] = 255
+
+    registration_image = build_registration_image(gray, mask, np)
+
+    assert registration_image.shape == gray.shape
+    assert registration_image.dtype == np.uint8
+    assert int(registration_image[2, 2]) > int(registration_image[0, 0])

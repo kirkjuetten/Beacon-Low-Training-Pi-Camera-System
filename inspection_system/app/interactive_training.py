@@ -66,6 +66,12 @@ from inspection_system.app.reference_service import (
     train_anomaly_model_from_samples,
     check_reference_settings_match,
 )
+from inspection_system.app.result_interpreter import (
+    GOOD,
+    REVIEW,
+    REASON_REGISTRATION_FAILURE,
+    determine_operator_outcome,
+)
 from inspection_system.app.runtime_controller import (
     format_operator_mode_lines,
     get_inspection_runtime_warnings,
@@ -478,93 +484,7 @@ class InspectionDisplay:
 
     def generate_inspection_description(self, passed: bool, details: dict) -> str:
         """Generate human-readable description of inspection results."""
-        descriptions = []
-
-        if passed:
-            descriptions.append("✓ APPROVED: Sample meets all quality requirements")
-            return ". ".join(descriptions)
-
-        # Analyze failure reasons
-        req_cov = details.get('required_coverage', 0)
-        min_req = details.get('min_required_coverage', 0)
-        outside_ratio = details.get('outside_allowed_ratio', 0)
-        max_outside = details.get('max_outside_allowed_ratio', 0)
-        min_section = details.get('min_section_coverage', 0)
-        min_section_limit = details.get('min_section_coverage_limit', 0)
-
-        if req_cov < min_req:
-            deficit = min_req - req_cov
-            descriptions.append(f"✗ REQUIRED COVERAGE: Missing {deficit:.1%} of required features")
-
-        if outside_ratio > max_outside:
-            excess = outside_ratio - max_outside
-            descriptions.append(f"✗ OUTSIDE ALLOWED: {excess:.1%} excess material in restricted areas")
-
-        if min_section < min_section_limit:
-            deficit = min_section_limit - min_section
-            descriptions.append(f"✗ SECTION COVERAGE: Weakest section missing {deficit:.1%} coverage")
-
-        max_mean_edge_distance_px = details.get('max_mean_edge_distance_px')
-        mean_edge_distance_px = details.get('mean_edge_distance_px')
-        if (
-            max_mean_edge_distance_px not in {None, ''}
-            and mean_edge_distance_px is not None
-            and float(mean_edge_distance_px) > float(max_mean_edge_distance_px)
-        ):
-            excess = float(mean_edge_distance_px) - float(max_mean_edge_distance_px)
-            descriptions.append(f"✗ EDGE SHAPE: Mean edge drift exceeds limit by {excess:.2f}px")
-
-        max_section_edge_distance_px = details.get('max_section_edge_distance_px')
-        worst_section_edge_distance_px = details.get('worst_section_edge_distance_px')
-        if (
-            max_section_edge_distance_px not in {None, ''}
-            and worst_section_edge_distance_px is not None
-            and float(worst_section_edge_distance_px) > float(max_section_edge_distance_px)
-        ):
-            excess = float(worst_section_edge_distance_px) - float(max_section_edge_distance_px)
-            descriptions.append(f"✗ SECTION EDGE SHAPE: Worst section edge drift exceeds limit by {excess:.2f}px")
-
-        max_section_width_delta_ratio = details.get('max_section_width_delta_ratio')
-        worst_section_width_delta_ratio = details.get('worst_section_width_delta_ratio')
-        if (
-            max_section_width_delta_ratio not in {None, ''}
-            and worst_section_width_delta_ratio is not None
-            and float(worst_section_width_delta_ratio) > float(max_section_width_delta_ratio)
-        ):
-            excess = float(worst_section_width_delta_ratio) - float(max_section_width_delta_ratio)
-            descriptions.append(f"✗ SECTION WIDTH: Worst section width drift exceeds limit by {excess:.1%}")
-
-        max_section_center_offset_px = details.get('max_section_center_offset_px')
-        worst_section_center_offset_px = details.get('worst_section_center_offset_px')
-        if (
-            max_section_center_offset_px not in {None, ''}
-            and worst_section_center_offset_px is not None
-            and float(worst_section_center_offset_px) > float(max_section_center_offset_px)
-        ):
-            excess = float(worst_section_center_offset_px) - float(max_section_center_offset_px)
-            descriptions.append(f"✗ SECTION CENTER: Worst section center offset exceeds limit by {excess:.2f}px")
-
-        # Check anomaly metrics
-        if 'ssim' in details and details['ssim'] < 0.8:
-            descriptions.append(f"✗ STRUCTURAL SIMILARITY: Low SSIM ({details['ssim']:.3f}) indicates poor match to reference")
-
-        if 'anomaly_score' in details and details['anomaly_score'] > 0.5:
-            descriptions.append(f"✗ ANOMALY DETECTED: High anomaly score ({details['anomaly_score']:.3f}) suggests defects")
-
-        # Alignment issues
-        angle_correction = abs(details.get('best_angle_deg', 0))
-        shift_distance = ((details.get('best_shift_x', 0) ** 2 + details.get('best_shift_y', 0) ** 2) ** 0.5)
-
-        if angle_correction > 0.5:
-            descriptions.append(f"⚠ ALIGNMENT: Significant rotation correction ({angle_correction:.2f}°) applied")
-
-        if shift_distance > 2:
-            descriptions.append(f"⚠ ALIGNMENT: Large positional shift ({shift_distance:.1f} pixels) detected")
-
-        if not descriptions:
-            descriptions.append("✗ UNKNOWN FAILURE: Sample failed but no specific issues identified")
-
-        return ". ".join(descriptions)
+        return str(build_training_inspection_feedback(passed, details)["description"])
 
     def draw_description(self, description: str, area: pygame.Rect):
         """Draw the inspection description on screen."""
@@ -658,6 +578,36 @@ def build_reference_preview_text(config: dict, has_reference: bool, reference_bu
         f"{next_step}"
     )
     return metric_lines, description
+
+
+def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str, object]:
+    outcome = determine_operator_outcome(passed, details)
+
+    if outcome.status == GOOD:
+        prefix = "✓ APPROVED"
+        status_text = "PASS"
+        severity = "pass"
+    elif outcome.primary_reason == REASON_REGISTRATION_FAILURE:
+        prefix = "⚠ CHECK PLACEMENT"
+        status_text = "CHECK PLACEMENT"
+        severity = "review"
+    elif outcome.status == REVIEW:
+        prefix = "⚠ REVIEW"
+        status_text = "NEEDS REVIEW"
+        severity = "review"
+    else:
+        prefix = "✗ REJECT"
+        status_text = "FAIL"
+        severity = "fail"
+
+    summary = ". ".join(str(line).strip() for line in outcome.summary_lines if str(line).strip())
+    description = prefix if not summary else f"{prefix}: {summary}"
+    return {
+        "status_text": status_text,
+        "severity": severity,
+        "description": description,
+        "outcome": outcome,
+    }
 
     def run_reference_preview(self, config: dict, has_reference: bool) -> str:
         """Show a live-ish preview loop until the operator captures/replaces the reference."""
@@ -772,27 +722,16 @@ def build_reference_preview_text(config: dict, has_reference: bool, reference_bu
             if processed_surface is None:
                 display_mode = "raw"  # Fall back silently if processing fails
 
-        # Determine border color and generate description
-        if passed:
+        feedback_view = build_training_inspection_feedback(passed, details)
+        severity = str(feedback_view['severity'])
+        if severity == 'pass':
             border_color = self.GREEN
-            status_text = "PASS"
+        elif severity == 'review':
+            border_color = self.YELLOW
         else:
-            # Check if it should be flagged for review (close to thresholds)
-            req_cov = details.get('required_coverage', 0)
-            min_req = details.get('min_required_coverage', 0)
-            outside_ratio = details.get('outside_allowed_ratio', 0)
-            max_outside = details.get('max_outside_allowed_ratio', 0)
-
-            # Flag for review if within 10% of thresholds
-            if (req_cov >= min_req * 0.9) and (outside_ratio <= max_outside * 1.1):
-                border_color = self.YELLOW
-                status_text = "NEEDS REVIEW"
-            else:
-                border_color = self.RED
-                status_text = "FAIL"
-
-        # Generate human-readable description
-        description = self.generate_inspection_description(passed, details)
+            border_color = self.RED
+        status_text = str(feedback_view['status_text'])
+        description = str(feedback_view['description'])
 
         # State: waiting for decision or waiting for capture trigger
         user_feedback = None

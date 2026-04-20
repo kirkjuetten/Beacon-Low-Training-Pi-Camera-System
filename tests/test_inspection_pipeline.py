@@ -580,6 +580,66 @@ def test_reference_candidate_rank_ignores_nonfinite_optional_gate_values() -> No
     assert rank == (0, -1, 0.07)
 
 
+def test_should_prefer_coarse_moments_measurement_for_width_drift_false_accept_pattern() -> None:
+    refined_measurement = {
+        'passed': True,
+        'threshold_summary': {
+            'required_coverage': 0.985027,
+            'outside_allowed_ratio': 0.00635,
+            'mean_edge_distance_px': 2.324482,
+            'worst_section_width_delta_ratio': 1.0,
+            'effective_max_section_width_delta_ratio': 1.0,
+        },
+    }
+    coarse_measurement = {
+        'passed': False,
+        'threshold_summary': {
+            'required_coverage': 0.977109,
+            'outside_allowed_ratio': 0.009386,
+            'mean_edge_distance_px': 2.93541,
+            'worst_section_width_delta_ratio': 1.75,
+            'effective_max_section_width_delta_ratio': 1.0,
+        },
+    }
+
+    assert inspection_pipeline._should_prefer_coarse_moments_measurement(
+        refined_measurement,
+        coarse_measurement,
+        {'angle_deg': 0.224514, 'shift_x': -4, 'shift_y': -2},
+        {'angle_deg': 0.474514, 'shift_x': -4, 'shift_y': -3},
+    ) is True
+
+
+def test_should_keep_refined_moments_measurement_when_independent_metrics_improve_enough() -> None:
+    refined_measurement = {
+        'passed': True,
+        'threshold_summary': {
+            'required_coverage': 0.992199,
+            'outside_allowed_ratio': 0.005243,
+            'mean_edge_distance_px': 1.853271,
+            'worst_section_width_delta_ratio': 1.0,
+            'effective_max_section_width_delta_ratio': 1.0,
+        },
+    }
+    coarse_measurement = {
+        'passed': False,
+        'threshold_summary': {
+            'required_coverage': 0.983119,
+            'outside_allowed_ratio': 0.01156,
+            'mean_edge_distance_px': 2.667853,
+            'worst_section_width_delta_ratio': 2.0,
+            'effective_max_section_width_delta_ratio': 1.0,
+        },
+    }
+
+    assert inspection_pipeline._should_prefer_coarse_moments_measurement(
+        refined_measurement,
+        coarse_measurement,
+        {'angle_deg': 0.036225, 'shift_x': -4, 'shift_y': 0},
+        {'angle_deg': 0.286225, 'shift_x': -4, 'shift_y': -1},
+    ) is False
+
+
 def test_inspect_against_reference_uses_anomaly_detector_metrics_in_runtime_decision() -> None:
     sample_mask = np.zeros((20, 20), dtype=np.uint8)
     sample_mask[5:15, 5:15] = 255
