@@ -334,3 +334,169 @@ def test_register_sample_mask_supports_anchor_pair_runtime() -> None:
     assert len(result.observed_anchors) == 2
     assert result.observed_anchors[0]["transformed_point"] == {"x": 10.0, "y": 10.0}
     assert result.observed_anchors[1]["transformed_point"] == {"x": 20.0, "y": 10.0}
+
+
+def test_register_sample_mask_uses_template_matching_when_registration_images_are_available() -> None:
+    sample_mask = np.zeros((32, 32), dtype=np.uint8)
+    sample_mask[13:18, 9:14] = 255
+    reference_mask = np.zeros((32, 32), dtype=np.uint8)
+    reference_mask[11:16, 11:16] = 255
+
+    sample_registration_image = np.zeros((32, 32), dtype=np.uint8)
+    sample_registration_image[13:18, 9:14] = np.array(
+        [
+            [10, 40, 70, 40, 10],
+            [20, 90, 150, 90, 20],
+            [30, 130, 220, 130, 30],
+            [20, 90, 150, 90, 20],
+            [10, 40, 70, 40, 10],
+        ],
+        dtype=np.uint8,
+    )
+    reference_registration_image = np.zeros((32, 32), dtype=np.uint8)
+    reference_registration_image[11:16, 11:16] = np.array(
+        [
+            [10, 40, 70, 40, 10],
+            [20, 90, 150, 90, 20],
+            [30, 130, 220, 130, 30],
+            [20, 90, 150, 90, 20],
+            [10, 40, 70, 40, 10],
+        ],
+        dtype=np.uint8,
+    )
+
+    def fake_shift_mask(mask, shift_x, shift_y, cv2, np_module):
+        assert shift_x == 2
+        assert shift_y == -2
+        return "shifted-mask"
+
+    original_shift_mask = registration_engine.shift_mask
+    registration_engine.shift_mask = fake_shift_mask
+    try:
+        result = register_sample_mask(
+            sample_mask,
+            reference_mask,
+            {
+                "enabled": True,
+                "mode": "anchor_translation",
+                "max_shift_x": 10,
+                "max_shift_y": 10,
+                "registration": {
+                    "strategy": "anchor_translation",
+                    "anchor_mode": "single",
+                    "anchors": [
+                        {
+                            "anchor_id": "anchor_a",
+                            "reference_point": {"x": 13, "y": 13},
+                            "search_window": {"x": 7, "y": 9, "width": 10, "height": 10},
+                        }
+                    ],
+                },
+            },
+            object(),
+            np,
+            lambda *args: (_ for _ in ()).throw(AssertionError("moments aligner should not be called")),
+            sample_registration_image=sample_registration_image,
+            reference_registration_image=reference_registration_image,
+        )
+    finally:
+        registration_engine.shift_mask = original_shift_mask
+
+    assert result.status == "aligned"
+    assert result.aligned_mask == "shifted-mask"
+    assert result.shift_x == 2
+    assert result.shift_y == -2
+    assert result.quality["confidence"] > 0.7
+    assert result.observed_anchors[0]["localization_method"] == "template_match"
+    assert result.observed_anchors[0]["image_score"] is not None
+    assert result.observed_anchors[0]["mask_score"] is not None
+
+
+def test_register_sample_mask_refines_moments_runtime_with_registration_images() -> None:
+    sample_mask = np.zeros((16, 16), dtype=np.uint8)
+    sample_mask[5:9, 4:8] = 255
+    reference_mask = np.zeros((16, 16), dtype=np.uint8)
+    reference_mask[5:9, 5:9] = 255
+
+    sample_registration_image = np.zeros((16, 16), dtype=np.uint8)
+    sample_registration_image[5:9, 4:8] = np.array(
+        [
+            [10, 60, 40, 10],
+            [20, 150, 110, 20],
+            [10, 120, 90, 10],
+            [5, 30, 20, 5],
+        ],
+        dtype=np.uint8,
+    )
+    reference_registration_image = np.zeros((16, 16), dtype=np.uint8)
+    reference_registration_image[5:9, 5:9] = np.array(
+        [
+            [10, 60, 40, 10],
+            [20, 150, 110, 20],
+            [10, 120, 90, 10],
+            [5, 30, 20, 5],
+        ],
+        dtype=np.uint8,
+    )
+
+    class TranslationCv2:
+        INTER_NEAREST = 0
+        INTER_LINEAR = 1
+        BORDER_CONSTANT = 0
+
+        def getRotationMatrix2D(self, center, angle_deg, scale):
+            return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+        def warpAffine(self, image, matrix, size, flags=None, borderMode=None, borderValue=None):
+            shift_x = int(round(float(matrix[0, 2])))
+            shift_y = int(round(float(matrix[1, 2])))
+            output = np.zeros_like(image)
+            src_y0 = max(0, -shift_y)
+            src_y1 = image.shape[0] - max(0, shift_y)
+            src_x0 = max(0, -shift_x)
+            src_x1 = image.shape[1] - max(0, shift_x)
+            dst_y0 = max(0, shift_y)
+            dst_y1 = dst_y0 + max(0, src_y1 - src_y0)
+            dst_x0 = max(0, shift_x)
+            dst_x1 = dst_x0 + max(0, src_x1 - src_x0)
+            if src_y1 > src_y0 and src_x1 > src_x0:
+                output[dst_y0:dst_y1, dst_x0:dst_x1] = image[src_y0:src_y1, src_x0:src_x1]
+            return output
+
+        def findNonZero(self, mask):
+            points = np.argwhere(mask > 0)
+            if points.size == 0:
+                return None
+            return points[:, ::-1].reshape(-1, 1, 2).astype(np.int32)
+
+        def moments(self, mask, binaryImage=True):
+            points = np.argwhere(mask > 0)
+            if points.size == 0:
+                return {"m00": 0.0, "m10": 0.0, "m01": 0.0}
+            return {
+                "m00": float(points.shape[0]),
+                "m10": float(points[:, 1].sum()),
+                "m01": float(points[:, 0].sum()),
+            }
+
+    result = register_sample_mask(
+        sample_mask,
+        reference_mask,
+        {
+            "enabled": True,
+            "mode": "moments",
+            "max_shift_x": 2,
+            "max_shift_y": 2,
+        },
+        TranslationCv2(),
+        np,
+        lambda sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module: (sample_mask_arg, 0.0, 0, 0),
+        sample_registration_image=sample_registration_image,
+        reference_registration_image=reference_registration_image,
+    )
+
+    assert result.status == "aligned"
+    assert result.applied_strategy == "moments"
+    assert result.shift_x == 1
+    assert result.shift_y == 0
+    assert result.quality["confidence"] > 0.9

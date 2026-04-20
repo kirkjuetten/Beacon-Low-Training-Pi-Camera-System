@@ -5,8 +5,9 @@ import math
 from pathlib import Path
 from inspection_system.app.anomaly_detection_utils import detect_anomalies
 from inspection_system.app.datum_measurement_utils import compute_datum_section_measurements
+from inspection_system.app.preprocessing_utils import build_registration_image
 from inspection_system.app.registration_engine import register_sample_mask
-from inspection_system.app.registration_transform import apply_transform_to_mask
+from inspection_system.app.registration_transform import apply_transform_to_mask, build_transform_summary
 from inspection_system.app.reference_service import check_reference_settings_match
 
 
@@ -225,6 +226,136 @@ def _build_reference_candidate_summary(details: dict, passed: bool, rank: tuple[
     }
 
 
+def _measure_inspection_outcome(
+    sample_mask,
+    aligned_sample_mask,
+    transform_summary: dict | None,
+    reference_mask,
+    reference_allowed,
+    reference_required,
+    section_masks,
+    inspection_cfg: dict,
+    score_sample,
+    evaluate_metrics,
+    anomaly_metrics: dict,
+    cv2,
+    np,
+) -> dict:
+    metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
+    datum_section_metrics = None
+    edge_measurement_mask = aligned_sample_mask
+    edge_measurement_frame = "aligned_mask"
+    if transform_summary is not None:
+        datum_section_metrics = compute_datum_section_measurements(
+            sample_mask,
+            section_masks,
+            transform_summary,
+            np,
+        )
+        edge_measurement_mask = apply_transform_to_mask(
+            sample_mask,
+            transform_summary,
+            cv2,
+            np,
+        )
+        edge_measurement_frame = "datum"
+
+    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, edge_measurement_mask, np, cv2)
+    section_edge_distances_px = compute_section_edge_distances_px(
+        reference_mask,
+        edge_measurement_mask,
+        section_masks,
+        np,
+        cv2,
+    )
+    worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
+
+    if datum_section_metrics is not None:
+        section_width_ratios = datum_section_metrics["section_width_ratios"]
+        section_center_offsets_px = datum_section_metrics["section_center_offsets_px"]
+        section_measurement_frame = datum_section_metrics["frame"]
+        section_measurements = datum_section_metrics["section_measurements"]
+    else:
+        section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
+        section_center_offsets_px = compute_section_center_offsets_px(reference_mask, aligned_sample_mask, section_masks, np)
+        section_measurement_frame = "aligned_mask"
+        section_measurements = []
+
+    worst_section_width_delta_ratio = max((abs(float(ratio) - 1.0) for ratio in section_width_ratios), default=0.0)
+    worst_section_center_offset_px = max(section_center_offsets_px, default=0.0)
+    metric_inputs = {
+        **metrics,
+        "mean_edge_distance_px": mean_edge_distance_px,
+        "worst_section_edge_distance_px": worst_section_edge_distance_px,
+        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
+        "worst_section_center_offset_px": worst_section_center_offset_px,
+        **anomaly_metrics,
+    }
+    passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
+    return {
+        "passed": bool(passed),
+        "threshold_summary": threshold_summary,
+        "metrics": metrics,
+        "mean_edge_distance_px": mean_edge_distance_px,
+        "section_edge_distances_px": section_edge_distances_px,
+        "worst_section_edge_distance_px": worst_section_edge_distance_px,
+        "section_width_ratios": section_width_ratios,
+        "section_center_offsets_px": section_center_offsets_px,
+        "section_measurement_frame": section_measurement_frame,
+        "section_measurements": section_measurements,
+        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
+        "worst_section_center_offset_px": worst_section_center_offset_px,
+        "edge_measurement_frame": edge_measurement_frame,
+    }
+
+
+def _should_prefer_coarse_moments_measurement(
+    refined_measurement: dict,
+    coarse_measurement: dict,
+    refined_transform: dict,
+    coarse_transform: dict,
+) -> bool:
+    if not refined_measurement.get("passed") or coarse_measurement.get("passed"):
+        return False
+
+    coarse_summary = coarse_measurement.get("threshold_summary", {})
+    refined_summary = refined_measurement.get("threshold_summary", {})
+    coarse_width = coarse_summary.get("worst_section_width_delta_ratio")
+    coarse_width_limit = coarse_summary.get("effective_max_section_width_delta_ratio")
+    if coarse_width is None or coarse_width_limit in (None, ""):
+        return False
+
+    width_excess = float(coarse_width) - float(coarse_width_limit)
+    if width_excess < 0.5:
+        return False
+
+    transform_delta_shift = math.hypot(
+        float(refined_transform.get("shift_x", 0)) - float(coarse_transform.get("shift_x", 0)),
+        float(refined_transform.get("shift_y", 0)) - float(coarse_transform.get("shift_y", 0)),
+    )
+    transform_delta_angle = abs(float(refined_transform.get("angle_deg", 0.0)) - float(coarse_transform.get("angle_deg", 0.0)))
+    if transform_delta_shift < 0.5 and transform_delta_angle < 0.15:
+        return False
+
+    outside_improvement = float(coarse_summary.get("outside_allowed_ratio", 0.0)) - float(
+        refined_summary.get("outside_allowed_ratio", 0.0)
+    )
+    edge_improvement = float(coarse_summary.get("mean_edge_distance_px", 0.0)) - float(
+        refined_summary.get("mean_edge_distance_px", 0.0)
+    )
+    coverage_improvement = float(refined_summary.get("required_coverage", 0.0)) - float(
+        coarse_summary.get("required_coverage", 0.0)
+    )
+
+    if outside_improvement >= 0.004:
+        return False
+    if edge_improvement >= 0.75:
+        return False
+    if coverage_improvement >= 0.01:
+        return False
+    return True
+
+
 def inspect_against_reference(
     config: dict,
     image_path: Path,
@@ -276,6 +407,9 @@ def inspect_against_reference(
     # Compute anomaly metrics before alignment
     anomaly_metrics = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
 
+    sample_registration_image = build_registration_image(gray if gray is not None else roi_image, sample_mask, np)
+    reference_registration_image = build_registration_image(reference_image, reference_mask, np)
+
     registration_result = register_sample_mask(
         sample_mask,
         reference_mask,
@@ -283,11 +417,15 @@ def inspect_against_reference(
         cv2,
         np,
         align_sample_mask,
+        sample_registration_image=sample_registration_image,
+        reference_registration_image=reference_registration_image,
     )
     aligned_sample_mask = registration_result.aligned_mask
     best_angle_deg = registration_result.angle_deg
     best_shift_x = registration_result.shift_x
     best_shift_y = registration_result.shift_y
+    effective_transform_summary = registration_result.transform if registration_result.status == "aligned" else None
+    registration_guard_reason = None
 
     reference_allowed, reference_required = build_reference_regions(
         reference_mask,
@@ -303,57 +441,86 @@ def inspect_against_reference(
         np,
     )
 
-    metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
-    datum_section_metrics = None
-    edge_measurement_mask = aligned_sample_mask
-    edge_measurement_frame = "aligned_mask"
-    if registration_result.status == "aligned":
-        datum_section_metrics = compute_datum_section_measurements(
+    measurement_result = _measure_inspection_outcome(
+        sample_mask,
+        aligned_sample_mask,
+        effective_transform_summary,
+        reference_mask,
+        reference_allowed,
+        reference_required,
+        section_masks,
+        inspection_cfg,
+        score_sample,
+        evaluate_metrics,
+        anomaly_metrics,
+        cv2,
+        np,
+    )
+
+    if registration_result.status == "aligned" and registration_result.runtime_mode == "moments":
+        coarse_aligned_sample_mask, coarse_angle_deg, coarse_shift_x, coarse_shift_y = align_sample_mask(
             sample_mask,
-            section_masks,
-            registration_result.transform,
-            np,
-        )
-        edge_measurement_mask = apply_transform_to_mask(
-            sample_mask,
-            registration_result.transform,
+            reference_mask,
+            alignment_cfg,
             cv2,
             np,
         )
-        edge_measurement_frame = "datum"
+        coarse_transform_summary = build_transform_summary(
+            sample_mask.shape[:2],
+            coarse_angle_deg,
+            coarse_shift_x,
+            coarse_shift_y,
+        )
+        if (
+            abs(float(coarse_angle_deg) - float(best_angle_deg)) > 1e-6
+            or int(coarse_shift_x) != int(best_shift_x)
+            or int(coarse_shift_y) != int(best_shift_y)
+        ):
+            coarse_measurement_result = _measure_inspection_outcome(
+                sample_mask,
+                coarse_aligned_sample_mask,
+                coarse_transform_summary,
+                reference_mask,
+                reference_allowed,
+                reference_required,
+                section_masks,
+                inspection_cfg,
+                score_sample,
+                evaluate_metrics,
+                anomaly_metrics,
+                cv2,
+                np,
+            )
+            if _should_prefer_coarse_moments_measurement(
+                measurement_result,
+                coarse_measurement_result,
+                registration_result.transform,
+                coarse_transform_summary,
+            ):
+                registration_guard_reason = (
+                    "Moments refinement was ignored for scoring because it only removed a large section-width drift "
+                    "without enough supporting improvement in independent metrics."
+                )
+                measurement_result = coarse_measurement_result
+                aligned_sample_mask = coarse_aligned_sample_mask
+                best_angle_deg = float(coarse_angle_deg)
+                best_shift_x = int(coarse_shift_x)
+                best_shift_y = int(coarse_shift_y)
+                effective_transform_summary = coarse_transform_summary
 
-    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, edge_measurement_mask, np, cv2)
-    section_edge_distances_px = compute_section_edge_distances_px(
-        reference_mask,
-        edge_measurement_mask,
-        section_masks,
-        np,
-        cv2,
-    )
-    worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
-
-    if datum_section_metrics is not None:
-        section_width_ratios = datum_section_metrics["section_width_ratios"]
-        section_center_offsets_px = datum_section_metrics["section_center_offsets_px"]
-        section_measurement_frame = datum_section_metrics["frame"]
-        section_measurements = datum_section_metrics["section_measurements"]
-    else:
-        section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
-        section_center_offsets_px = compute_section_center_offsets_px(reference_mask, aligned_sample_mask, section_masks, np)
-        section_measurement_frame = "aligned_mask"
-        section_measurements = []
-
-    worst_section_width_delta_ratio = max((abs(float(ratio) - 1.0) for ratio in section_width_ratios), default=0.0)
-    worst_section_center_offset_px = max(section_center_offsets_px, default=0.0)
-    metric_inputs = {
-        **metrics,
-        "mean_edge_distance_px": mean_edge_distance_px,
-        "worst_section_edge_distance_px": worst_section_edge_distance_px,
-        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
-        "worst_section_center_offset_px": worst_section_center_offset_px,
-        **anomaly_metrics,
-    }
-    passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
+    metrics = measurement_result["metrics"]
+    mean_edge_distance_px = measurement_result["mean_edge_distance_px"]
+    section_edge_distances_px = measurement_result["section_edge_distances_px"]
+    worst_section_edge_distance_px = measurement_result["worst_section_edge_distance_px"]
+    section_width_ratios = measurement_result["section_width_ratios"]
+    section_center_offsets_px = measurement_result["section_center_offsets_px"]
+    section_measurement_frame = measurement_result["section_measurement_frame"]
+    section_measurements = measurement_result["section_measurements"]
+    worst_section_width_delta_ratio = measurement_result["worst_section_width_delta_ratio"]
+    worst_section_center_offset_px = measurement_result["worst_section_center_offset_px"]
+    edge_measurement_frame = measurement_result["edge_measurement_frame"]
+    passed = measurement_result["passed"]
+    threshold_summary = measurement_result["threshold_summary"]
     registration_failed = bool(registration_result.rejection_reason)
     if registration_failed:
         passed = False
@@ -406,14 +573,24 @@ def inspect_against_reference(
             "transform_model": registration_result.transform_model,
             "anchor_mode": registration_result.anchor_mode,
             "subpixel_refinement": registration_result.subpixel_refinement,
-            "fallback_reason": registration_result.fallback_reason,
+            "fallback_reason": (
+                registration_guard_reason
+                if registration_result.fallback_reason is None and registration_guard_reason is not None
+                else (
+                    f"{registration_result.fallback_reason} {registration_guard_reason}"
+                    if registration_result.fallback_reason is not None and registration_guard_reason is not None
+                    else registration_result.fallback_reason
+                )
+            ),
             "rejection_reason": registration_result.rejection_reason,
             "quality": registration_result.quality,
             "quality_gates": registration_result.quality_gates,
             "quality_gate_failures": registration_result.quality_gate_failures,
             "datum_frame": registration_result.datum_frame,
-            "transform": registration_result.transform,
+            "transform": effective_transform_summary or registration_result.transform,
             "observed_anchors": registration_result.observed_anchors,
+            "scoring_guard_applied": bool(registration_guard_reason),
+            "scoring_guard_reason": registration_guard_reason,
         },
         "failure_stage": "registration" if registration_failed else "inspection",
         "required_coverage": required_coverage,

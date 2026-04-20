@@ -129,16 +129,220 @@ def _resolve_search_window(mask_shape: tuple[int, int], anchor: dict, search_mar
     return x0, y0, x1, y1
 
 
-def _locate_sample_anchor(mask, anchor: dict, search_margin_px: int, np) -> tuple[tuple[float, float] | None, float]:
+def _resolve_anchor_template_bounds(mask_shape: tuple[int, int], anchor: dict, search_margin_px: int) -> tuple[int, int, int, int]:
+    height, width = mask_shape[:2]
+    ref_point = anchor.get("reference_point", {})
+    anchor_x = int(ref_point.get("x", 0))
+    anchor_y = int(ref_point.get("y", 0))
+    search_x0, search_y0, search_x1, search_y1 = _resolve_search_window(mask_shape, anchor, search_margin_px)
+    search_width = max(1, search_x1 - search_x0)
+    search_height = max(1, search_y1 - search_y0)
+
+    template_width = search_width if search_width <= 5 else max(5, int(round(search_width * 0.6)))
+    template_height = search_height if search_height <= 5 else max(5, int(round(search_height * 0.6)))
+    template_width = min(search_width, template_width)
+    template_height = min(search_height, template_height)
+
+    x0 = max(0, min(width - template_width, anchor_x - (template_width // 2)))
+    y0 = max(0, min(height - template_height, anchor_y - (template_height // 2)))
+    x1 = min(width, x0 + template_width)
+    y1 = min(height, y0 + template_height)
+    return x0, y0, x1, y1
+
+
+def _weighted_correlation_score(template_image, candidate_image, weights, np) -> float:
+    template = template_image.astype(np.float32, copy=False)
+    candidate = candidate_image.astype(np.float32, copy=False)
+    weights = weights.astype(np.float32, copy=False)
+    weight_sum = float(weights.sum())
+    if weight_sum <= 1e-6:
+        weights = np.ones_like(template, dtype=np.float32)
+        weight_sum = float(weights.sum())
+
+    template_mean = float((template * weights).sum() / weight_sum)
+    candidate_mean = float((candidate * weights).sum() / weight_sum)
+    template_centered = (template - template_mean) * weights
+    candidate_centered = (candidate - candidate_mean) * weights
+    template_energy = float((template_centered * template_centered).sum())
+    candidate_energy = float((candidate_centered * candidate_centered).sum())
+
+    if template_energy <= 1e-6 or candidate_energy <= 1e-6:
+        mean_abs_error = float((np.abs(template - candidate) * weights).sum() / weight_sum)
+        return max(0.0, min(1.0, 1.0 - (mean_abs_error / 255.0)))
+
+    correlation = float((template_centered * candidate_centered).sum() / math.sqrt(template_energy * candidate_energy))
+    return max(0.0, min(1.0, (correlation + 1.0) / 2.0))
+
+
+def _dice_overlap_score(reference_mask_patch, sample_mask_patch, np) -> float:
+    reference_white = reference_mask_patch > 0
+    sample_white = sample_mask_patch > 0
+    reference_count = int(reference_white.sum())
+    sample_count = int(sample_white.sum())
+    if reference_count == 0 and sample_count == 0:
+        return 1.0
+    if reference_count == 0 or sample_count == 0:
+        return 0.0
+    overlap = int((reference_white & sample_white).sum())
+    return float((2.0 * overlap) / float(reference_count + sample_count))
+
+
+def _match_anchor_template(
+    sample_mask,
+    reference_mask,
+    sample_registration_image,
+    reference_registration_image,
+    anchor: dict,
+    search_margin_px: int,
+    np,
+) -> dict | None:
+    if sample_registration_image is None or reference_registration_image is None:
+        return None
+
+    x0, y0, x1, y1 = _resolve_search_window(sample_mask.shape[:2], anchor, search_margin_px)
+    tx0, ty0, tx1, ty1 = _resolve_anchor_template_bounds(reference_mask.shape[:2], anchor, search_margin_px)
+    if tx1 <= tx0 or ty1 <= ty0:
+        return None
+
+    template_image = reference_registration_image[ty0:ty1, tx0:tx1]
+    template_mask = reference_mask[ty0:ty1, tx0:tx1]
+    if template_image.size == 0:
+        return None
+
+    template_feature_pixels = int((template_mask > 0).sum())
+    template_signal = float(template_image.max()) - float(template_image.min())
+    if template_signal <= 1e-6 and template_feature_pixels == 0:
+        return None
+    if template_feature_pixels < 5:
+        return None
+
+    search_image = sample_registration_image[y0:y1, x0:x1]
+    search_mask = sample_mask[y0:y1, x0:x1]
+    template_height, template_width = template_image.shape[:2]
+    if search_image.shape[0] < template_height or search_image.shape[1] < template_width:
+        return None
+
+    anchor_x = int(anchor.get("reference_point", {}).get("x", 0))
+    anchor_y = int(anchor.get("reference_point", {}).get("y", 0))
+    anchor_offset_x = anchor_x - tx0
+    anchor_offset_y = anchor_y - ty0
+
+    weights = 0.25 + (0.75 * (template_mask > 0).astype(np.float32))
+    best_match: dict | None = None
+    best_score = -1.0
+    second_best_score = -1.0
+    max_y = search_image.shape[0] - template_height
+    max_x = search_image.shape[1] - template_width
+
+    for offset_y in range(max_y + 1):
+        for offset_x in range(max_x + 1):
+            candidate_image = search_image[offset_y : offset_y + template_height, offset_x : offset_x + template_width]
+            candidate_mask = search_mask[offset_y : offset_y + template_height, offset_x : offset_x + template_width]
+            image_score = _weighted_correlation_score(template_image, candidate_image, weights, np)
+            mask_score = _dice_overlap_score(template_mask, candidate_mask, np)
+            score = (0.65 * image_score) + (0.35 * mask_score)
+
+            if score > best_score:
+                second_best_score = best_score
+                best_score = score
+                best_match = {
+                    "sample_point": (float(x0 + offset_x + anchor_offset_x), float(y0 + offset_y + anchor_offset_y)),
+                    "confidence": float(score),
+                    "method": "template_match",
+                    "search_window": {
+                        "x": int(x0),
+                        "y": int(y0),
+                        "width": int(x1 - x0),
+                        "height": int(y1 - y0),
+                    },
+                    "template_bounds": {
+                        "x": int(tx0),
+                        "y": int(ty0),
+                        "width": int(tx1 - tx0),
+                        "height": int(ty1 - ty0),
+                    },
+                    "match_bounds": {
+                        "x": int(x0 + offset_x),
+                        "y": int(y0 + offset_y),
+                        "width": int(template_width),
+                        "height": int(template_height),
+                    },
+                    "image_score": float(image_score),
+                    "mask_score": float(mask_score),
+                }
+            elif score > second_best_score:
+                second_best_score = score
+
+    if best_match is None:
+        return None
+
+    score_gap = max(0.0, best_score - max(0.0, second_best_score))
+    uniqueness = max(0.0, min(1.0, score_gap * 4.0))
+    best_match["confidence"] = float(max(0.0, min(1.0, (best_score * 0.8) + (uniqueness * 0.2))))
+    best_match["score_gap"] = float(score_gap)
+    return best_match
+
+
+def _locate_sample_anchor_centroid(mask, anchor: dict, search_margin_px: int, np) -> dict:
     x0, y0, x1, y1 = _resolve_search_window(mask.shape[:2], anchor, search_margin_px)
     window = mask[y0:y1, x0:x1] > 0
     points = np.argwhere(window)
     if points.size == 0:
-        return None, 0.0
+        return {
+            "sample_point": None,
+            "confidence": 0.0,
+            "method": "centroid_fallback",
+            "search_window": {
+                "x": int(x0),
+                "y": int(y0),
+                "width": int(x1 - x0),
+                "height": int(y1 - y0),
+            },
+        }
 
     centroid_y = float(points[:, 0].mean() + y0)
     centroid_x = float(points[:, 1].mean() + x0)
-    return (centroid_x, centroid_y), 1.0
+    window_area = max(1, (y1 - y0) * (x1 - x0))
+    density = min(1.0, float(points.shape[0]) / float(window_area))
+    span_x = float(points[:, 1].max() - points[:, 1].min() + 1)
+    span_y = float(points[:, 0].max() - points[:, 0].min() + 1)
+    compactness = 1.0 / (1.0 + ((span_x / max(1, x1 - x0)) + (span_y / max(1, y1 - y0))) / 2.0)
+    confidence = max(0.05, min(0.75, 0.35 + (0.4 * density) + (0.25 * compactness)))
+    return {
+        "sample_point": (centroid_x, centroid_y),
+        "confidence": float(confidence),
+        "method": "centroid_fallback",
+        "search_window": {
+            "x": int(x0),
+            "y": int(y0),
+            "width": int(x1 - x0),
+            "height": int(y1 - y0),
+        },
+    }
+
+
+def _locate_sample_anchor(
+    sample_mask,
+    reference_mask,
+    anchor: dict,
+    search_margin_px: int,
+    np,
+    *,
+    sample_registration_image=None,
+    reference_registration_image=None,
+) -> dict:
+    template_match = _match_anchor_template(
+        sample_mask,
+        reference_mask,
+        sample_registration_image,
+        reference_registration_image,
+        anchor,
+        search_margin_px,
+        np,
+    )
+    if template_match is not None and template_match.get("sample_point") is not None:
+        return template_match
+    return _locate_sample_anchor_centroid(sample_mask, anchor, search_margin_px, np)
 
 
 def _build_failed_registration_result(
@@ -189,6 +393,31 @@ def _apply_rigid_transform_to_mask(mask, angle_deg: float, shift_x: int, shift_y
     return rotated_mask
 
 
+def _apply_rigid_transform_to_image(image, angle_deg: float, shift_x: int, shift_y: int, cv2, np):
+    if image is None:
+        return None
+    if not abs(angle_deg) > 1e-6 and not shift_x and not shift_y:
+        return image
+    if not hasattr(cv2, "getRotationMatrix2D") or not hasattr(cv2, "warpAffine"):
+        return image
+
+    height, width = image.shape[:2]
+    center = (width / 2.0, height / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    matrix[0, 2] += shift_x
+    matrix[1, 2] += shift_y
+    interpolation = getattr(cv2, "INTER_LINEAR", getattr(cv2, "INTER_NEAREST", 0))
+    border_mode = getattr(cv2, "BORDER_CONSTANT", 0)
+    return cv2.warpAffine(
+        image,
+        np.float32(matrix),
+        (width, height),
+        flags=interpolation,
+        borderMode=border_mode,
+        borderValue=0,
+    )
+
+
 def _compute_mask_overlap_confidence(reference_mask, sample_mask, np) -> float:
     reference_white = reference_mask > 0
     sample_white = sample_mask > 0
@@ -210,6 +439,127 @@ def _compute_mask_centroid_residual(reference_mask, sample_mask, cv2, np) -> flo
     if reference_centroid is None or sample_centroid is None:
         return None
     return float(math.hypot(reference_centroid[0] - sample_centroid[0], reference_centroid[1] - sample_centroid[1]))
+
+
+def _compute_registration_confidence(
+    reference_mask,
+    sample_mask,
+    reference_registration_image,
+    aligned_registration_image,
+    np,
+) -> float:
+    mask_confidence = _compute_mask_overlap_confidence(reference_mask, sample_mask, np)
+    if reference_registration_image is None or aligned_registration_image is None:
+        return float(mask_confidence)
+
+    weights = np.ones_like(reference_registration_image, dtype=np.float32)
+    image_confidence = _weighted_correlation_score(
+        reference_registration_image,
+        aligned_registration_image,
+        weights,
+        np,
+    )
+    return float((0.55 * image_confidence) + (0.45 * mask_confidence))
+
+
+def _refine_registration_with_images(
+    sample_mask,
+    reference_mask,
+    coarse_angle_deg: float,
+    coarse_shift_x: int,
+    coarse_shift_y: int,
+    alignment_cfg: dict,
+    registration_cfg: dict,
+    cv2,
+    np,
+    *,
+    sample_registration_image=None,
+    reference_registration_image=None,
+) -> tuple[object, float, int, int, float, float | None]:
+    coarse_aligned_mask = _apply_rigid_transform_to_mask(
+        sample_mask,
+        coarse_angle_deg,
+        coarse_shift_x,
+        coarse_shift_y,
+        cv2,
+        np,
+    )
+    coarse_aligned_registration_image = _apply_rigid_transform_to_image(
+        sample_registration_image,
+        coarse_angle_deg,
+        coarse_shift_x,
+        coarse_shift_y,
+        cv2,
+        np,
+    )
+    best_angle_deg = float(coarse_angle_deg)
+    best_shift_x = int(coarse_shift_x)
+    best_shift_y = int(coarse_shift_y)
+    best_aligned_mask = coarse_aligned_mask
+    best_confidence = _compute_registration_confidence(
+        reference_mask,
+        coarse_aligned_mask,
+        reference_registration_image,
+        coarse_aligned_registration_image,
+        np,
+    )
+    best_residual = _compute_mask_centroid_residual(reference_mask, coarse_aligned_mask, cv2, np)
+
+    for candidate_angle_deg, candidate_shift_x, candidate_shift_y in _build_rigid_refinement_candidates(
+        coarse_angle_deg,
+        coarse_shift_x,
+        coarse_shift_y,
+        alignment_cfg,
+        registration_cfg,
+    ):
+        if (
+            abs(candidate_angle_deg - best_angle_deg) < 1e-6
+            and candidate_shift_x == best_shift_x
+            and candidate_shift_y == best_shift_y
+        ):
+            continue
+
+        candidate_mask = _apply_rigid_transform_to_mask(
+            sample_mask,
+            candidate_angle_deg,
+            candidate_shift_x,
+            candidate_shift_y,
+            cv2,
+            np,
+        )
+        candidate_registration_image = _apply_rigid_transform_to_image(
+            sample_registration_image,
+            candidate_angle_deg,
+            candidate_shift_x,
+            candidate_shift_y,
+            cv2,
+            np,
+        )
+        candidate_confidence = _compute_registration_confidence(
+            reference_mask,
+            candidate_mask,
+            reference_registration_image,
+            candidate_registration_image,
+            np,
+        )
+        candidate_residual = _compute_mask_centroid_residual(reference_mask, candidate_mask, cv2, np)
+        candidate_residual_rank = float("inf") if candidate_residual is None else candidate_residual
+        best_residual_rank = float("inf") if best_residual is None else best_residual
+        if (
+            candidate_confidence > best_confidence + 1e-6
+            or (
+                abs(candidate_confidence - best_confidence) <= 1e-6
+                and candidate_residual_rank < best_residual_rank
+            )
+        ):
+            best_angle_deg = float(candidate_angle_deg)
+            best_shift_x = int(candidate_shift_x)
+            best_shift_y = int(candidate_shift_y)
+            best_aligned_mask = candidate_mask
+            best_confidence = float(candidate_confidence)
+            best_residual = candidate_residual
+
+    return best_aligned_mask, best_angle_deg, best_shift_x, best_shift_y, float(best_confidence), best_residual
 
 
 def _build_rigid_refinement_candidates(
@@ -343,7 +693,17 @@ def _register_with_rigid_refined(sample_mask, reference_mask, alignment_cfg: dic
     ))
 
 
-def _register_with_anchor_translation(sample_mask, reference_mask, alignment_cfg: dict, registration_cfg: dict, cv2, np) -> RegistrationResult:
+def _register_with_anchor_translation(
+    sample_mask,
+    reference_mask,
+    alignment_cfg: dict,
+    registration_cfg: dict,
+    cv2,
+    np,
+    *,
+    sample_registration_image=None,
+    reference_registration_image=None,
+) -> RegistrationResult:
     anchors = [anchor for anchor in registration_cfg["anchors"] if anchor.get("enabled", True)]
     if not anchors:
         return _build_failed_registration_result(
@@ -363,7 +723,17 @@ def _register_with_anchor_translation(sample_mask, reference_mask, alignment_cfg
         )
 
     anchor = anchors[0]
-    sample_anchor, confidence = _locate_sample_anchor(sample_mask, anchor, registration_cfg["search_margin_px"], np)
+    anchor_match = _locate_sample_anchor(
+        sample_mask,
+        reference_mask,
+        anchor,
+        registration_cfg["search_margin_px"],
+        np,
+        sample_registration_image=sample_registration_image,
+        reference_registration_image=reference_registration_image,
+    )
+    sample_anchor = anchor_match.get("sample_point")
+    confidence = float(anchor_match.get("confidence", 0.0))
     if sample_anchor is None:
         return _build_failed_registration_result(
             sample_mask,
@@ -379,7 +749,16 @@ def _register_with_anchor_translation(sample_mask, reference_mask, alignment_cfg
             quality_gates=dict(registration_cfg["quality_gates"]),
             datum_frame=dict(registration_cfg["datum_frame"]),
             status="anchor_localization_failed",
-            observed_anchors=[{"anchor_id": anchor["anchor_id"], "reference_point": dict(anchor["reference_point"]), "sample_point": None}],
+            observed_anchors=[
+                {
+                    "anchor_id": anchor["anchor_id"],
+                    "reference_point": dict(anchor["reference_point"]),
+                    "sample_point": None,
+                    "confidence": float(anchor_match.get("confidence", 0.0)),
+                    "localization_method": anchor_match.get("method"),
+                    "search_window": anchor_match.get("search_window"),
+                }
+            ],
         )
 
     reference_point = anchor["reference_point"]
@@ -418,12 +797,30 @@ def _register_with_anchor_translation(sample_mask, reference_mask, alignment_cfg
                 "reference_point": dict(anchor["reference_point"]),
                 "sample_point": {"x": float(sample_anchor[0]), "y": float(sample_anchor[1])},
                 "transformed_point": {"x": float(transformed_anchor[0]), "y": float(transformed_anchor[1])},
+                "confidence": float(confidence),
+                "localization_method": anchor_match.get("method"),
+                "search_window": anchor_match.get("search_window"),
+                "template_bounds": anchor_match.get("template_bounds"),
+                "match_bounds": anchor_match.get("match_bounds"),
+                "image_score": anchor_match.get("image_score"),
+                "mask_score": anchor_match.get("mask_score"),
+                "score_gap": anchor_match.get("score_gap"),
             }
         ],
     ))
 
 
-def _register_with_anchor_pair(sample_mask, reference_mask, alignment_cfg: dict, registration_cfg: dict, cv2, np) -> RegistrationResult:
+def _register_with_anchor_pair(
+    sample_mask,
+    reference_mask,
+    alignment_cfg: dict,
+    registration_cfg: dict,
+    cv2,
+    np,
+    *,
+    sample_registration_image=None,
+    reference_registration_image=None,
+) -> RegistrationResult:
     anchors = [anchor for anchor in registration_cfg["anchors"] if anchor.get("enabled", True)]
     if len(anchors) < 2:
         return _build_failed_registration_result(
@@ -443,8 +840,28 @@ def _register_with_anchor_pair(sample_mask, reference_mask, alignment_cfg: dict,
         )
 
     primary_anchor, secondary_anchor = anchors[:2]
-    primary_sample, primary_confidence = _locate_sample_anchor(sample_mask, primary_anchor, registration_cfg["search_margin_px"], np)
-    secondary_sample, secondary_confidence = _locate_sample_anchor(sample_mask, secondary_anchor, registration_cfg["search_margin_px"], np)
+    primary_match = _locate_sample_anchor(
+        sample_mask,
+        reference_mask,
+        primary_anchor,
+        registration_cfg["search_margin_px"],
+        np,
+        sample_registration_image=sample_registration_image,
+        reference_registration_image=reference_registration_image,
+    )
+    secondary_match = _locate_sample_anchor(
+        sample_mask,
+        reference_mask,
+        secondary_anchor,
+        registration_cfg["search_margin_px"],
+        np,
+        sample_registration_image=sample_registration_image,
+        reference_registration_image=reference_registration_image,
+    )
+    primary_sample = primary_match.get("sample_point")
+    secondary_sample = secondary_match.get("sample_point")
+    primary_confidence = float(primary_match.get("confidence", 0.0))
+    secondary_confidence = float(secondary_match.get("confidence", 0.0))
     if primary_sample is None or secondary_sample is None:
         missing_anchor = primary_anchor["anchor_id"] if primary_sample is None else secondary_anchor["anchor_id"]
         return _build_failed_registration_result(
@@ -466,11 +883,17 @@ def _register_with_anchor_pair(sample_mask, reference_mask, alignment_cfg: dict,
                     "anchor_id": primary_anchor["anchor_id"],
                     "reference_point": dict(primary_anchor["reference_point"]),
                     "sample_point": None if primary_sample is None else {"x": float(primary_sample[0]), "y": float(primary_sample[1])},
+                    "confidence": float(primary_confidence),
+                    "localization_method": primary_match.get("method"),
+                    "search_window": primary_match.get("search_window"),
                 },
                 {
                     "anchor_id": secondary_anchor["anchor_id"],
                     "reference_point": dict(secondary_anchor["reference_point"]),
                     "sample_point": None if secondary_sample is None else {"x": float(secondary_sample[0]), "y": float(secondary_sample[1])},
+                    "confidence": float(secondary_confidence),
+                    "localization_method": secondary_match.get("method"),
+                    "search_window": secondary_match.get("search_window"),
                 },
             ],
         )
@@ -549,18 +972,44 @@ def _register_with_anchor_pair(sample_mask, reference_mask, alignment_cfg: dict,
                 "reference_point": dict(primary_anchor["reference_point"]),
                 "sample_point": {"x": float(primary_sample[0]), "y": float(primary_sample[1])},
                 "transformed_point": {"x": float(transformed_primary[0]), "y": float(transformed_primary[1])},
+                "confidence": float(primary_confidence),
+                "localization_method": primary_match.get("method"),
+                "search_window": primary_match.get("search_window"),
+                "template_bounds": primary_match.get("template_bounds"),
+                "match_bounds": primary_match.get("match_bounds"),
+                "image_score": primary_match.get("image_score"),
+                "mask_score": primary_match.get("mask_score"),
+                "score_gap": primary_match.get("score_gap"),
             },
             {
                 "anchor_id": secondary_anchor["anchor_id"],
                 "reference_point": dict(secondary_anchor["reference_point"]),
                 "sample_point": {"x": float(secondary_sample[0]), "y": float(secondary_sample[1])},
                 "transformed_point": {"x": float(transformed_secondary[0]), "y": float(transformed_secondary[1])},
+                "confidence": float(secondary_confidence),
+                "localization_method": secondary_match.get("method"),
+                "search_window": secondary_match.get("search_window"),
+                "template_bounds": secondary_match.get("template_bounds"),
+                "match_bounds": secondary_match.get("match_bounds"),
+                "image_score": secondary_match.get("image_score"),
+                "mask_score": secondary_match.get("mask_score"),
+                "score_gap": secondary_match.get("score_gap"),
             },
         ],
     ))
 
 
-def register_sample_mask(sample_mask, reference_mask, alignment_cfg: dict, cv2, np, align_sample_mask_fn) -> RegistrationResult:
+def register_sample_mask(
+    sample_mask,
+    reference_mask,
+    alignment_cfg: dict,
+    cv2,
+    np,
+    align_sample_mask_fn,
+    *,
+    sample_registration_image=None,
+    reference_registration_image=None,
+) -> RegistrationResult:
     registration_cfg = get_registration_config({"alignment": alignment_cfg})
     enabled = bool(alignment_cfg.get("enabled", True))
     runtime_mode = str(alignment_cfg.get("mode", "moments")).lower()
@@ -581,9 +1030,27 @@ def register_sample_mask(sample_mask, reference_mask, alignment_cfg: dict, cv2, 
         status = "disabled"
         applied_strategy = "identity"
     elif runtime_mode == "anchor_translation":
-        return _register_with_anchor_translation(sample_mask, reference_mask, alignment_cfg, registration_cfg, cv2, np)
+        return _register_with_anchor_translation(
+            sample_mask,
+            reference_mask,
+            alignment_cfg,
+            registration_cfg,
+            cv2,
+            np,
+            sample_registration_image=sample_registration_image,
+            reference_registration_image=reference_registration_image,
+        )
     elif runtime_mode == "anchor_pair":
-        return _register_with_anchor_pair(sample_mask, reference_mask, alignment_cfg, registration_cfg, cv2, np)
+        return _register_with_anchor_pair(
+            sample_mask,
+            reference_mask,
+            alignment_cfg,
+            registration_cfg,
+            cv2,
+            np,
+            sample_registration_image=sample_registration_image,
+            reference_registration_image=reference_registration_image,
+        )
     elif runtime_mode == "rigid_refined":
         return _register_with_rigid_refined(
             sample_mask,
@@ -606,14 +1073,33 @@ def register_sample_mask(sample_mask, reference_mask, alignment_cfg: dict, cv2, 
             cv2,
             np,
         )
+        if sample_registration_image is not None and reference_registration_image is not None:
+            aligned_mask, angle_deg, shift_x, shift_y, confidence, residual = _refine_registration_with_images(
+                sample_mask,
+                reference_mask,
+                float(angle_deg),
+                int(shift_x),
+                int(shift_y),
+                alignment_cfg,
+                registration_cfg,
+                cv2,
+                np,
+                sample_registration_image=sample_registration_image,
+                reference_registration_image=reference_registration_image,
+            )
+            quality = {
+                "confidence": float(confidence),
+                "mean_residual_px": None if residual is None else float(residual),
+            }
+        else:
+            quality = {
+                "confidence": _compute_mask_overlap_confidence(reference_mask, aligned_mask, np),
+                "mean_residual_px": _compute_mask_centroid_residual(reference_mask, aligned_mask, cv2, np),
+            }
         if requested_strategy != runtime_mode:
             fallback_reason = (
                 f"Requested registration strategy '{requested_strategy}' is staged but runtime is using '{runtime_mode}'."
             )
-        quality = {
-            "confidence": _compute_mask_overlap_confidence(reference_mask, aligned_mask, np),
-            "mean_residual_px": _compute_mask_centroid_residual(reference_mask, aligned_mask, cv2, np),
-        }
 
     return _finalize_registration_result(RegistrationResult(
         aligned_mask=aligned_mask,
