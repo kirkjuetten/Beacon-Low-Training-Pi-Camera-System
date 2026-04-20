@@ -250,6 +250,47 @@ def _alignment_warnings(details: dict) -> list[str]:
     return warnings
 
 
+def _build_feature_position_failure_mode(result: dict) -> dict | None:
+    cause_code = str(result.get("inspection_failure_cause") or "").strip().lower()
+    if cause_code not in {"feature_position", "feature_not_found", "light_pipe_position", "light_pipe_not_found"}:
+        return None
+
+    feature_summary = result.get("feature_position_summary", {})
+    if not isinstance(feature_summary, dict):
+        feature_summary = {}
+
+    feature_label = str(feature_summary.get("feature_label") or feature_summary.get("feature_family") or "feature").replace("_", " ").title()
+    radial_offset_px = _optional_float(feature_summary.get("radial_offset_px"))
+    dx_px = _optional_float(feature_summary.get("dx_px"))
+    dy_px = _optional_float(feature_summary.get("dy_px"))
+    center_offset_px = _optional_float(feature_summary.get("center_offset_px"))
+    pair_spacing_delta_px = _optional_float(feature_summary.get("pair_spacing_delta_px"))
+    threshold = _resolve_gate_threshold(result, next(spec for spec in GATE_SPECS if spec["code"] == "worst_section_center_offset_px"))
+
+    if cause_code.endswith("not_found"):
+        summary = f"{feature_label} was not found in the expected datum window"
+    elif dx_px is not None and dy_px is not None:
+        summary = f"{feature_label} delta was dx={dx_px:+.2f}px, dy={dy_px:+.2f}px"
+        if radial_offset_px is not None:
+            summary += f" (radial {radial_offset_px:.2f}px)"
+        if pair_spacing_delta_px is not None:
+            summary += f", spacing delta {pair_spacing_delta_px:.2f}px"
+    elif center_offset_px is not None and threshold is not None:
+        summary = f"{feature_label} center offset was {center_offset_px:.2f}px against limit {threshold:.2f}px"
+    else:
+        summary = f"{feature_label} position failed the datum-position lane"
+
+    return {
+        "cause_code": cause_code,
+        "title": f"{feature_label.lower()} position",
+        "metric_key": "feature_position_summary",
+        "margin": None,
+        "value": radial_offset_px if radial_offset_px is not None else center_offset_px,
+        "threshold": threshold,
+        "summary": summary,
+    }
+
+
 def _diagnose_result(record: dict, result: dict) -> dict:
     status = str(result.get("status", "UNKNOWN"))
     if status == INVALID_CAPTURE:
@@ -280,6 +321,20 @@ def _diagnose_result(record: dict, result: dict) -> dict:
             "primary_cause": "registration_failure",
             "summary": "; ".join(summary_parts),
             "failure_modes": list(result.get("registration_quality_gate_failures", [])),
+            "closest_pass_gates": [],
+            "alignment_warnings": alignment_warnings,
+        }
+
+    feature_failure_mode = _build_feature_position_failure_mode(result)
+    if status == FAIL and feature_failure_mode is not None:
+        alignment_warnings = _alignment_warnings(result)
+        summary_parts = [feature_failure_mode["summary"]]
+        if alignment_warnings:
+            summary_parts.append(alignment_warnings[0])
+        return {
+            "primary_cause": feature_failure_mode["cause_code"],
+            "summary": "; ".join(summary_parts),
+            "failure_modes": [feature_failure_mode],
             "closest_pass_gates": [],
             "alignment_warnings": alignment_warnings,
         }
@@ -405,6 +460,21 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
                     [
                         "Review anchor placement or registration mode if samples are not localizing consistently.",
                         "Relax registration quality gates only after confirming the transform is otherwise stable on approved-good samples.",
+                    ],
+                    {"false_reject_count": count, "cause_code": cause_code},
+                )
+            )
+            continue
+        if cause_code in {"feature_position", "feature_not_found", "light_pipe_position", "light_pipe_not_found"}:
+            recommendations.append(
+                _build_recommendation(
+                    "high" if count == len(false_rejects) and count > 0 else "medium",
+                    "feature_position_tuning",
+                    "Review molded-part feature lane",
+                    f"{count} expected-good images failed on an explicit molded-part feature-position lane.",
+                    [
+                        "Review the localized feature family selection and confirm the reference components represent the intended molded-part landmarks.",
+                        "Tune the center-offset tolerance only after confirming the extractor is tracking the correct isolated or paired geometry.",
                     ],
                     {"false_reject_count": count, "cause_code": cause_code},
                 )

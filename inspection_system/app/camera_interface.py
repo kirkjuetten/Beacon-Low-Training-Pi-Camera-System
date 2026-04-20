@@ -102,6 +102,7 @@ DEFAULT_CONFIG = {
         "max_section_edge_distance_px": None,
         "max_section_width_delta_ratio": None,
         "max_section_center_offset_px": None,
+        "feature_position_families": ["isolated_centroid", "paired_centroid", "datum_section"],
         "section_columns": 12,
     },
     "alignment": {

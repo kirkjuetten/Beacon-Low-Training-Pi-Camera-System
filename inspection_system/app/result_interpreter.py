@@ -14,6 +14,7 @@ REVIEW = "review"
 REASON_MISSING_PRINT = "missing_print"
 REASON_EXTRA_PRINT = "extra_print"
 REASON_UNEVEN_PRINT = "uneven_print"
+REASON_FEATURE_POSITION = "feature_position"
 REASON_REFERENCE_MISMATCH = "reference_mismatch"
 REASON_REGISTRATION_FAILURE = "registration_failure"
 
@@ -21,6 +22,7 @@ REASON_ORDER = [
     REASON_MISSING_PRINT,
     REASON_EXTRA_PRINT,
     REASON_UNEVEN_PRINT,
+    REASON_FEATURE_POSITION,
     REASON_REFERENCE_MISMATCH,
     REASON_REGISTRATION_FAILURE,
 ]
@@ -29,6 +31,7 @@ REASON_LABELS = {
     REASON_MISSING_PRINT: "Missing Print",
     REASON_EXTRA_PRINT: "Extra Print",
     REASON_UNEVEN_PRINT: "Uneven Print",
+    REASON_FEATURE_POSITION: "Feature Position",
     REASON_REFERENCE_MISMATCH: "Reference Mismatch",
     REASON_REGISTRATION_FAILURE: "Placement / Registration",
 }
@@ -71,6 +74,27 @@ def _metric_exceeds_limit(details: dict, value_key: str, threshold_key: str, *, 
     return float(value) < float(threshold)
 
 
+def _is_feature_position_failure(details: dict) -> bool:
+    inspection_failure_cause = str(details.get("inspection_failure_cause", "")).lower()
+    if inspection_failure_cause in {
+        "feature_position",
+        "feature_not_found",
+        "light_pipe_position",
+        "light_pipe_not_found",
+    }:
+        return True
+
+    if str(details.get("section_measurement_frame", "")).lower() != "datum":
+        return False
+    if not bool(details.get("section_center_gate_active", False)):
+        return False
+    return _metric_exceeds_limit(
+        details,
+        "worst_section_center_offset_px",
+        "max_section_center_offset_px",
+    )
+
+
 def _failed_checks(details: dict) -> list[str]:
     if str(details.get("failure_stage", "")).lower() == "registration" or _registration_rejection_reason(details):
         return [REASON_REGISTRATION_FAILURE]
@@ -87,12 +111,8 @@ def _failed_checks(details: dict) -> list[str]:
         failures.append(REASON_UNEVEN_PRINT)
 
     mismatch_failure = False
-    if bool(details.get("section_center_gate_active", False)):
-        mismatch_failure = mismatch_failure or _metric_exceeds_limit(
-            details,
-            "worst_section_center_offset_px",
-            "max_section_center_offset_px",
-        )
+    if _is_feature_position_failure(details):
+        failures.append(REASON_FEATURE_POSITION)
     if bool(details.get("section_width_gate_active", False)):
         mismatch_failure = mismatch_failure or _metric_exceeds_limit(
             details,
@@ -160,17 +180,14 @@ def _is_borderline_failure(details: dict, failure: str) -> bool:
             high_is_bad=False,
         ) >= 0.9
 
+    if failure == REASON_FEATURE_POSITION:
+        return _threshold_ratio(
+            details.get("worst_section_center_offset_px"),
+            details.get("max_section_center_offset_px"),
+            high_is_bad=True,
+        ) >= (1.0 / 1.1)
+
     if failure == REASON_REFERENCE_MISMATCH:
-        if bool(details.get("section_center_gate_active", False)) and _metric_exceeds_limit(
-            details,
-            "worst_section_center_offset_px",
-            "max_section_center_offset_px",
-        ):
-            return _threshold_ratio(
-                details.get("worst_section_center_offset_px"),
-                details.get("max_section_center_offset_px"),
-                high_is_bad=True,
-            ) >= (1.0 / 1.1)
         if bool(details.get("section_width_gate_active", False)) and _metric_exceeds_limit(
             details,
             "worst_section_width_delta_ratio",
@@ -273,6 +290,45 @@ def _make_summary_lines(status: str, primary_reason: Optional[str], details: dic
     elif primary_reason == REASON_UNEVEN_PRINT:
         lines.append("Print is uneven across the part.")
         lines.append(f"Weakest section {min_section_coverage:.1%} / {min_section_limit:.1%}")
+    elif primary_reason == REASON_FEATURE_POSITION:
+        feature_summary = details.get("feature_position_summary", {})
+        feature_label = "Feature"
+        if isinstance(feature_summary, dict):
+            feature_label = str(feature_summary.get("feature_label") or feature_summary.get("feature_family") or "Feature")
+            feature_label = feature_label.replace("_", " ").title()
+
+        if isinstance(feature_summary, dict) and not feature_summary.get("sample_detected", True):
+            lines.append(f"Expected {feature_label.lower()} was not found.")
+            expected_window = feature_summary.get("expected_sample_window") if isinstance(feature_summary, dict) else None
+            if isinstance(expected_window, dict):
+                lines.append(
+                    f"Expected window x={int(expected_window.get('x', 0))}, y={int(expected_window.get('y', 0))}, "
+                    f"w={int(expected_window.get('width', 0))}, h={int(expected_window.get('height', 0))}."
+                )
+        else:
+            lines.append(f"{feature_label} position is out of tolerance.")
+            dx_px = None
+            dy_px = None
+            radial_offset_px = None
+            pair_spacing_delta_px = None
+            if isinstance(feature_summary, dict):
+                dx_px = feature_summary.get("dx_px")
+                dy_px = feature_summary.get("dy_px")
+                radial_offset_px = feature_summary.get("radial_offset_px")
+                pair_spacing_delta_px = feature_summary.get("pair_spacing_delta_px")
+            if dx_px is not None and dy_px is not None:
+                lines.append(f"Delta dx={float(dx_px):+.2f}px, dy={float(dy_px):+.2f}px")
+            offset = feature_summary.get("center_offset_px") if isinstance(feature_summary, dict) else None
+            if offset is None:
+                offset = details.get("worst_section_center_offset_px")
+            if pair_spacing_delta_px is not None:
+                lines.append(f"Pair spacing delta {float(pair_spacing_delta_px):.2f}px")
+            elif radial_offset_px is not None:
+                lines.append(f"Radial offset {float(radial_offset_px):.2f}px")
+            elif offset is not None and details.get("max_section_center_offset_px") is not None:
+                lines.append(
+                    f"Feature center offset {float(offset):.2f}px / {float(details['max_section_center_offset_px']):.2f}px"
+                )
     else:
         lines.append("Part does not match reference.")
         if (

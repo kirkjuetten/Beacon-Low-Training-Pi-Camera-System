@@ -20,7 +20,7 @@ def compute_datum_section_measurements(sample_mask, section_masks, transform_sum
     section_measurements = []
     sample_white = sample_mask > 0
 
-    for section_mask in section_masks:
+    for section_index, section_mask in enumerate(section_masks):
         bounds = _section_bounds(section_mask, np_module)
         if bounds is None:
             continue
@@ -68,6 +68,7 @@ def compute_datum_section_measurements(sample_mask, section_masks, transform_sum
             section_center_offsets_px.append(float("inf"))
             section_measurements.append(
                 {
+                    "section_index": int(section_index),
                     "reference_center": {"x": float(reference_center[0]), "y": float(reference_center[1])},
                     "expected_sample_window": {
                         "x": int(window_x0),
@@ -108,6 +109,7 @@ def compute_datum_section_measurements(sample_mask, section_masks, transform_sum
             section_center_offsets_px.append(float("inf"))
             section_measurements.append(
                 {
+                    "section_index": int(section_index),
                     "reference_center": {"x": float(reference_center[0]), "y": float(reference_center[1])},
                     "expected_sample_window": {
                         "x": int(window_x0),
@@ -143,6 +145,7 @@ def compute_datum_section_measurements(sample_mask, section_masks, transform_sum
         section_center_offsets_px.append(center_offset)
         section_measurements.append(
             {
+                "section_index": int(section_index),
                 "reference_center": {"x": float(reference_center[0]), "y": float(reference_center[1])},
                 "expected_sample_window": {
                     "x": int(window_x0),
