@@ -23,6 +23,7 @@ from inspection_system.app.camera_interface import (
     create_project, switch_project, get_current_project, list_projects,
     delete_project, export_project, import_project, clone_project, rename_project, PROJECTS_DIR
 )
+from inspection_system.app.scrollable_frame import VerticalScrolledFrame
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,13 +38,16 @@ class ProjectManagerGUI:
         self.root.title("Beacon Inspection - Project Manager")
         self._configure_window_size()
 
-        # Create main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
+
+        shell = VerticalScrolledFrame(self.root, content_padding=10)
+        shell.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # Create main frame
+        main_frame = shell.content
+
+        # Configure grid weights
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(1, weight=1)
 

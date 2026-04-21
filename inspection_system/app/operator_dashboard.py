@@ -26,6 +26,7 @@ from inspection_system.app.log_viewer import analyze_logs, load_training_logs
 from inspection_system.app.preview_service import describe_preview_image, find_preview_image
 from inspection_system.app.runtime_controller import describe_edge_gate_status, describe_section_center_gate_status, describe_section_width_gate_status
 from inspection_system.app.runtime_controller import format_commissioning_status_lines, get_commissioning_status
+from inspection_system.app.scrollable_frame import VerticalScrolledFrame
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -106,8 +107,9 @@ class OperatorDashboard:
         self.root.rowconfigure(0, weight=1)
 
         main_padding = 10 if self.compact_layout else 14
-        main = ttk.Frame(self.root, padding=main_padding)
-        main.grid(row=0, column=0, sticky="nsew")
+        shell = VerticalScrolledFrame(self.root, content_padding=main_padding)
+        shell.grid(row=0, column=0, sticky="nsew")
+        main = shell.content
         main.columnconfigure(0, weight=1)
         if not self.compact_layout:
             main.columnconfigure(1, weight=4, uniform="top_panels")

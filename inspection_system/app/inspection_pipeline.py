@@ -5,6 +5,10 @@ import math
 from pathlib import Path
 from inspection_system.app.anomaly_detection_utils import detect_anomalies
 from inspection_system.app.datum_measurement_utils import compute_datum_section_measurements
+from inspection_system.app.feature_measurement_utils import (
+    DEFAULT_MOLDED_PART_FEATURE_FAMILIES,
+    extract_molded_part_feature_measurements,
+)
 from inspection_system.app.preprocessing_utils import build_registration_image
 from inspection_system.app.registration_engine import register_sample_mask
 from inspection_system.app.registration_transform import apply_transform_to_mask, build_transform_summary
@@ -12,6 +16,9 @@ from inspection_system.app.reference_service import check_reference_settings_mat
 
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_FEATURE_POSITION_FAMILIES = (*DEFAULT_MOLDED_PART_FEATURE_FAMILIES, "datum_section")
 
 
 def _finite_float(value):
@@ -226,6 +233,106 @@ def _build_reference_candidate_summary(details: dict, passed: bool, rank: tuple[
     }
 
 
+def _build_feature_position_measurements(section_measurements: list[dict], section_measurement_frame: str) -> tuple[list[dict], dict | None]:
+    if section_measurement_frame != "datum":
+        return [], None
+
+    feature_measurements: list[dict] = []
+    for index, measurement in enumerate(section_measurements):
+        if not isinstance(measurement, dict):
+            continue
+
+        section_index = int(measurement.get("section_index", index))
+        sample_detected = bool(measurement.get("sample_detected", False))
+        center_offset_px = _finite_float(measurement.get("center_offset_px")) if sample_detected else None
+        feature_measurements.append(
+            {
+                "feature_key": f"section_{section_index + 1}",
+                "feature_label": f"Datum Section {section_index + 1}",
+                "feature_family": "datum_section",
+                "feature_type": "datum_section_position",
+                "section_index": section_index,
+                "measurement_frame": section_measurement_frame,
+                "sample_detected": sample_detected,
+                "failure_cause": "feature_not_found" if not sample_detected else "feature_position",
+                "reference_center": measurement.get("reference_center"),
+                "expected_sample_window": measurement.get("expected_sample_window"),
+                "observed_center_reference": measurement.get("observed_center_reference"),
+                "center_offset_px": center_offset_px,
+            }
+        )
+
+    if not feature_measurements:
+        return [], None
+
+    def _rank(entry: dict) -> tuple[int, float]:
+        if not entry.get("sample_detected", False):
+            return (1, float("inf"))
+        return (0, float(entry.get("center_offset_px") or 0.0))
+
+    worst_feature = max(feature_measurements, key=_rank)
+    return feature_measurements, {
+        "feature_label": worst_feature["feature_label"],
+        "feature_family": worst_feature["feature_family"],
+        "feature_type": "datum_section_position",
+        "measurement_frame": section_measurement_frame,
+        "feature_count": len(feature_measurements),
+        "feature_key": worst_feature["feature_key"],
+        "section_index": int(worst_feature["section_index"]),
+        "sample_detected": bool(worst_feature["sample_detected"]),
+        "failure_cause": str(worst_feature["failure_cause"]),
+        "reference_center": worst_feature.get("reference_center"),
+        "expected_sample_window": worst_feature.get("expected_sample_window"),
+        "observed_center_reference": worst_feature.get("observed_center_reference"),
+        "center_offset_px": worst_feature.get("center_offset_px"),
+    }
+
+
+def _resolve_feature_position_families(inspection_cfg: dict) -> list[str]:
+    raw_value = inspection_cfg.get("feature_position_families", DEFAULT_FEATURE_POSITION_FAMILIES)
+    if isinstance(raw_value, str):
+        candidates = [segment.strip() for segment in raw_value.split(",")]
+    elif isinstance(raw_value, (list, tuple)):
+        candidates = [str(segment).strip() for segment in raw_value]
+    else:
+        candidates = list(DEFAULT_FEATURE_POSITION_FAMILIES)
+
+    resolved: list[str] = []
+    valid_names = set(DEFAULT_FEATURE_POSITION_FAMILIES)
+    for candidate in candidates:
+        normalized = str(candidate or "").strip().lower()
+        if normalized in valid_names and normalized not in resolved:
+            resolved.append(normalized)
+
+    if not resolved:
+        return list(DEFAULT_FEATURE_POSITION_FAMILIES)
+    return resolved
+
+
+def _resolve_inspection_failure_cause(
+    registration_failed: bool,
+    threshold_summary: dict,
+    feature_position_summary: dict | None,
+) -> str | None:
+    if registration_failed:
+        return "registration_failure"
+
+    if bool(threshold_summary.get("section_center_gate_active", False)):
+        observed = _finite_float(threshold_summary.get("worst_section_center_offset_px"))
+        allowed = _finite_float(threshold_summary.get("max_section_center_offset_px"))
+        if observed is None or allowed is None or observed > allowed:
+            if feature_position_summary is not None:
+                return str(
+                    feature_position_summary.get(
+                        "failure_cause",
+                        "feature_not_found" if not feature_position_summary.get("sample_detected", True) else "feature_position",
+                    )
+                )
+            return "feature_position"
+
+    return None
+
+
 def _measure_inspection_outcome(
     sample_mask,
     aligned_sample_mask,
@@ -281,6 +388,26 @@ def _measure_inspection_outcome(
         section_measurement_frame = "aligned_mask"
         section_measurements = []
 
+    feature_measurements: list[dict] = []
+    feature_position_summary = None
+    feature_position_families = _resolve_feature_position_families(inspection_cfg)
+    molded_part_feature_families = [
+        family_name for family_name in feature_position_families if family_name != "datum_section"
+    ]
+    if section_measurement_frame == "datum" and molded_part_feature_families:
+        feature_measurements, feature_position_summary = extract_molded_part_feature_measurements(
+            reference_required,
+            edge_measurement_mask,
+            molded_part_feature_families,
+            cv2,
+            np,
+        )
+    if not feature_measurements and "datum_section" in feature_position_families:
+        feature_measurements, feature_position_summary = _build_feature_position_measurements(
+            section_measurements,
+            section_measurement_frame,
+        )
+
     worst_section_width_delta_ratio = max((abs(float(ratio) - 1.0) for ratio in section_width_ratios), default=0.0)
     worst_section_center_offset_px = max(section_center_offsets_px, default=0.0)
     metric_inputs = {
@@ -303,6 +430,8 @@ def _measure_inspection_outcome(
         "section_center_offsets_px": section_center_offsets_px,
         "section_measurement_frame": section_measurement_frame,
         "section_measurements": section_measurements,
+        "feature_measurements": feature_measurements,
+        "feature_position_summary": feature_position_summary,
         "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
         "worst_section_center_offset_px": worst_section_center_offset_px,
         "edge_measurement_frame": edge_measurement_frame,
@@ -525,6 +654,12 @@ def inspect_against_reference(
     if registration_failed:
         passed = False
 
+    inspection_failure_cause = _resolve_inspection_failure_cause(
+        registration_failed,
+        threshold_summary,
+        measurement_result["feature_position_summary"],
+    )
+
     required_coverage = float(threshold_summary["required_coverage"])
     outside_allowed_ratio = float(threshold_summary["outside_allowed_ratio"])
     min_section_coverage = float(threshold_summary["min_section_coverage"])
@@ -593,6 +728,7 @@ def inspect_against_reference(
             "scoring_guard_reason": registration_guard_reason,
         },
         "failure_stage": "registration" if registration_failed else "inspection",
+        "inspection_failure_cause": inspection_failure_cause,
         "required_coverage": required_coverage,
         "outside_allowed_ratio": outside_allowed_ratio,
         "min_section_coverage": min_section_coverage,
@@ -625,6 +761,8 @@ def inspect_against_reference(
         "max_section_width_delta_ratio": threshold_summary.get("max_section_width_delta_ratio"),
         "effective_max_section_width_delta_ratio": threshold_summary.get("effective_max_section_width_delta_ratio"),
         "section_center_offsets_px": section_center_offsets_px,
+        "feature_measurements": measurement_result["feature_measurements"],
+        "feature_position_summary": measurement_result["feature_position_summary"],
         "worst_section_center_offset_px": threshold_summary.get(
             "worst_section_center_offset_px",
             worst_section_center_offset_px,

@@ -257,3 +257,92 @@ def test_inspect_file_returns_registration_failed_when_registration_is_rejected(
     assert result["registration_rejected"] is True
     assert result["registration_rejection_reason"] == "Registration confidence 0.500 was below required minimum 0.900."
     assert result["failure_stage"] == "registration"
+
+
+def test_inspect_file_serializes_named_feature_position_summary(monkeypatch, tmp_path: Path) -> None:
+    image_path = tmp_path / "sample.jpg"
+    image_path.write_text("placeholder", encoding="utf-8")
+
+    active_paths = {
+        "reference_mask": tmp_path / "runtime_mask.png",
+        "reference_image": tmp_path / "runtime_image.png",
+        "reference_dir": tmp_path,
+    }
+
+    monkeypatch.setattr(replay_inspection, "classify_invalid_capture", lambda config, path, active_paths=None: None)
+    monkeypatch.setattr(replay_inspection, "get_active_runtime_paths", lambda: active_paths)
+    monkeypatch.setattr(replay_inspection, "load_anomaly_detector", lambda paths: None)
+    monkeypatch.setattr(
+        replay_inspection,
+        "list_runtime_reference_candidates",
+        lambda config, paths: [
+            {
+                "reference_id": "golden",
+                "label": "Golden Reference",
+                "role": "golden",
+                "reference_mask_path": active_paths["reference_mask"],
+                "reference_image_path": active_paths["reference_image"],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        replay_inspection,
+        "inspect_against_references",
+        lambda *args, **kwargs: (
+            False,
+            {
+                "reference_id": "golden",
+                "reference_label": "Golden Reference",
+                "reference_role": "golden",
+                "reference_strategy": "hybrid",
+                "reference_candidate_count": 1,
+                "evaluated_reference_ids": ["golden"],
+                "reference_candidate_errors": [],
+                "reference_candidate_summaries": [],
+                "required_coverage": 0.95,
+                "outside_allowed_ratio": 0.01,
+                "min_section_coverage": 0.9,
+                "sample_white_pixels": 42,
+                "best_angle_deg": 0.0,
+                "best_shift_x": 0,
+                "best_shift_y": 0,
+                "registration": {
+                    "status": "aligned",
+                    "runtime_mode": "anchor_translation",
+                    "applied_strategy": "anchor_translation",
+                    "datum_frame": "reference_mask",
+                },
+                "failure_stage": "inspection",
+                "edge_measurement_frame": "datum",
+                "section_measurement_frame": "datum",
+                "feature_position_summary": {
+                    "feature_key": "paired_feature_1",
+                    "feature_label": "Paired Feature 1",
+                    "feature_family": "paired_centroid",
+                    "feature_type": "paired_centroid_position",
+                    "measurement_frame": "datum",
+                    "feature_count": 1,
+                    "sample_detected": True,
+                    "failure_cause": "feature_position",
+                    "reference_center": {"x": 80.0, "y": 64.0},
+                    "observed_center_reference": {"x": 83.0, "y": 63.0},
+                    "dx_px": 3.0,
+                    "dy_px": -1.0,
+                    "radial_offset_px": 3.162278,
+                    "center_offset_px": 3.0,
+                    "pair_spacing_reference_px": 18.0,
+                    "pair_spacing_observed_px": 18.75,
+                    "pair_spacing_delta_px": 0.75,
+                },
+            },
+        ),
+    )
+
+    result = replay_inspection.inspect_file({"inspection": {}}, image_path, active_paths=active_paths)
+
+    assert result["status"] == replay_inspection.FAIL
+    assert result["inspection_failure_cause"] == "feature_position"
+    assert result["feature_position_summary"]["feature_key"] == "paired_feature_1"
+    assert result["feature_position_summary"]["dx_px"] == 3.0
+    assert result["feature_position_summary"]["dy_px"] == -1.0
+    assert result["feature_position_summary"]["pair_spacing_delta_px"] == 0.75

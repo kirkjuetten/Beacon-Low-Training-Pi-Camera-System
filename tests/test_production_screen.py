@@ -4,6 +4,7 @@ from inspection_system.app.production_screen import (
 from inspection_system.app.result_interpreter import (
     GOOD,
     REASON_EXTRA_PRINT,
+    REASON_FEATURE_POSITION,
     REASON_MISSING_PRINT,
     REASON_REGISTRATION_FAILURE,
     REASON_REFERENCE_MISMATCH,
@@ -154,6 +155,14 @@ def test_determine_operator_outcome_uses_reference_mismatch_for_section_center_g
     details.update(
         {
             "section_center_gate_active": True,
+            "section_measurement_frame": "datum",
+            "inspection_failure_cause": "feature_position",
+            "feature_position_summary": {
+                "feature_type": "datum_section_position",
+                "section_index": 0,
+                "sample_detected": True,
+                "center_offset_px": 1.2,
+            },
             "worst_section_center_offset_px": 1.2,
             "max_section_center_offset_px": 0.6,
         }
@@ -162,7 +171,9 @@ def test_determine_operator_outcome_uses_reference_mismatch_for_section_center_g
     outcome = determine_operator_outcome(False, details)
 
     assert outcome.status == REJECT
-    assert outcome.primary_reason == REASON_REFERENCE_MISMATCH
+    assert outcome.primary_reason == REASON_FEATURE_POSITION
+    assert outcome.summary_lines[0] == "Feature position is out of tolerance."
+    assert outcome.summary_lines[1] == "Feature center offset 1.20px / 0.60px"
 
 
 def test_determine_operator_outcome_routes_registration_failures_to_reload_review() -> None:

@@ -226,6 +226,61 @@ def test_record_feedback_accepts_final_class_and_defect_category(tmp_path) -> No
     assert record["metrics"]["best_shift_x"] == 3
 
 
+def test_draw_metrics_ignores_none_optional_geometry_values() -> None:
+    class FakeFont:
+        def get_linesize(self):
+            return 14
+
+        def render(self, text, antialias, color):
+            return text
+
+    class FakeScreen:
+        def __init__(self):
+            self.calls = []
+
+        def blit(self, text, position):
+            self.calls.append((text, position))
+
+    class FakeDisplay:
+        WHITE = (255, 255, 255)
+
+        def __init__(self):
+            self.small_font = FakeFont()
+            self.screen = FakeScreen()
+
+    area = type("Rect", (), {"y": 0, "height": 200, "x": 0})()
+    fake_display = FakeDisplay()
+
+    interactive_training.InspectionDisplay.draw_metrics(
+        fake_display,
+        {
+            "required_coverage": 0.95,
+            "min_required_coverage": 0.92,
+            "outside_allowed_ratio": 0.01,
+            "max_outside_allowed_ratio": 0.02,
+            "min_section_coverage": 0.9,
+            "min_section_coverage_limit": 0.85,
+            "best_angle_deg": 0.0,
+            "best_shift_x": 0,
+            "best_shift_y": 0,
+            "mean_edge_distance_px": 1.2,
+            "max_mean_edge_distance_px": 2.0,
+            "worst_section_edge_distance_px": None,
+            "max_section_edge_distance_px": 1.75,
+            "worst_section_width_delta_ratio": 0.1,
+            "max_section_width_delta_ratio": 0.2,
+            "worst_section_center_offset_px": None,
+            "max_section_center_offset_px": 1.0,
+        },
+        area,
+    )
+
+    rendered_lines = [text for text, _ in fake_display.screen.calls]
+    assert any("Mean Edge Distance" in line for line in rendered_lines)
+    assert all("Worst Section Edge Distance" not in line for line in rendered_lines)
+    assert all("Worst Section Center Offset" not in line for line in rendered_lines)
+
+
 def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config_path.write_text(

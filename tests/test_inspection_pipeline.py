@@ -484,6 +484,9 @@ def test_inspect_against_reference_supports_anchor_translation_runtime_summary()
     assert details["registration"]["observed_anchors"][0]["anchor_id"] == "anchor_a"
     assert details["edge_measurement_frame"] == "datum"
     assert details["section_measurement_frame"] == "datum"
+    assert details["feature_measurements"][0]["feature_type"] == "datum_section_position"
+    assert details["feature_measurements"][0]["section_index"] == 0
+    assert details["feature_position_summary"]["feature_key"] == "section_1"
     assert details["section_measurements"][0]["sample_detected"] is True
 
 
@@ -901,5 +904,8 @@ def test_inspect_against_reference_rejects_when_registration_quality_gate_fails(
     assert details['registration']['rejection_reason'] is not None
     assert details['registration']['quality_gate_failures'][0]['gate_key'] == 'min_confidence'
     assert details['failure_stage'] == 'registration'
+    assert details['inspection_failure_cause'] == 'registration_failure'
     assert details['edge_measurement_frame'] == 'aligned_mask'
     assert details['section_measurement_frame'] == 'aligned_mask'
+    assert details['feature_measurements'] == []
+    assert details['feature_position_summary'] is None

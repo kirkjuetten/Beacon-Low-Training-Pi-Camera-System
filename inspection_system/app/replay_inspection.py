@@ -94,6 +94,40 @@ def _serialize_reference_candidate_summaries(summaries: list[dict] | None) -> li
     return serialized
 
 
+def _serialize_feature_position_summary(summary: dict | None) -> dict | None:
+    if not isinstance(summary, dict):
+        return None
+
+    return {
+        "feature_key": summary.get("feature_key"),
+        "feature_label": summary.get("feature_label"),
+        "feature_family": summary.get("feature_family"),
+        "feature_type": summary.get("feature_type"),
+        "measurement_frame": summary.get("measurement_frame"),
+        "feature_count": int(summary.get("feature_count", 0)),
+        "sample_detected": bool(summary.get("sample_detected", False)),
+        "failure_cause": summary.get("failure_cause"),
+        "reference_center": summary.get("reference_center"),
+        "reference_centers": summary.get("reference_centers"),
+        "expected_sample_window": summary.get("expected_sample_window"),
+        "observed_center_reference": summary.get("observed_center_reference"),
+        "observed_centers_reference": summary.get("observed_centers_reference"),
+        "reference_area_px": summary.get("reference_area_px"),
+        "observed_area_px": summary.get("observed_area_px"),
+        "dx_px": _round_optional_float(summary.get("dx_px")),
+        "dy_px": _round_optional_float(summary.get("dy_px")),
+        "radial_offset_px": _round_optional_float(summary.get("radial_offset_px")),
+        "center_offset_px": _round_optional_float(summary.get("center_offset_px")),
+        "feature_members": summary.get("feature_members"),
+        "pair_spacing_reference_px": _round_optional_float(summary.get("pair_spacing_reference_px")),
+        "pair_spacing_observed_px": _round_optional_float(summary.get("pair_spacing_observed_px")),
+        "pair_spacing_delta_px": _round_optional_float(summary.get("pair_spacing_delta_px")),
+        "pair_angle_reference_deg": _round_optional_float(summary.get("pair_angle_reference_deg")),
+        "pair_angle_observed_deg": _round_optional_float(summary.get("pair_angle_observed_deg")),
+        "pair_angle_delta_deg": _round_optional_float(summary.get("pair_angle_delta_deg")),
+    }
+
+
 def _resolve_result_status(passed: bool, details: dict) -> str:
     registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
     if passed:
@@ -101,6 +135,24 @@ def _resolve_result_status(passed: bool, details: dict) -> str:
     if registration.get("rejection_reason"):
         return REGISTRATION_FAILED
     return FAIL
+
+
+def _resolve_replay_failure_cause(passed: bool, details: dict) -> str | None:
+    if passed:
+        return None
+
+    inspection_failure_cause = details.get("inspection_failure_cause")
+    if inspection_failure_cause:
+        return str(inspection_failure_cause)
+
+    if str(details.get("failure_stage", "")).lower() == "registration":
+        return "registration_failure"
+
+    feature_position_summary = details.get("feature_position_summary")
+    if isinstance(feature_position_summary, dict) and feature_position_summary.get("failure_cause"):
+        return str(feature_position_summary.get("failure_cause"))
+
+    return None
 
 
 def classify_invalid_capture(config: dict, image_path: Path, active_paths: dict | None = None) -> str | None:
@@ -217,8 +269,10 @@ def inspect_file(config: dict, image_path: Path, active_paths: dict | None = Non
         "registration_rejection_reason": details.get("registration", {}).get("rejection_reason"),
         "registration_quality_gate_failures": list(details.get("registration", {}).get("quality_gate_failures", [])),
         "failure_stage": details.get("failure_stage"),
+        "inspection_failure_cause": _resolve_replay_failure_cause(passed, details),
         "edge_measurement_frame": details.get("edge_measurement_frame"),
         "section_measurement_frame": details.get("section_measurement_frame"),
+        "feature_position_summary": _serialize_feature_position_summary(details.get("feature_position_summary")),
         "mean_edge_distance_px": _round_optional_float(details.get("mean_edge_distance_px")),
         "max_mean_edge_distance_px": _round_optional_float(details.get("max_mean_edge_distance_px")),
         "effective_max_mean_edge_distance_px": _round_optional_float(details.get("effective_max_mean_edge_distance_px")),

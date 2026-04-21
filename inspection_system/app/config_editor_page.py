@@ -38,6 +38,7 @@ from inspection_system.app.registration_schema import (
     get_registration_config,
     normalize_registration_anchors,
 )
+from inspection_system.app.scrollable_frame import VerticalScrolledFrame
 from inspection_system.app.touch_keyboard import TouchKeyboardManager
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -209,7 +210,14 @@ class ROISetupDialog:
         self.dialog.columnconfigure(1, weight=2)
         self.dialog.rowconfigure(0, weight=1)
 
-        canvas_frame = ttk.LabelFrame(self.dialog, text="ROI Image", padding=10)
+        shell = VerticalScrolledFrame(self.dialog, content_padding=12)
+        shell.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        main = shell.content
+        main.columnconfigure(0, weight=4)
+        main.columnconfigure(1, weight=2)
+        main.rowconfigure(0, weight=1)
+
+        canvas_frame = ttk.LabelFrame(main, text="ROI Image", padding=10)
         canvas_frame.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
         canvas_frame.columnconfigure(0, weight=1)
         canvas_frame.rowconfigure(0, weight=1)
@@ -221,7 +229,7 @@ class ROISetupDialog:
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
 
-        controls = ttk.LabelFrame(self.dialog, text="ROI Controls", padding=10)
+        controls = ttk.LabelFrame(main, text="ROI Controls", padding=10)
         controls.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
         controls.columnconfigure(1, weight=1)
 
@@ -504,7 +512,14 @@ class RegistrationSetupDialog:
         self.dialog.columnconfigure(1, weight=4)
         self.dialog.rowconfigure(0, weight=1)
 
-        canvas_frame = ttk.LabelFrame(self.dialog, text="Reference / Preview Image", padding=10)
+        shell = VerticalScrolledFrame(self.dialog, content_padding=12)
+        shell.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        main = shell.content
+        main.columnconfigure(0, weight=5)
+        main.columnconfigure(1, weight=4)
+        main.rowconfigure(0, weight=1)
+
+        canvas_frame = ttk.LabelFrame(main, text="Reference / Preview Image", padding=10)
         canvas_frame.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
         canvas_frame.columnconfigure(0, weight=1)
         canvas_frame.rowconfigure(0, weight=1)
@@ -516,7 +531,7 @@ class RegistrationSetupDialog:
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
 
-        controls = ttk.LabelFrame(self.dialog, text="Registration Commissioning", padding=10)
+        controls = ttk.LabelFrame(main, text="Registration Commissioning", padding=10)
         controls.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
         controls.columnconfigure(0, weight=1)
         controls.rowconfigure(7, weight=1)
@@ -590,9 +605,18 @@ class RegistrationSetupDialog:
         ttk.Button(anchor_frame, text="Remove", command=self._remove_anchor).grid(row=1, column=1, sticky="ew", pady=2)
         ttk.Button(anchor_frame, text="Pick Point", command=self._begin_pick_point).grid(row=2, column=1, sticky="ew", pady=2)
         ttk.Button(anchor_frame, text="Draw Window", command=self._begin_draw_window).grid(row=3, column=1, sticky="ew", pady=2)
+        ttk.Label(
+            anchor_frame,
+            text=(
+                "Pick Point: click the feature center on the image.\n"
+                "Draw Window: drag a box around where that same feature may appear."
+            ),
+            justify="left",
+            wraplength=420,
+        ).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
         anchor_fields = ttk.Frame(anchor_frame)
-        anchor_fields.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        anchor_fields.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         anchor_fields.columnconfigure(1, weight=1)
         anchor_fields.columnconfigure(3, weight=1)
         anchor_rows = [
@@ -841,15 +865,17 @@ class RegistrationSetupDialog:
         if self.original_image is None or self.active_anchor_index is None:
             return
         image_x, image_y = self._canvas_to_image(int(event.x), int(event.y))
+        anchor_id = self.anchor_id_var.get().strip() or f"anchor_{self.active_anchor_index + 1}"
         if self.interaction_mode == "point":
             self.anchor_point_x_var.set(str(image_x))
             self.anchor_point_y_var.set(str(image_y))
             self._apply_anchor_fields()
             self.interaction_mode = None
-            self.status_var.set("Anchor reference point updated.")
+            self.status_var.set(f"Anchor {anchor_id} point set to ({image_x}, {image_y}).")
             return
         if self.interaction_mode == "window":
             self._drag_anchor = (image_x, image_y)
+            self.status_var.set(f"Anchor {anchor_id} window start at ({image_x}, {image_y}). Drag to size the search area.")
 
     def _on_canvas_drag(self, event) -> None:
         if self.original_image is None or self.active_anchor_index is None or self.interaction_mode != "window" or self._drag_anchor is None:
@@ -861,10 +887,20 @@ class RegistrationSetupDialog:
         self.anchor_window_w_var.set(str(abs(end_x - start_x)))
         self.anchor_window_h_var.set(str(abs(end_y - start_y)))
         self._apply_anchor_fields()
+        anchor_id = self.anchor_id_var.get().strip() or f"anchor_{self.active_anchor_index + 1}"
+        self.status_var.set(
+            f"Anchor {anchor_id} window: x={min(start_x, end_x)}, y={min(start_y, end_y)}, "
+            f"w={abs(end_x - start_x)}, h={abs(end_y - start_y)}."
+        )
 
     def _on_canvas_release(self, _event) -> None:
         if self.interaction_mode == "window" and self._drag_anchor is not None:
-            self.status_var.set("Anchor search window updated.")
+            anchor_id = self.anchor_id_var.get().strip() or (
+                f"anchor_{self.active_anchor_index + 1}" if self.active_anchor_index is not None else "anchor"
+            )
+            self.status_var.set(
+                f"Anchor {anchor_id} search window updated. Use the X/Y/W/H fields only for fine adjustments."
+            )
         self._drag_anchor = None
         if self.interaction_mode == "window":
             self.interaction_mode = None
@@ -909,14 +945,20 @@ class RegistrationSetupDialog:
             self.status_var.set("Select an anchor first.")
             return
         self.interaction_mode = "point"
-        self.status_var.set("Click on the image to set the selected anchor point.")
+        anchor_id = self.anchor_id_var.get().strip() or f"anchor_{self.active_anchor_index + 1}"
+        self.status_var.set(
+            f"Click on the image to set the center of anchor {anchor_id}. Choose a stable, identifiable local feature."
+        )
 
     def _begin_draw_window(self) -> None:
         if self.active_anchor_index is None:
             self.status_var.set("Select an anchor first.")
             return
         self.interaction_mode = "window"
-        self.status_var.set("Drag on the image to define the selected anchor search window.")
+        anchor_id = self.anchor_id_var.get().strip() or f"anchor_{self.active_anchor_index + 1}"
+        self.status_var.set(
+            f"Drag on the image to define the search area for anchor {anchor_id}. Cover the feature's expected movement range."
+        )
 
     def _save_setup(self) -> None:
         if self.active_anchor_index is not None:
@@ -966,8 +1008,9 @@ class ConfigEditorPage:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        main = ttk.Frame(self.root, padding=14)
-        main.grid(row=0, column=0, sticky="nsew")
+        shell = VerticalScrolledFrame(self.root, content_padding=14)
+        shell.grid(row=0, column=0, sticky="nsew")
+        main = shell.content
         main.columnconfigure(0, weight=5, uniform="main_panels")
         main.columnconfigure(1, weight=6, uniform="main_panels")
         main.rowconfigure(1, weight=1)

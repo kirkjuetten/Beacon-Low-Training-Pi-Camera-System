@@ -26,6 +26,7 @@ from inspection_system.app.reference_service import list_runtime_reference_candi
 from inspection_system.app.result_interpreter import (
     GOOD,
     REASON_EXTRA_PRINT,
+    REASON_FEATURE_POSITION,
     REASON_REGISTRATION_FAILURE,
     REASON_LABELS,
     REASON_MISSING_PRINT,
@@ -302,6 +303,7 @@ class ProductionDisplay:
                 REASON_MISSING_PRINT: "Miss",
                 REASON_EXTRA_PRINT: "Extra",
                 REASON_UNEVEN_PRINT: "Uneven",
+                REASON_FEATURE_POSITION: "Pos",
                 REASON_REFERENCE_MISMATCH: "Match",
                 REASON_REGISTRATION_FAILURE: "Place",
             }

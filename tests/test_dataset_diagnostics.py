@@ -125,6 +125,39 @@ def test_diagnose_result_distinguishes_registration_failure() -> None:
     assert "Registration confidence" in diagnosis["summary"]
 
 
+def test_diagnose_result_groups_named_molded_feature_position_failures() -> None:
+    diagnosis = _diagnose_result(
+        {},
+        {
+            "status": FAIL,
+            "inspection_failure_cause": "feature_position",
+            "feature_position_summary": {
+                "feature_key": "paired_feature_1",
+                "feature_label": "Paired Feature 1",
+                "feature_family": "paired_centroid",
+                "feature_type": "paired_centroid_position",
+                "sample_detected": True,
+                "dx_px": 3.0,
+                "dy_px": -1.0,
+                "radial_offset_px": 3.162278,
+                "center_offset_px": 3.0,
+                "pair_spacing_delta_px": 0.75,
+            },
+            "best_angle_deg": 0.0,
+            "best_shift_x": 0,
+            "best_shift_y": 0,
+            "max_section_center_offset_px": 1.0,
+            "effective_max_section_center_offset_px": 1.0,
+            "section_center_gate_active": True,
+        },
+    )
+
+    assert diagnosis["primary_cause"] == "feature_position"
+    assert diagnosis["failure_modes"][0]["cause_code"] == "feature_position"
+    assert "Paired Feature 1" in diagnosis["summary"]
+    assert "spacing delta 0.75px" in diagnosis["summary"]
+
+
 def test_resolve_project_context_uses_project_snapshot_near_source(tmp_path: Path) -> None:
     project_root = tmp_path / "inspection_system" / "projects" / "5096v2.0"
     config_file = project_root / "config" / "camera_config.json"
