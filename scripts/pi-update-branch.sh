@@ -11,7 +11,8 @@ fi
 
 cd "$REPO_DIR"
 
-git fetch --prune origin
+git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+git fetch --prune origin "$BRANCH":"refs/remotes/origin/$BRANCH"
 
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
   git checkout "$BRANCH"
