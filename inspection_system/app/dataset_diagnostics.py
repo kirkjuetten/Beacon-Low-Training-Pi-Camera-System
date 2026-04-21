@@ -408,6 +408,20 @@ def _build_recommendation(priority: str, category: str, title: str, rationale: s
     }
 
 
+def _active_lane_id(result: dict) -> str | None:
+    inspection_program = result.get("inspection_program", {})
+    if isinstance(inspection_program, dict) and inspection_program.get("active_lane_id"):
+        return str(inspection_program.get("active_lane_id"))
+    return None
+
+
+def _primary_lane_id(result: dict) -> str | None:
+    inspection_program = result.get("inspection_program", {})
+    if isinstance(inspection_program, dict) and inspection_program.get("primary_lane_id"):
+        return str(inspection_program.get("primary_lane_id"))
+    return None
+
+
 def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> dict:
     results = evaluation_report.get("results", [])
     false_rejects = [result for result in results if result.get("expected_status") == PASS and result.get("actual_status") != PASS]
@@ -420,6 +434,12 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
         result.get("diagnosis", {}).get("primary_cause") or "unknown_failure"
         for result in false_rejects
     )
+    false_reject_lane_counts = Counter(
+        lane_id
+        for result in false_rejects
+        for lane_id in [_active_lane_id(result.get("result", {}))]
+        if lane_id is not None
+    )
     false_reject_patterns = [
         {
             "cause_code": cause_code,
@@ -430,6 +450,12 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
     ]
 
     false_accept_category_counts = Counter(result.get("defect_category") or "unlabeled_reject" for result in false_accepts)
+    false_accept_lane_counts = Counter(
+        lane_id
+        for result in false_accepts
+        for lane_id in [_primary_lane_id(result.get("result", {}))]
+        if lane_id is not None
+    )
     false_accept_near_gate_counts = Counter()
     feature_gap_categories = Counter()
     for result in false_accepts:
@@ -445,6 +471,16 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
 
     invalid_capture_reasons = Counter(
         result.get("diagnosis", {}).get("summary") or result.get("actual_status") for result in invalid_capture_misses
+    )
+    registration_status_counts = Counter(
+        str(result.get("result", {}).get("registration_status") or "unknown")
+        for result in results
+        if result.get("result", {}).get("registration_status")
+    )
+    registration_rejection_reason_counts = Counter(
+        str(result.get("result", {}).get("registration_rejection_reason"))
+        for result in results
+        if result.get("result", {}).get("registration_rejection_reason")
     )
 
     recommendations = []
@@ -494,6 +530,22 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
             )
         )
 
+    if false_reject_lane_counts:
+        lane_id, count = false_reject_lane_counts.most_common(1)[0]
+        recommendations.append(
+            _build_recommendation(
+                "medium",
+                "lane_tuning",
+                f"Review {lane_id} lane false rejects",
+                f"{count} expected-good images failed in active lane '{lane_id}'.",
+                [
+                    "Replay the saved challenge set filtered to that lane and inspect which thresholds or localized features are driving the failures.",
+                    "Tune lane-specific thresholds before adjusting unrelated gates globally.",
+                ],
+                {"lane_id": lane_id, "false_reject_count": count},
+            )
+        )
+
     for cause_code, count in false_accept_near_gate_counts.most_common(2):
         spec = spec_by_code.get(cause_code)
         if spec is None:
@@ -522,6 +574,22 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
                     "Review whether SSIM, ML gating, or new localized geometry checks should be enabled for those categories.",
                 ],
                 {"defect_categories": top_categories, "false_accept_count": sum(feature_gap_categories.values())},
+            )
+        )
+
+    if false_accept_lane_counts:
+        lane_id, count = false_accept_lane_counts.most_common(1)[0]
+        recommendations.append(
+            _build_recommendation(
+                "medium",
+                "lane_escape_review",
+                f"Review reject escapes against {lane_id} lane",
+                f"{count} expected-reject images still passed through primary lane '{lane_id}'.",
+                [
+                    "Inspect saved reject images lane-by-lane to confirm whether that lane needs a tighter gate or an additional localized feature.",
+                    "Confirm the primary lane for those inspections matches the intended defect scope.",
+                ],
+                {"lane_id": lane_id, "false_accept_count": count},
             )
         )
 
@@ -575,21 +643,38 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
         high_level_findings.append(
             f"Top false-reject driver: {top_false_reject['cause_code']} ({top_false_reject['count']} images)."
         )
+    if false_reject_lane_counts:
+        lane_id, count = false_reject_lane_counts.most_common(1)[0]
+        high_level_findings.append(f"Top false-reject lane: {lane_id} ({count} images).")
     if false_accept_category_counts:
         category, count = false_accept_category_counts.most_common(1)[0]
         high_level_findings.append(f"Top reject escape category: {category} ({count} images).")
+    if false_accept_lane_counts:
+        lane_id, count = false_accept_lane_counts.most_common(1)[0]
+        high_level_findings.append(f"Top reject escape lane: {lane_id} ({count} images).")
     if invalid_capture_misses:
         high_level_findings.append(f"Invalid-capture misses: {len(invalid_capture_misses)} images.")
+    if registration_status_counts:
+        status, count = registration_status_counts.most_common(1)[0]
+        high_level_findings.append(f"Most common registration status: {status} ({count} images).")
     if not high_level_findings:
         high_level_findings.append("No dominant evaluation failure patterns were detected in this episode.")
 
     return {
         "high_level_findings": high_level_findings,
         "false_reject_patterns": false_reject_patterns,
+        "lane_patterns": {
+            "false_rejects_by_active_lane": dict(false_reject_lane_counts),
+            "false_accepts_by_primary_lane": dict(false_accept_lane_counts),
+        },
         "false_accept_patterns": {
             "by_defect_category": dict(false_accept_category_counts),
             "near_gate_counts": dict(false_accept_near_gate_counts),
             "feature_gap_categories": dict(feature_gap_categories),
+        },
+        "registration_patterns": {
+            "status_counts": dict(registration_status_counts),
+            "rejection_reasons": dict(registration_rejection_reason_counts),
         },
         "invalid_capture_patterns": dict(invalid_capture_reasons),
         "recommendations": recommendations,

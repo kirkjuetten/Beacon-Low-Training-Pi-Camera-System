@@ -84,6 +84,9 @@ def _is_feature_position_failure(details: dict) -> bool:
     }:
         return True
 
+    if bool(details.get("feature_gate_active", False)) and not bool(details.get("feature_gate_passed", True)):
+        return True
+
     if str(details.get("section_measurement_frame", "")).lower() != "datum":
         return False
     if not bool(details.get("section_center_gate_active", False)):
@@ -181,6 +184,14 @@ def _is_borderline_failure(details: dict, failure: str) -> bool:
         ) >= 0.9
 
     if failure == REASON_FEATURE_POSITION:
+        if bool(details.get("feature_gate_active", False)) and not bool(details.get("feature_gate_passed", True)):
+            ratio = details.get("feature_gate_ratio")
+            if ratio is None:
+                return False
+            try:
+                return (1.0 / max(float(ratio), 1e-9)) >= (1.0 / 1.1)
+            except (TypeError, ValueError):
+                return False
         return _threshold_ratio(
             details.get("worst_section_center_offset_px"),
             details.get("max_section_center_offset_px"),

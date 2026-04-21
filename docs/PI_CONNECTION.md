@@ -131,18 +131,20 @@ ssh -4 pi@pi-inspect
 
 ```bash
 cd ~/Beacon-Low-Training-Pi-Camera-System
-git pull origin feature/next-phase-ui-workflow
+./scripts/pi-update-branch.sh <branch-name>
 ```
 
 3. Run a quick smoke test:
 
 ```bash
+python3 -m inspection_system.app.capture_test pilot-readiness
 python3 -m inspection_system.app.capture_test list-projects
 python3 -m inspection_system.app.capture_test capture
 python3 -m inspection_system.app.capture_test inspect
 ```
 
 If those three commands run, the system is in a good state for testing/debugging.
+If those four commands run, the system is in a good state for testing/debugging.
 
 ## How We Work (Repeatable Dev Loop)
 
@@ -150,7 +152,7 @@ This is the team workflow we used successfully:
 
 1. Edit code locally in VS Code.
 2. Commit and push to GitHub branch.
-3. On Pi over SSH: `git pull`.
+3. On Pi over SSH: `./scripts/pi-update-branch.sh <branch-name>`.
 4. Run target command (`capture`, `inspect`, or other).
 5. Observe behavior on real hardware and report output.
 6. Repeat.
@@ -187,7 +189,7 @@ You should not need to redo these each session.
 No. Today included one-time setup and bug-fix work. Typical next session should be:
 
 1. SSH in.
-2. `git pull`.
+2. `./scripts/pi-update-branch.sh <branch-name>`.
 3. Run smoke commands.
 
 If anything fails, capture terminal output and continue the normal debug loop.
@@ -246,6 +248,7 @@ What it creates:
 Daily use:
 
 1. Pull updates as normal: `git pull origin feature/next-phase-ui-workflow`
+1. Pull updates as normal: `./scripts/pi-update-branch.sh <branch-name>`
 2. Tap **Beacon Inspection Dashboard** desktop icon.
 
 Why this stays stable:

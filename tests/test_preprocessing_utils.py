@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from preprocessing_utils import build_registration_image, get_roi, make_binary_mask
+from inspection_system.app.segmentation import resolve_segmentation_settings
 
 
 class FakeCv2:
@@ -132,6 +133,43 @@ def test_make_binary_mask_supports_fixed_inv() -> None:
         255,
         fake_cv2.THRESH_BINARY_INV,
     )
+
+
+def test_make_binary_mask_supports_explicit_segmentation_strategy() -> None:
+    image = np.arange(4 * 4 * 3, dtype=np.uint8).reshape(4, 4, 3)
+    fake_cv2 = FakeCv2(image)
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    make_binary_mask(
+        Path("sample.jpg"),
+        {
+            "roi": {"x": 0, "y": 0, "width": 2, "height": 2},
+            "blur_kernel": 1,
+            "segmentation_strategy": "binary_threshold_inverted",
+            "threshold_method": "otsu",
+        },
+        fake_import_cv2_and_numpy,
+    )
+
+    assert fake_cv2.calls[2] == (
+        "threshold",
+        (2, 2),
+        0,
+        255,
+        fake_cv2.THRESH_BINARY_INV + fake_cv2.THRESH_OTSU,
+    )
+
+
+def test_resolve_segmentation_settings_maps_legacy_threshold_modes() -> None:
+    settings = resolve_segmentation_settings({"threshold_mode": "fixed_inv", "threshold_value": 123})
+
+    assert settings == {
+        "strategy_name": "binary_threshold_inverted",
+        "threshold_method": "fixed",
+        "threshold_value": 123,
+    }
 
 
 def test_build_registration_image_emphasizes_masked_feature_signal() -> None:

@@ -76,6 +76,21 @@ Each project maintains its own:
 python3 inspection_system/app/capture_test.py capture
 ```
 
+### 2a. Check Supervised Pilot Readiness
+
+Before a supervised floor pilot, run the readiness report for the active project:
+
+```bash
+python3 inspection_system/app/capture_test.py pilot-readiness
+```
+
+This reports:
+
+- active project and reference state
+- commissioning readiness
+- saved challenge-set counts for `tuning`, `validation`, and `regression`
+- open blocking issues before first supervised pilot launch
+
 ### 3. Set the golden reference
 
 ```bash
@@ -155,6 +170,21 @@ The runner will:
 - apply threshold updates and commit cycles during the episode
 - evaluate `validation` and `regression` samples afterward
 - write a JSON report with false-reject, false-accept, and invalid-capture miss rates under a `diagnostics/` folder
+
+## Supervised Pilot Workflow
+
+The staged floor-pilot runbook is documented in:
+
+- `docs/SUPERVISED_PILOT_RUNBOOK.md`
+- `docs/FUNCTIONAL_ARCHITECTURE_ROADMAP.md`
+
+Recommended execution order:
+
+1. Switch to the correct project for the recipe.
+2. Run `pilot-readiness`.
+3. Run the learning pass with controlled challenge parts.
+4. Re-run `pilot-readiness`.
+5. Launch the first floor pilot only with engineering present.
 
 ## Project Management
 

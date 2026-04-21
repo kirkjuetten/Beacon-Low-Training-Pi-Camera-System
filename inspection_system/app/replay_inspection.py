@@ -128,6 +128,46 @@ def _serialize_feature_position_summary(summary: dict | None) -> dict | None:
     }
 
 
+def _serialize_inspection_program(summary: dict | None) -> dict | None:
+    if not isinstance(summary, dict):
+        return None
+
+    return {
+        "program_id": summary.get("program_id"),
+        "aggregation_policy": summary.get("aggregation_policy"),
+        "lane_ids": list(summary.get("lane_ids", [])),
+        "primary_lane_id": summary.get("primary_lane_id"),
+        "active_lane_id": summary.get("active_lane_id"),
+    }
+
+
+def _serialize_lane_results(lane_results: list[dict] | None) -> list[dict]:
+    serialized: list[dict] = []
+    for lane_result in lane_results or []:
+        if not isinstance(lane_result, dict):
+            continue
+
+        threshold_summary = lane_result.get("threshold_summary", {}) if isinstance(lane_result.get("threshold_summary"), dict) else {}
+        serialized.append(
+            {
+                "lane_id": lane_result.get("lane_id"),
+                "lane_type": lane_result.get("lane_type"),
+                "authoritative": bool(lane_result.get("authoritative", False)),
+                "passed": bool(lane_result.get("passed", False)),
+                "inspection_failure_cause": lane_result.get("inspection_failure_cause"),
+                "required_coverage": _round_optional_float(threshold_summary.get("required_coverage")),
+                "outside_allowed_ratio": _round_optional_float(threshold_summary.get("outside_allowed_ratio")),
+                "min_section_coverage": _round_optional_float(threshold_summary.get("min_section_coverage")),
+                "mean_edge_distance_px": _round_optional_float(lane_result.get("mean_edge_distance_px")),
+                "worst_section_edge_distance_px": _round_optional_float(lane_result.get("worst_section_edge_distance_px")),
+                "worst_section_width_delta_ratio": _round_optional_float(lane_result.get("worst_section_width_delta_ratio")),
+                "worst_section_center_offset_px": _round_optional_float(lane_result.get("worst_section_center_offset_px")),
+                "feature_position_summary": _serialize_feature_position_summary(lane_result.get("feature_position_summary")),
+            }
+        )
+    return serialized
+
+
 def _resolve_result_status(passed: bool, details: dict) -> str:
     registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
     if passed:
@@ -238,6 +278,11 @@ def inspect_file(config: dict, image_path: Path, active_paths: dict | None = Non
     return {
         "image": str(image_path),
         "status": _resolve_result_status(passed, details),
+        "inspection_program": _serialize_inspection_program(details.get("inspection_program")),
+        "lane_results": _serialize_lane_results(details.get("lane_results")),
+        "failed_lane_ids": list(details.get("failed_lane_ids", [])),
+        "failed_authoritative_lane_ids": list(details.get("failed_authoritative_lane_ids", [])),
+        "failed_advisory_lane_ids": list(details.get("failed_advisory_lane_ids", [])),
         "reference_id": details.get("reference_id"),
         "reference_label": details.get("reference_label"),
         "reference_role": details.get("reference_role"),

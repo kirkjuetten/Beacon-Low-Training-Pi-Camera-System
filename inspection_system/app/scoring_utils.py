@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import math
 
+from inspection_system.app.gates.anomaly_gates import evaluate_anomaly_gates
+from inspection_system.app.gates.coverage_gates import evaluate_coverage_gates
+from inspection_system.app.gates.geometry_gates import evaluate_geometry_gates
+from inspection_system.app.inspection_models import GateDecision
+
 
 INSPECTION_MODE_GATES = {
     "mask_only": frozenset(),
@@ -318,80 +323,51 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
         "anomaly_score", configured_min_anomaly_score, learned_anomaly, blend_mode
     )
 
-    edge_distance_gate_active = effective_max_mean_edge_distance_px is not None
-    section_edge_gate_active = effective_max_section_edge_distance_px is not None
-    section_width_gate_active = effective_max_section_width_delta_ratio is not None
-    section_center_gate_active = effective_max_section_center_offset_px is not None
-    ssim_gate_active = "ssim" in mode_details["included_gates"] and effective_min_ssim is not None
-    mse_gate_active = "mse" in mode_details["included_gates"] and effective_max_mse is not None
-    anomaly_gate_active = "anomaly" in mode_details["included_gates"] and effective_min_anomaly_score is not None
-
-    edge_distance_pass = True if not edge_distance_gate_active else (
-        mean_edge_distance_px is not None and mean_edge_distance_px <= effective_max_mean_edge_distance_px
+    coverage_result = evaluate_coverage_gates(
+        required_coverage=required_coverage,
+        outside_allowed_ratio=outside_allowed_ratio,
+        min_section_coverage=min_section_coverage,
+        min_required_coverage=min_required_coverage,
+        max_outside_allowed_ratio=max_outside_allowed_ratio,
+        min_section_coverage_limit=min_section_coverage_limit,
+        effective_min_required_coverage=effective_min_required_coverage,
+        effective_max_outside_allowed_ratio=effective_max_outside_allowed_ratio,
+        effective_min_section_coverage=effective_min_section_coverage,
     )
-    section_edge_pass = True if not section_edge_gate_active else (
-        worst_section_edge_distance_px is not None
-        and worst_section_edge_distance_px <= effective_max_section_edge_distance_px
+    geometry_result = evaluate_geometry_gates(
+        mean_edge_distance_px=mean_edge_distance_px,
+        worst_section_edge_distance_px=worst_section_edge_distance_px,
+        worst_section_width_delta_ratio=worst_section_width_delta_ratio,
+        worst_section_center_offset_px=worst_section_center_offset_px,
+        max_mean_edge_distance_px=configured_max_mean_edge_distance_px,
+        max_section_edge_distance_px=configured_max_section_edge_distance_px,
+        max_section_width_delta_ratio=configured_max_section_width_delta_ratio,
+        max_section_center_offset_px=configured_max_section_center_offset_px,
+        effective_max_mean_edge_distance_px=effective_max_mean_edge_distance_px,
+        effective_max_section_edge_distance_px=effective_max_section_edge_distance_px,
+        effective_max_section_width_delta_ratio=effective_max_section_width_delta_ratio,
+        effective_max_section_center_offset_px=effective_max_section_center_offset_px,
     )
-    section_width_pass = True if not section_width_gate_active else (
-        worst_section_width_delta_ratio is not None
-        and worst_section_width_delta_ratio <= effective_max_section_width_delta_ratio
-    )
-    section_center_pass = True if not section_center_gate_active else (
-        worst_section_center_offset_px is not None
-        and worst_section_center_offset_px <= effective_max_section_center_offset_px
-    )
-    ssim_pass = True if not ssim_gate_active else (ssim_value is not None and ssim_value >= effective_min_ssim)
-    mse_pass = True if not mse_gate_active else (mse_value is not None and mse_value <= effective_max_mse)
-    anomaly_pass = True if not anomaly_gate_active else (
-        anomaly_score is not None and anomaly_score >= effective_min_anomaly_score
-    )
-
-    passed = (
-        required_coverage >= effective_min_required_coverage
-        and outside_allowed_ratio <= effective_max_outside_allowed_ratio
-        and min_section_coverage >= effective_min_section_coverage
-        and edge_distance_pass
-        and section_edge_pass
-        and section_width_pass
-        and section_center_pass
-        and ssim_pass
-        and mse_pass
-        and anomaly_pass
+    anomaly_result = evaluate_anomaly_gates(
+        inspection_mode=inspection_mode,
+        included_gates=mode_details["included_gates"],
+        ssim_value=ssim_value,
+        mse_value=mse_value,
+        anomaly_score=anomaly_score,
+        min_ssim=configured_min_ssim,
+        max_mse=configured_max_mse,
+        min_anomaly_score=configured_min_anomaly_score,
+        effective_min_ssim=effective_min_ssim,
+        effective_max_mse=effective_max_mse,
+        effective_min_anomaly_score=effective_min_anomaly_score,
     )
 
-    return passed, {
-        "required_coverage": required_coverage,
-        "outside_allowed_ratio": outside_allowed_ratio,
-        "min_section_coverage": min_section_coverage,
-        "min_required_coverage": min_required_coverage,
-        "max_outside_allowed_ratio": max_outside_allowed_ratio,
-        "min_section_coverage_limit": min_section_coverage_limit,
-        "effective_min_required_coverage": effective_min_required_coverage,
-        "effective_max_outside_allowed_ratio": effective_max_outside_allowed_ratio,
-        "effective_min_section_coverage": effective_min_section_coverage,
-        "mean_edge_distance_px": mean_edge_distance_px,
-        "max_mean_edge_distance_px": configured_max_mean_edge_distance_px,
-        "effective_max_mean_edge_distance_px": effective_max_mean_edge_distance_px,
-        "worst_section_edge_distance_px": worst_section_edge_distance_px,
-        "max_section_edge_distance_px": configured_max_section_edge_distance_px,
-        "effective_max_section_edge_distance_px": effective_max_section_edge_distance_px,
-        "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
-        "max_section_width_delta_ratio": configured_max_section_width_delta_ratio,
-        "effective_max_section_width_delta_ratio": effective_max_section_width_delta_ratio,
-        "worst_section_center_offset_px": worst_section_center_offset_px,
-        "max_section_center_offset_px": configured_max_section_center_offset_px,
-        "effective_max_section_center_offset_px": effective_max_section_center_offset_px,
-        "ssim": ssim_value,
-        "mse": mse_value,
-        "anomaly_score": anomaly_score,
-        "min_ssim": configured_min_ssim,
-        "max_mse": configured_max_mse,
-        "min_anomaly_score": configured_min_anomaly_score,
-        "effective_min_ssim": effective_min_ssim,
-        "effective_max_mse": effective_max_mse,
-        "effective_min_anomaly_score": effective_min_anomaly_score,
-        "inspection_mode": inspection_mode,
+    passed = coverage_result["passed"] and geometry_result["passed"] and anomaly_result["passed"]
+
+    gate_decision = GateDecision.from_legacy(passed, {
+        **coverage_result["summary"],
+        **geometry_result["summary"],
+        **anomaly_result["summary"],
         "blend_mode": blend_mode,
         "tolerance_mode": tolerance_mode,
         "learned_ranges_active": blend_mode != "hard_only" and any(
@@ -409,11 +385,6 @@ def evaluate_metrics(metrics: dict, inspection_cfg: dict) -> tuple[bool, dict]:
                 learned_anomaly,
             ]
         ),
-        "edge_distance_gate_active": edge_distance_gate_active,
-        "section_edge_gate_active": section_edge_gate_active,
-        "section_width_gate_active": section_width_gate_active,
-        "section_center_gate_active": section_center_gate_active,
-        "ssim_gate_active": ssim_gate_active,
-        "mse_gate_active": mse_gate_active,
-        "anomaly_gate_active": anomaly_gate_active,
-    }
+    })
+
+    return gate_decision.passed, gate_decision.to_legacy_summary()

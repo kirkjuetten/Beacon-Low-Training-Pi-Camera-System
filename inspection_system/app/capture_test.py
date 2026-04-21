@@ -12,6 +12,7 @@ from inspection_system.app.project_service import (
     handle_list_projects,
     handle_switch_project,
 )
+from inspection_system.app.pilot_readiness import print_supervised_pilot_report
 from inspection_system.app.reference_service import save_debug_outputs, set_reference
 from inspection_system.app.runtime_controller import (
     run_capture_and_inspect,
@@ -25,6 +26,7 @@ from inspection_system.app.ui_launcher import launch_config_editor, launch_dashb
 def print_usage() -> None:
     print("Usage:")
     print("  python3 capture_test.py dashboard        # Operator home (default)")
+    print("  python3 capture_test.py pilot-readiness  # Check technical readiness for supervised pilot")
     print("  python3 capture_test.py quick-check      # Run functional smoke sequence")
     print("  python3 capture_test.py capture          # Manual capture only")
     print("  python3 capture_test.py set-reference    # Set reference image")
@@ -78,6 +80,10 @@ def command_dashboard(_config: dict, _indicator: IndicatorLED, _argv: list[str])
     return launch_dashboard()
 
 
+def command_pilot_readiness(config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
+    return print_supervised_pilot_report(config)
+
+
 def command_config_editor(_config: dict, _indicator: IndicatorLED, _argv: list[str]) -> int:
     return launch_config_editor()
 
@@ -111,6 +117,7 @@ def command_quick_check(config: dict, indicator: IndicatorLED, _argv: list[str])
 
 
 COMMAND_HANDLERS = {
+    "pilot-readiness": command_pilot_readiness,
     "quick-check": command_quick_check,
     "capture": command_capture,
     "set-reference": command_set_reference,

@@ -142,6 +142,214 @@ def test_inspect_against_reference_returns_expected_details() -> None:
     assert details["debug_paths"] == {"mask": "mask-path", "diff": "diff-path"}
 
 
+def test_inspect_against_reference_applies_authoritative_feature_gates() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[5:15, 5:15] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[5:15, 5:15] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_align_sample_mask(sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module):
+        return sample_mask_arg, 0.0, 0, 0
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        return {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.90,
+            "section_coverages": [0.90],
+            "sample_white_pixels": 4,
+            "missing_required_mask": np.zeros((20, 20), dtype=bool),
+            "outside_allowed_mask": np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        return True, {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.90,
+            "min_required_coverage": 0.92,
+            "max_outside_allowed_ratio": 0.02,
+            "min_section_coverage_limit": 0.85,
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    feature_measurements = [
+        {
+            "feature_key": "isolated_feature_1",
+            "feature_label": "Isolated Feature 1",
+            "feature_family": "isolated_centroid",
+            "feature_type": "isolated_centroid_position",
+            "measurement_frame": "datum",
+            "sample_detected": True,
+            "failure_cause": "feature_position",
+            "dx_px": 1.6,
+            "dy_px": 0.1,
+            "radial_offset_px": 1.603121954,
+            "center_offset_px": 1.603121954,
+        }
+    ]
+    feature_summary = {
+        "feature_key": "isolated_feature_1",
+        "feature_label": "Isolated Feature 1",
+        "feature_family": "isolated_centroid",
+        "feature_type": "isolated_centroid_position",
+        "measurement_frame": "datum",
+        "feature_count": 1,
+        "sample_detected": True,
+        "failure_cause": "feature_position",
+        "dx_px": 1.6,
+        "dy_px": 0.1,
+        "radial_offset_px": 1.603121954,
+        "center_offset_px": 1.603121954,
+    }
+
+    with mock.patch.object(
+        inspection_pipeline,
+        "extract_molded_part_feature_measurements",
+        return_value=(feature_measurements, feature_summary),
+    ):
+        with mock.patch('inspection_system.app.anomaly_detection_utils.compute_ssim', return_value=0.95):
+            with mock.patch('inspection_system.app.anomaly_detection_utils.compute_histogram_similarity', return_value=0.92):
+                passed, details = inspect_against_reference(
+                    {
+                        "inspection": {
+                            "save_debug_images": False,
+                            "feature_position_families": ["isolated_centroid"],
+                            "feature_gate_thresholds": {"max_dx_px": 1.0, "max_radial_offset_px": 2.0},
+                        },
+                        "alignment": {},
+                    },
+                    Path("sample.jpg"),
+                    fake_make_binary_mask,
+                    Path("reference.png"),
+                    Path("reference_image.png"),
+                    fake_align_sample_mask,
+                    fake_build_reference_regions,
+                    fake_compute_section_masks,
+                    fake_score_sample,
+                    fake_evaluate_metrics,
+                    lambda stem, aligned_sample_mask, diff: {},
+                    fake_import_cv2_and_numpy,
+                    lambda mask, iterations, cv2, np_module: mask,
+                    lambda mask, iterations, cv2, np_module: mask,
+                )
+
+    assert passed is False
+    assert details["inspection_failure_cause"] == "feature_position"
+    assert details["feature_gate_active"] is True
+    assert details["feature_gate_passed"] is False
+    assert details["feature_gate_metric"] == "dx_px"
+    assert details["max_feature_dx_px"] == 1.0
+    assert details["feature_position_summary"]["feature_key"] == "isolated_feature_1"
+
+
+def test_inspect_against_reference_aggregates_multiple_authoritative_lanes() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[5:15, 5:15] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[5:15, 5:15] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_align_sample_mask(sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module):
+        return sample_mask_arg, 0.0, 0, 0
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        lane_id = None
+        return {
+            "required_coverage": 0.98,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.95,
+            "section_coverages": [0.95],
+            "sample_white_pixels": 25,
+            "missing_required_mask": np.zeros((20, 20), dtype=bool),
+            "outside_allowed_mask": np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        lane_id = inspection_cfg.get("lane_id")
+        passed = lane_id != "print"
+        return passed, {
+            "required_coverage": 0.98 if lane_id != "print" else 0.88,
+            "outside_allowed_ratio": 0.01,
+            "min_section_coverage": 0.95,
+            "min_required_coverage": 0.92 if lane_id != "print" else 0.9,
+            "max_outside_allowed_ratio": 0.02,
+            "min_section_coverage_limit": 0.85,
+            "inspection_mode": "mask_only",
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    with mock.patch('inspection_system.app.anomaly_detection_utils.compute_ssim', return_value=0.95):
+        with mock.patch('inspection_system.app.anomaly_detection_utils.compute_histogram_similarity', return_value=0.92):
+            passed, details = inspect_against_reference(
+                {
+                    "inspection_program": {
+                        "program_id": "multi_lane_program",
+                        "lanes": [
+                            {"lane_id": "geometry", "lane_type": "measurement", "authoritative": True},
+                            {
+                                "lane_id": "print",
+                                "lane_type": "measurement",
+                                "authoritative": True,
+                                "inspection": {"lane_tag": "print"},
+                            },
+                        ],
+                    },
+                    "inspection": {"save_debug_images": False},
+                    "alignment": {},
+                },
+                Path("sample.jpg"),
+                fake_make_binary_mask,
+                Path("reference.png"),
+                Path("reference_image.png"),
+                fake_align_sample_mask,
+                fake_build_reference_regions,
+                fake_compute_section_masks,
+                fake_score_sample,
+                fake_evaluate_metrics,
+                lambda stem, aligned_sample_mask, diff: {},
+                fake_import_cv2_and_numpy,
+                lambda mask, iterations, cv2, np_module: mask,
+                lambda mask, iterations, cv2, np_module: mask,
+            )
+
+    assert passed is False
+    assert details["inspection_program"]["program_id"] == "multi_lane_program"
+    assert details["inspection_program"]["primary_lane_id"] == "geometry"
+    assert details["inspection_program"]["active_lane_id"] == "print"
+    assert details["failed_lane_ids"] == ["print"]
+    assert details["failed_authoritative_lane_ids"] == ["print"]
+    assert len(details["lane_results"]) == 2
+    assert details["lane_results"][0]["lane_id"] == "geometry"
+    assert details["lane_results"][1]["lane_id"] == "print"
+    assert details["required_coverage"] == 0.88
+
+
 def test_compute_mean_edge_distance_px_detects_shifted_edges() -> None:
     reference_mask = np.zeros((12, 12), dtype=np.uint8)
     sample_mask = np.zeros((12, 12), dtype=np.uint8)

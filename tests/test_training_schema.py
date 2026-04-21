@@ -13,6 +13,9 @@ def test_build_config_fingerprint_uses_expected_defaults() -> None:
     assert fingerprint["reference_strategy"] == "golden_only"
     assert fingerprint["blend_mode"] == "hard_only"
     assert fingerprint["tolerance_mode"] == "balanced"
+    assert fingerprint["segmentation_strategy"] == "binary_threshold"
+    assert fingerprint["threshold_method"] == "fixed"
+    assert fingerprint["threshold_mode"] == "fixed"
     assert fingerprint["alignment_profile"] == "balanced"
 
 

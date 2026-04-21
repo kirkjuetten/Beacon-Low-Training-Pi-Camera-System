@@ -219,16 +219,34 @@ def test_simulate_training_episode_reports_confusion_metrics(tmp_path: Path, mon
         name = image_path.name
         if name == "good_eval.png":
             status = FAIL
+            inspection_program = {"program_id": "pilot_program", "primary_lane_id": "geometry", "active_lane_id": "geometry"}
+            failed_lane_ids = ["geometry"]
+            registration_status = "aligned"
         elif name == "reject_eval.png":
             status = PASS
+            inspection_program = {"program_id": "pilot_program", "primary_lane_id": "print", "active_lane_id": "print"}
+            failed_lane_ids = []
+            registration_status = "aligned"
         elif name == "invalid_eval.png":
             status = PASS
+            inspection_program = {"program_id": "pilot_program", "primary_lane_id": "geometry", "active_lane_id": "geometry"}
+            failed_lane_ids = []
+            registration_status = "quality_gate_failed"
         elif name == "borderline_eval.png":
             status = FAIL
+            inspection_program = {"program_id": "pilot_program", "primary_lane_id": "geometry", "active_lane_id": "geometry"}
+            failed_lane_ids = ["geometry"]
+            registration_status = "aligned"
         elif "reject" in name:
             status = FAIL
+            inspection_program = {"program_id": "pilot_program", "primary_lane_id": "geometry", "active_lane_id": "geometry"}
+            failed_lane_ids = ["geometry"]
+            registration_status = "aligned"
         else:
             status = PASS
+            inspection_program = {"program_id": "pilot_program", "primary_lane_id": "geometry", "active_lane_id": "geometry"}
+            failed_lane_ids = []
+            registration_status = "aligned"
         required_coverage = 0.96 if status == PASS else 0.72
         outside_allowed_ratio = 0.01 if status == PASS else 0.08
         min_section_coverage = 0.92 if status == PASS else 0.84
@@ -251,6 +269,9 @@ def test_simulate_training_episode_reports_confusion_metrics(tmp_path: Path, mon
             "best_angle_deg": 0.0,
             "best_shift_x": 0,
             "best_shift_y": 0,
+            "inspection_program": inspection_program,
+            "failed_lane_ids": failed_lane_ids,
+            "registration_status": registration_status,
             "inspection_mode": "mask_only",
         }
 
@@ -274,6 +295,9 @@ def test_simulate_training_episode_reports_confusion_metrics(tmp_path: Path, mon
     assert report["evaluation"]["borderline_outcomes"][FAIL] == 1
     assert report["analysis"]["false_reject_patterns"][0]["cause_code"] == "required_coverage"
     assert report["analysis"]["false_accept_patterns"]["feature_gap_categories"]["broken_coring"] == 1
+    assert report["analysis"]["lane_patterns"]["false_rejects_by_active_lane"]["geometry"] == 1
+    assert report["analysis"]["lane_patterns"]["false_accepts_by_primary_lane"]["print"] == 1
+    assert report["analysis"]["registration_patterns"]["status_counts"]["aligned"] >= 1
     assert report["analysis"]["recommendations"]
     assert report["analysis"]["recommendations"][0]["title"]
     assert report["training"]["update_events"]

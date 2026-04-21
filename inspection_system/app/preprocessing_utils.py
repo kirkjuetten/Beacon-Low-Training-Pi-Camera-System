@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from inspection_system.app.segmentation import apply_segmentation_strategy
+
 
 def _safe_int(value, default: int = 0) -> int:
     if value is None:
@@ -110,16 +112,6 @@ def make_binary_mask(image_path: Path, inspection_cfg: dict, import_cv2_and_nump
             blur_kernel += 1
         gray = cv2.GaussianBlur(gray, (blur_kernel, blur_kernel), 0)
 
-    threshold_mode = str(inspection_cfg.get("threshold_mode", "fixed")).lower()
-    threshold_value = int(inspection_cfg.get("threshold_value", 180))
-
-    if threshold_mode == "otsu":
-        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    elif threshold_mode == "otsu_inv":
-        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    elif threshold_mode == "fixed_inv":
-        _, mask = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY_INV)
-    else:
-        _, mask = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
+    mask, _segmentation_settings = apply_segmentation_strategy(gray, inspection_cfg, cv2)
 
     return roi_image, gray, mask, roi, cv2, np

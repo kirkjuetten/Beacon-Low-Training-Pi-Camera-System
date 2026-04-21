@@ -172,6 +172,8 @@ def test_build_reference_metadata_includes_registration_context() -> None:
     metadata = reference_service._build_reference_metadata(config)
 
     assert metadata['alignment'] == build_alignment_metadata(config)
+    assert metadata['threshold']['strategy'] == 'binary_threshold'
+    assert metadata['threshold']['method'] == 'otsu'
     assert metadata['alignment']['registration']['strategy'] == 'anchor_pair'
     assert metadata['alignment']['registration']['anchors'][0]['anchor_id'] == 'anchor_a'
     assert metadata['alignment']['registration']['datum_frame']['origin'] == 'anchor_primary'
@@ -180,6 +182,41 @@ def test_build_reference_metadata_includes_registration_context() -> None:
     assert metadata['registration_baseline']['datum_confirmed'] is True
     assert metadata['registration_baseline']['expected_transform_confirmed'] is True
     assert metadata['registration_baseline']['ready'] is True
+
+
+def test_check_reference_settings_match_reports_segmentation_strategy_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        'inspection_system.app.reference_service.load_reference_metadata',
+        lambda: {
+            'roi': {'x': 0, 'y': 0, 'width': 10, 'height': 10},
+            'threshold': {
+                'type': 'otsu',
+                'strategy': 'binary_threshold',
+                'method': 'otsu',
+                'value': 180.0,
+            },
+            'morphology': {'reference_erode_iterations': 1, 'reference_dilate_iterations': 1},
+            'inspection_context': {},
+            'alignment': {},
+        },
+    )
+
+    matched, warning = check_reference_settings_match(
+        {
+            'inspection': {
+                'roi': {'x': 0, 'y': 0, 'width': 10, 'height': 10},
+                'segmentation_strategy': 'binary_threshold_inverted',
+                'threshold_method': 'otsu',
+                'threshold_value': 180,
+                'reference_erode_iterations': 1,
+                'reference_dilate_iterations': 1,
+            },
+            'alignment': {},
+        }
+    )
+
+    assert matched is False
+    assert 'Segmentation strategy mismatch' in warning
 
 
 def test_build_registration_commissioning_summary_flags_missing_anchor_setup() -> None:

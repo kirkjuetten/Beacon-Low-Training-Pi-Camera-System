@@ -15,6 +15,7 @@ from inspection_system.app.registration_schema import (
     get_registration_commissioning_config,
     get_registration_config,
 )
+from inspection_system.app.segmentation import build_legacy_threshold_mode, resolve_segmentation_settings
 
 
 REFERENCE_VARIANTS_DIRNAME = "reference_variants"
@@ -316,6 +317,7 @@ def _build_reference_metadata(
     extra_context: Optional[dict] = None,
 ) -> dict:
     inspection_cfg = config.get("inspection", {})
+    segmentation_settings = resolve_segmentation_settings(inspection_cfg)
     roi_x, roi_y, roi_width, roi_height = _extract_roi_tuple(inspection_cfg)
     metadata = {
         "created_at": time.time(),
@@ -326,8 +328,10 @@ def _build_reference_metadata(
             "height": roi_height,
         },
         "threshold": {
-            "type": str(inspection_cfg.get("threshold_mode", "fixed")).lower(),
-            "value": float(inspection_cfg.get("threshold_value", 150.0)),
+            "type": build_legacy_threshold_mode(segmentation_settings),
+            "strategy": segmentation_settings["strategy_name"],
+            "method": segmentation_settings["threshold_method"],
+            "value": float(segmentation_settings["threshold_value"]),
             "blur_kernel": int(inspection_cfg.get("blur_kernel", 5)),
         },
         "morphology": {
@@ -859,14 +863,29 @@ def check_reference_settings_match(config: dict) -> tuple[bool, str | None]:
     
     # Check threshold
     thresh_meta = meta.get("threshold", {})
-    current_thresh_type = str(inspection_cfg.get("threshold_mode", "fixed")).lower()
+    segmentation_settings = resolve_segmentation_settings(inspection_cfg)
+    current_thresh_type = build_legacy_threshold_mode(segmentation_settings)
     meta_thresh_type = str(thresh_meta.get("type", "fixed")).lower()
     if current_thresh_type != meta_thresh_type:
         mismatches.append(
             f"Threshold type mismatch: reference was {meta_thresh_type}; current is {current_thresh_type}"
         )
+
+    meta_strategy = thresh_meta.get("strategy")
+    if meta_strategy is not None and str(meta_strategy).lower() != segmentation_settings["strategy_name"]:
+        mismatches.append(
+            "Segmentation strategy mismatch: "
+            f"reference was {meta_strategy}; current is {segmentation_settings['strategy_name']}"
+        )
+
+    meta_method = thresh_meta.get("method")
+    if meta_method is not None and str(meta_method).lower() != segmentation_settings["threshold_method"]:
+        mismatches.append(
+            "Threshold method mismatch: "
+            f"reference was {meta_method}; current is {segmentation_settings['threshold_method']}"
+        )
     
-    current_thresh_val = float(inspection_cfg.get("threshold_value", 150.0))
+    current_thresh_val = float(segmentation_settings["threshold_value"])
     meta_thresh_val = float(thresh_meta.get("value", 150.0))
     if abs(current_thresh_val - meta_thresh_val) > 0.1:
         mismatches.append(

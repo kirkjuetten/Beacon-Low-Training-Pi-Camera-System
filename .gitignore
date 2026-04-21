@@ -14,6 +14,7 @@ inspection_system/logs/*.json
 inspection_system/logs/*.csv
 inspection_system/temp_capture.jpg
 inspection_system/**/*.tmp
+inspection_system/**/diagnostics/*.json
 
 # Local image datasets
 samples/**/.DS_Store

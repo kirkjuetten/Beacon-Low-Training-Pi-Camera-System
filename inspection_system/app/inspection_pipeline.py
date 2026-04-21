@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 import math
 from pathlib import Path
@@ -9,6 +10,15 @@ from inspection_system.app.feature_measurement_utils import (
     DEFAULT_MOLDED_PART_FEATURE_FAMILIES,
     extract_molded_part_feature_measurements,
 )
+from inspection_system.app.gates.feature_gates import evaluate_feature_gates
+from inspection_system.app.inspection_models import (
+    GateDecision,
+    InspectionOutcome,
+    MeasurementBundle,
+    RegistrationAssessment,
+)
+from inspection_system.app.inspection_program import aggregate_lane_results, resolve_inspection_program
+from inspection_system.app.lanes import execute_inspection_lane
 from inspection_system.app.preprocessing_utils import build_registration_image
 from inspection_system.app.registration_engine import register_sample_mask
 from inspection_system.app.registration_transform import apply_transform_to_mask, build_transform_summary
@@ -194,6 +204,10 @@ def _reference_candidate_rank(passed: bool, details: dict) -> tuple[int, int, fl
         else:
             margins.append(threshold - value)
 
+    if details.get("feature_gate_active"):
+        feature_gate_margin = _finite_float(details.get("feature_gate_margin_px"))
+        margins.append(feature_gate_margin if feature_gate_margin is not None else -1.0)
+
     registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
     if registration.get("rejection_reason"):
         failed_gate_count = max(1, len(registration.get("quality_gate_failures", [])))
@@ -230,6 +244,34 @@ def _build_reference_candidate_summary(details: dict, passed: bool, rank: tuple[
         "worst_section_edge_distance_px": details.get("worst_section_edge_distance_px"),
         "worst_section_width_delta_ratio": details.get("worst_section_width_delta_ratio"),
         "worst_section_center_offset_px": details.get("worst_section_center_offset_px"),
+    }
+
+
+def _find_lane_result(lane_results: list[dict], lane_id: str | None) -> dict:
+    if lane_id is not None:
+        for lane_result in lane_results:
+            if str(lane_result.get("lane_id")) == str(lane_id):
+                return lane_result
+    return lane_results[0]
+
+
+def _serialize_lane_result(lane_result: dict) -> dict:
+    measurement_result = lane_result.get("measurement_result", {})
+    return {
+        "lane_id": lane_result.get("lane_id"),
+        "lane_type": lane_result.get("lane_type"),
+        "authoritative": bool(lane_result.get("authoritative", False)),
+        "passed": bool(lane_result.get("passed", False)),
+        "inspection_failure_cause": lane_result.get("inspection_failure_cause"),
+        "threshold_summary": deepcopy(lane_result.get("threshold_summary", {})),
+        "feature_measurements": deepcopy(lane_result.get("feature_measurements", [])),
+        "feature_position_summary": deepcopy(lane_result.get("feature_position_summary")),
+        "edge_measurement_frame": lane_result.get("edge_measurement_frame"),
+        "section_measurement_frame": lane_result.get("section_measurement_frame"),
+        "mean_edge_distance_px": measurement_result.get("mean_edge_distance_px"),
+        "worst_section_edge_distance_px": measurement_result.get("worst_section_edge_distance_px"),
+        "worst_section_width_delta_ratio": measurement_result.get("worst_section_width_delta_ratio"),
+        "worst_section_center_offset_px": measurement_result.get("worst_section_center_offset_px"),
     }
 
 
@@ -316,6 +358,18 @@ def _resolve_inspection_failure_cause(
 ) -> str | None:
     if registration_failed:
         return "registration_failure"
+
+    if bool(threshold_summary.get("feature_gate_active", False)) and not bool(
+        threshold_summary.get("feature_gate_passed", True)
+    ):
+        if feature_position_summary is not None:
+            return str(
+                feature_position_summary.get(
+                    "failure_cause",
+                    "feature_not_found" if not feature_position_summary.get("sample_detected", True) else "feature_position",
+                )
+            )
+        return str(threshold_summary.get("feature_gate_failure_cause") or "feature_position")
 
     if bool(threshold_summary.get("section_center_gate_active", False)):
         observed = _finite_float(threshold_summary.get("worst_section_center_offset_px"))
@@ -418,7 +472,15 @@ def _measure_inspection_outcome(
         "worst_section_center_offset_px": worst_section_center_offset_px,
         **anomaly_metrics,
     }
+    feature_gate_result = evaluate_feature_gates(feature_measurements, inspection_cfg)
+    if feature_gate_result["feature_position_summary"] is not None:
+        feature_position_summary = feature_gate_result["feature_position_summary"]
     passed, threshold_summary = evaluate_metrics(metric_inputs, inspection_cfg)
+    threshold_summary = {
+        **threshold_summary,
+        **feature_gate_result["summary"],
+    }
+    passed = bool(passed and feature_gate_result["passed"])
     return {
         "passed": bool(passed),
         "threshold_summary": threshold_summary,
@@ -570,21 +632,43 @@ def inspect_against_reference(
         np,
     )
 
-    measurement_result = _measure_inspection_outcome(
-        sample_mask,
-        aligned_sample_mask,
-        effective_transform_summary,
-        reference_mask,
-        reference_allowed,
-        reference_required,
-        section_masks,
-        inspection_cfg,
-        score_sample,
-        evaluate_metrics,
-        anomaly_metrics,
-        cv2,
-        np,
-    )
+    inspection_program = resolve_inspection_program(config)
+
+    def _run_lane_program(current_aligned_sample_mask, current_transform_summary):
+        lane_results: list[dict] = []
+        for lane in inspection_program.lanes:
+            lane_result = execute_inspection_lane(
+                lane,
+                base_inspection_cfg=inspection_cfg,
+                measure_lane=lambda lane_inspection_cfg: _measure_inspection_outcome(
+                    sample_mask,
+                    current_aligned_sample_mask,
+                    current_transform_summary,
+                    reference_mask,
+                    reference_allowed,
+                    reference_required,
+                    section_masks,
+                    lane_inspection_cfg,
+                    score_sample,
+                    evaluate_metrics,
+                    anomaly_metrics,
+                    cv2,
+                    np,
+                ),
+            )
+            lane_result["inspection_failure_cause"] = _resolve_inspection_failure_cause(
+                False,
+                lane_result["threshold_summary"],
+                lane_result["feature_position_summary"],
+            )
+            lane_results.append(lane_result)
+
+        return lane_results, aggregate_lane_results(inspection_program, lane_results)
+
+    lane_results, lane_aggregation = _run_lane_program(aligned_sample_mask, effective_transform_summary)
+    primary_lane_result = _find_lane_result(lane_results, lane_aggregation["primary_lane_id"])
+    active_lane_result = _find_lane_result(lane_results, lane_aggregation["active_lane_id"])
+    measurement_result = active_lane_result["measurement_result"]
 
     if registration_result.status == "aligned" and registration_result.runtime_mode == "moments":
         coarse_aligned_sample_mask, coarse_angle_deg, coarse_shift_x, coarse_shift_y = align_sample_mask(
@@ -605,23 +689,17 @@ def inspect_against_reference(
             or int(coarse_shift_x) != int(best_shift_x)
             or int(coarse_shift_y) != int(best_shift_y)
         ):
-            coarse_measurement_result = _measure_inspection_outcome(
-                sample_mask,
+            coarse_lane_results, coarse_lane_aggregation = _run_lane_program(
                 coarse_aligned_sample_mask,
                 coarse_transform_summary,
-                reference_mask,
-                reference_allowed,
-                reference_required,
-                section_masks,
-                inspection_cfg,
-                score_sample,
-                evaluate_metrics,
-                anomaly_metrics,
-                cv2,
-                np,
             )
+            coarse_primary_lane_result = _find_lane_result(
+                coarse_lane_results,
+                coarse_lane_aggregation["primary_lane_id"],
+            )
+            coarse_measurement_result = coarse_primary_lane_result["measurement_result"]
             if _should_prefer_coarse_moments_measurement(
-                measurement_result,
+                primary_lane_result["measurement_result"],
                 coarse_measurement_result,
                 registration_result.transform,
                 coarse_transform_summary,
@@ -630,7 +708,11 @@ def inspect_against_reference(
                     "Moments refinement was ignored for scoring because it only removed a large section-width drift "
                     "without enough supporting improvement in independent metrics."
                 )
-                measurement_result = coarse_measurement_result
+                lane_results = coarse_lane_results
+                lane_aggregation = coarse_lane_aggregation
+                primary_lane_result = _find_lane_result(lane_results, lane_aggregation["primary_lane_id"])
+                active_lane_result = _find_lane_result(lane_results, lane_aggregation["active_lane_id"])
+                measurement_result = active_lane_result["measurement_result"]
                 aligned_sample_mask = coarse_aligned_sample_mask
                 best_angle_deg = float(coarse_angle_deg)
                 best_shift_x = int(coarse_shift_x)
@@ -648,8 +730,10 @@ def inspect_against_reference(
     worst_section_width_delta_ratio = measurement_result["worst_section_width_delta_ratio"]
     worst_section_center_offset_px = measurement_result["worst_section_center_offset_px"]
     edge_measurement_frame = measurement_result["edge_measurement_frame"]
-    passed = measurement_result["passed"]
+    passed = bool(lane_aggregation["passed"])
     threshold_summary = measurement_result["threshold_summary"]
+    measurement_bundle = MeasurementBundle.from_legacy(measurement_result)
+    gate_decision = GateDecision.from_legacy(passed, threshold_summary)
     registration_failed = bool(registration_result.rejection_reason)
     if registration_failed:
         passed = False
@@ -688,6 +772,12 @@ def inspect_against_reference(
         stem = image_path.stem
         debug_paths = save_debug_outputs(stem, aligned_sample_mask, diff)
 
+    registration_assessment = RegistrationAssessment.from_registration_result(
+        registration_result,
+        transform=effective_transform_summary or registration_result.transform,
+        scoring_guard_reason=registration_guard_reason,
+    )
+
     details = {
         "roi": {
             "x": roi[0],
@@ -699,36 +789,20 @@ def inspect_against_reference(
         "best_shift_x": best_shift_x,
         "best_shift_y": best_shift_y,
         "alignment_profile": alignment_profile,
-        "registration": {
-            "enabled": registration_result.enabled,
-            "status": registration_result.status,
-            "runtime_mode": registration_result.runtime_mode,
-            "requested_strategy": registration_result.requested_strategy,
-            "applied_strategy": registration_result.applied_strategy,
-            "transform_model": registration_result.transform_model,
-            "anchor_mode": registration_result.anchor_mode,
-            "subpixel_refinement": registration_result.subpixel_refinement,
-            "fallback_reason": (
-                registration_guard_reason
-                if registration_result.fallback_reason is None and registration_guard_reason is not None
-                else (
-                    f"{registration_result.fallback_reason} {registration_guard_reason}"
-                    if registration_result.fallback_reason is not None and registration_guard_reason is not None
-                    else registration_result.fallback_reason
-                )
-            ),
-            "rejection_reason": registration_result.rejection_reason,
-            "quality": registration_result.quality,
-            "quality_gates": registration_result.quality_gates,
-            "quality_gate_failures": registration_result.quality_gate_failures,
-            "datum_frame": registration_result.datum_frame,
-            "transform": effective_transform_summary or registration_result.transform,
-            "observed_anchors": registration_result.observed_anchors,
-            "scoring_guard_applied": bool(registration_guard_reason),
-            "scoring_guard_reason": registration_guard_reason,
-        },
+        "registration": registration_assessment.to_legacy_dict(),
         "failure_stage": "registration" if registration_failed else "inspection",
         "inspection_failure_cause": inspection_failure_cause,
+        "inspection_program": {
+            "program_id": inspection_program.program_id,
+            "aggregation_policy": inspection_program.aggregation_policy,
+            "lane_ids": [lane.lane_id for lane in inspection_program.lanes],
+            "primary_lane_id": lane_aggregation["primary_lane_id"],
+            "active_lane_id": lane_aggregation["active_lane_id"],
+        },
+        "lane_results": [_serialize_lane_result(lane_result) for lane_result in lane_results],
+        "failed_lane_ids": list(lane_aggregation["failed_lane_ids"]),
+        "failed_authoritative_lane_ids": list(lane_aggregation["failed_authoritative_lane_ids"]),
+        "failed_advisory_lane_ids": list(lane_aggregation["failed_advisory_lane_ids"]),
         "required_coverage": required_coverage,
         "outside_allowed_ratio": outside_allowed_ratio,
         "min_section_coverage": min_section_coverage,
@@ -761,8 +835,8 @@ def inspect_against_reference(
         "max_section_width_delta_ratio": threshold_summary.get("max_section_width_delta_ratio"),
         "effective_max_section_width_delta_ratio": threshold_summary.get("effective_max_section_width_delta_ratio"),
         "section_center_offsets_px": section_center_offsets_px,
-        "feature_measurements": measurement_result["feature_measurements"],
-        "feature_position_summary": measurement_result["feature_position_summary"],
+        "feature_measurements": measurement_bundle.feature_measurements,
+        "feature_position_summary": measurement_bundle.feature_position_summary,
         "worst_section_center_offset_px": threshold_summary.get(
             "worst_section_center_offset_px",
             worst_section_center_offset_px,
@@ -786,10 +860,31 @@ def inspect_against_reference(
         "ssim_gate_active": bool(threshold_summary.get("ssim_gate_active", False)),
         "mse_gate_active": bool(threshold_summary.get("mse_gate_active", False)),
         "anomaly_gate_active": bool(threshold_summary.get("anomaly_gate_active", False)),
+        "feature_gate_active": bool(threshold_summary.get("feature_gate_active", False)),
+        "feature_gate_passed": bool(threshold_summary.get("feature_gate_passed", True)),
+        "feature_gate_failed_check_count": int(threshold_summary.get("feature_gate_failed_check_count", 0)),
+        "feature_gate_metric": threshold_summary.get("feature_gate_metric"),
+        "feature_gate_feature_key": threshold_summary.get("feature_gate_feature_key"),
+        "feature_gate_failure_cause": threshold_summary.get("feature_gate_failure_cause"),
+        "feature_gate_observed_value": threshold_summary.get("feature_gate_observed_value"),
+        "feature_gate_threshold": threshold_summary.get("feature_gate_threshold"),
+        "feature_gate_margin_px": threshold_summary.get("feature_gate_margin_px"),
+        "feature_gate_ratio": threshold_summary.get("feature_gate_ratio"),
+        "max_feature_dx_px": threshold_summary.get("max_feature_dx_px"),
+        "max_feature_dy_px": threshold_summary.get("max_feature_dy_px"),
+        "max_feature_radial_offset_px": threshold_summary.get("max_feature_radial_offset_px"),
+        "max_feature_pair_spacing_delta_px": threshold_summary.get("max_feature_pair_spacing_delta_px"),
         "debug_paths": debug_paths,
         **anomaly_metrics,
     }
-    return passed, details
+    inspection_outcome = InspectionOutcome.from_legacy_details(
+        passed=passed,
+        registration=registration_assessment,
+        measurements=measurement_bundle,
+        gate_decision=gate_decision,
+        details=details,
+    )
+    return inspection_outcome.passed, inspection_outcome.to_legacy_details()
 
 
 def inspect_against_references(

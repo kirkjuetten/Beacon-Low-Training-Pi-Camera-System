@@ -5,18 +5,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from inspection_system.app.segmentation import build_legacy_threshold_mode, resolve_segmentation_settings
+
 
 def build_config_fingerprint(config: dict | None) -> dict:
     source = config or {}
     inspection_cfg = source.get("inspection", {}) if isinstance(source, dict) else {}
     alignment_cfg = source.get("alignment", {}) if isinstance(source, dict) else {}
+    segmentation_settings = resolve_segmentation_settings(inspection_cfg)
     return {
         "inspection_mode": inspection_cfg.get("inspection_mode", "mask_only"),
         "reference_strategy": inspection_cfg.get("reference_strategy", "golden_only"),
         "blend_mode": inspection_cfg.get("blend_mode", "hard_only"),
         "tolerance_mode": inspection_cfg.get("tolerance_mode", "balanced"),
-        "threshold_mode": inspection_cfg.get("threshold_mode"),
-        "threshold_value": inspection_cfg.get("threshold_value"),
+        "segmentation_strategy": segmentation_settings["strategy_name"],
+        "threshold_method": segmentation_settings["threshold_method"],
+        "threshold_mode": build_legacy_threshold_mode(segmentation_settings),
+        "threshold_value": segmentation_settings["threshold_value"],
         "min_required_coverage": inspection_cfg.get("min_required_coverage"),
         "max_outside_allowed_ratio": inspection_cfg.get("max_outside_allowed_ratio"),
         "min_section_coverage": inspection_cfg.get("min_section_coverage"),
