@@ -143,6 +143,7 @@ class InspectionDisplay:
         self.alignment_profile_label = "ALIGN BAL"
         self.active_mode = "setup_reference"
         self.visible_buttons: List[str] = []
+        self._last_pointer_pressed = False
 
         self.buttons: Dict[str, pygame.Rect] = {}
         self.layout: Dict[str, pygame.Rect] = {}
@@ -544,6 +545,21 @@ class InspectionDisplay:
 
         return None
 
+    def get_polled_pointer_press_pos(self) -> Optional[tuple[int, int]]:
+        """Return pointer position on a newly observed pressed state.
+
+        This is a fallback for environments where SDL/Xwayland updates mouse state
+        but does not reliably surface button press events to pygame.
+        """
+        buttons = pygame.mouse.get_pressed()
+        is_pressed = bool(buttons and buttons[0])
+        if is_pressed and not self._last_pointer_pressed:
+            self._last_pointer_pressed = True
+            pos = pygame.mouse.get_pos()
+            return int(pos[0]), int(pos[1])
+        self._last_pointer_pressed = is_pressed
+        return None
+
     def draw_description(self, description: str, area: pygame.Rect):
         """Draw the inspection description on screen."""
         lines = self._wrap_text_lines(description, area.width, font=self.small_font)
@@ -699,6 +715,32 @@ class InspectionDisplay:
                     if self.buttons.get('home') and self.buttons['home'].collidepoint(pointer_pos):
                         return 'home'
 
+            polled_pointer_pos = self.get_polled_pointer_press_pos()
+            if polled_pointer_pos is not None:
+                if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(polled_pointer_pos):
+                    self.show_message("Capturing reference...", self.YELLOW)
+                    result_code, image_path, stderr_text = capture_to_temp(config)
+                    if result_code == 0:
+                        surface = self.load_surface_from_image(image_path)
+                        if surface is not None:
+                            last_surface = surface
+                            last_image_path = image_path
+                            status_color = self.GREEN if has_reference else self.YELLOW
+                            render()
+                            return str(last_image_path)
+                        status_color = self.RED
+                        self.show_message("Captured reference image could not be displayed.", self.RED)
+                    else:
+                        status_color = self.RED
+                        message = stderr_text or "Camera capture failed while setting the reference."
+                        self.show_message(message, self.RED)
+                    if self.wait_with_event_pump(900):
+                        cleanup_temp_image()
+                        return 'quit'
+                    needs_render = True
+                if self.buttons.get('home') and self.buttons['home'].collidepoint(polled_pointer_pos):
+                    return 'home'
+
             if needs_render:
                 render()
                 needs_render = False
@@ -779,6 +821,15 @@ class InspectionDisplay:
                         return "set_ref"
                     if self.buttons.get("home") and self.buttons["home"].collidepoint(pointer_pos):
                         return "home"
+
+            polled_pointer_pos = self.get_polled_pointer_press_pos()
+            if polled_pointer_pos is not None:
+                if self.buttons.get("capture") and self.buttons["capture"].collidepoint(polled_pointer_pos):
+                    return "capture"
+                if self.buttons.get("set_ref") and self.buttons["set_ref"].collidepoint(polled_pointer_pos):
+                    return "set_ref"
+                if self.buttons.get("home") and self.buttons["home"].collidepoint(polled_pointer_pos):
+                    return "home"
 
             self.clock.tick(30)
 
@@ -918,6 +969,39 @@ class InspectionDisplay:
                                 return 'quit', False
                             return user_feedback, True
 
+            polled_pointer_pos = self.get_polled_pointer_press_pos()
+            if polled_pointer_pos is not None:
+                if not user_feedback:
+                    if self.buttons['approve'].collidepoint(polled_pointer_pos):
+                        if logger:
+                            logger.log_inspection(image_path, passed, details, 'approve', description)
+                        if self.flash_action_confirmation("APPROVED", self.GREEN):
+                            return 'quit', False
+                        user_feedback = 'approve'
+                        render_frame()
+                    elif self.buttons['reject'].collidepoint(polled_pointer_pos):
+                        if logger:
+                            logger.log_inspection(image_path, passed, details, 'reject', description)
+                        if self.flash_action_confirmation("REJECTED", self.RED):
+                            return 'quit', False
+                        user_feedback = 'reject'
+                        render_frame()
+                    elif self.buttons['review'].collidepoint(polled_pointer_pos):
+                        if logger:
+                            logger.log_inspection(image_path, passed, details, 'review', description)
+                        if self.flash_action_confirmation("MARKED FOR REVIEW", self.YELLOW):
+                            return 'quit', False
+                        user_feedback = 'review'
+                        render_frame()
+                    elif self.buttons['set_ref'].collidepoint(polled_pointer_pos):
+                        if self.flash_action_confirmation(self.reference_button_label, (70, 130, 220), duration_ms=300):
+                            return 'quit', False
+                        return 'set_ref', False
+                elif self.buttons['capture'].collidepoint(polled_pointer_pos):
+                    if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
+                        return 'quit', False
+                    return user_feedback, True
+
             self.clock.tick(30)
 
     def show_training_checkpoint(
@@ -1031,6 +1115,12 @@ class InspectionDisplay:
                     for action, rect in button_rects.items():
                         if rect.collidepoint(pointer_pos):
                             return action
+
+            polled_pointer_pos = self.get_polled_pointer_press_pos()
+            if polled_pointer_pos is not None:
+                for action, rect in button_rects.items():
+                    if rect.collidepoint(polled_pointer_pos):
+                        return action
 
             self.clock.tick(30)
 

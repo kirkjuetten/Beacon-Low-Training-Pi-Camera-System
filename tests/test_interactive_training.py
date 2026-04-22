@@ -846,6 +846,25 @@ def test_get_pointer_event_pos_supports_touch_events() -> None:
     assert mouse_up_pos == (321, 54)
 
 
+def test_get_polled_pointer_press_pos_reports_only_new_presses(monkeypatch) -> None:
+    fake_display = type("FakeDisplay", (), {})()
+    fake_display._last_pointer_pressed = False
+
+    pressed_states = iter([(False, False, False), (True, False, False), (True, False, False), (False, False, False)])
+    monkeypatch.setattr(interactive_training.pygame.mouse, "get_pressed", lambda: next(pressed_states))
+    monkeypatch.setattr(interactive_training.pygame.mouse, "get_pos", lambda: (150, 75))
+
+    first = interactive_training.InspectionDisplay.get_polled_pointer_press_pos(fake_display)
+    second = interactive_training.InspectionDisplay.get_polled_pointer_press_pos(fake_display)
+    third = interactive_training.InspectionDisplay.get_polled_pointer_press_pos(fake_display)
+    fourth = interactive_training.InspectionDisplay.get_polled_pointer_press_pos(fake_display)
+
+    assert first is None
+    assert second == (150, 75)
+    assert third is None
+    assert fourth is None
+
+
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config = {
