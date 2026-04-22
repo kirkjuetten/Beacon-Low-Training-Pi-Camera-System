@@ -61,6 +61,8 @@ def _supports_feature_gate(entry: dict) -> bool:
         return False
     if entry.get("feature_family") == "datum_section":
         return False
+    if not bool(entry.get("sample_detected", True)):
+        return True
     return any(entry.get(metric_name) is not None for metric_name in FEATURE_GATE_KEYS)
 
 
@@ -75,8 +77,8 @@ def _observed_metric_value(entry: dict, metric_name: str):
 
 def _rank_failure(failure: dict) -> tuple[int, float, float]:
     if not failure.get("sample_detected", True):
-        return (0, float("inf"), float("inf"))
-    return (1, float(failure.get("ratio", float("inf"))), float(-failure.get("margin", float("inf"))))
+        return (1, float("inf"), float("inf"))
+    return (0, float(failure.get("ratio", float("inf"))), float(-failure.get("margin", float("inf"))))
 
 
 def evaluate_feature_gates(feature_measurements: list[dict], inspection_cfg: dict) -> dict:

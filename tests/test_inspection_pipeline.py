@@ -1071,41 +1071,51 @@ def test_inspect_against_reference_rejects_when_registration_quality_gate_fails(
     def fake_import_cv2_and_numpy():
         return fake_cv2, np
 
-    passed, details = inspect_against_reference(
-        {
-            'inspection': {'save_debug_images': False},
-            'alignment': {
-                'mode': 'anchor_translation',
-                'max_shift_x': 10,
-                'max_shift_y': 10,
-                'registration': {
-                    'strategy': 'anchor_translation',
-                    'anchor_mode': 'single',
-                    'quality_gates': {'min_confidence': 1.1},
-                    'anchors': [
-                        {
-                            'anchor_id': 'anchor_a',
-                            'reference_point': {'x': 10, 'y': 10},
-                            'search_window': {'x': 6, 'y': 7, 'width': 6, 'height': 6},
-                        }
-                    ],
+    with mock.patch.object(
+        inspection_pipeline,
+        'detect_anomalies',
+        side_effect=AssertionError('detect_anomalies should not run when registration rejects'),
+    ):
+        passed, details = inspect_against_reference(
+            {
+                'inspection': {
+                    'inspection_mode': 'mask_and_ml',
+                    'min_anomaly_score': 0.5,
+                    'save_debug_images': False,
+                },
+                'alignment': {
+                    'mode': 'anchor_translation',
+                    'max_shift_x': 10,
+                    'max_shift_y': 10,
+                    'registration': {
+                        'strategy': 'anchor_translation',
+                        'anchor_mode': 'single',
+                        'quality_gates': {'min_confidence': 1.1},
+                        'anchors': [
+                            {
+                                'anchor_id': 'anchor_a',
+                                'reference_point': {'x': 10, 'y': 10},
+                                'search_window': {'x': 6, 'y': 7, 'width': 6, 'height': 6},
+                            }
+                        ],
+                    },
                 },
             },
-        },
-        Path('sample.jpg'),
-        fake_make_binary_mask,
-        Path('reference.png'),
-        Path('reference_image.png'),
-        lambda *args: (_ for _ in ()).throw(AssertionError('moments aligner should not be called')),
-        fake_build_reference_regions,
-        fake_compute_section_masks,
-        fake_score_sample,
-        fake_evaluate_metrics,
-        lambda stem, aligned_sample_mask, diff: {},
-        fake_import_cv2_and_numpy,
-        lambda mask, iterations, cv2, np_module: mask,
-        lambda mask, iterations, cv2, np_module: mask,
-    )
+            Path('sample.jpg'),
+            fake_make_binary_mask,
+            Path('reference.png'),
+            Path('reference_image.png'),
+            lambda *args: (_ for _ in ()).throw(AssertionError('moments aligner should not be called')),
+            fake_build_reference_regions,
+            fake_compute_section_masks,
+            fake_score_sample,
+            fake_evaluate_metrics,
+            lambda stem, aligned_sample_mask, diff: {},
+            fake_import_cv2_and_numpy,
+            lambda mask, iterations, cv2, np_module: mask,
+            lambda mask, iterations, cv2, np_module: mask,
+            anomaly_detector=object(),
+        )
 
     assert passed is False
     assert details['registration']['status'] == 'quality_gate_failed'
@@ -1117,3 +1127,4 @@ def test_inspect_against_reference_rejects_when_registration_quality_gate_fails(
     assert details['section_measurement_frame'] == 'aligned_mask'
     assert details['feature_measurements'] == []
     assert details['feature_position_summary'] is None
+    assert 'anomaly_score' not in details

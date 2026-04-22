@@ -55,3 +55,42 @@ def test_evaluate_feature_gates_leaves_datum_section_fallback_inactive() -> None
     assert result["passed"] is True
     assert result["summary"]["feature_gate_active"] is False
     assert result["feature_position_summary"] is None
+
+
+def test_evaluate_feature_gates_prioritizes_missing_feature_over_offset_feature() -> None:
+    feature_measurements = [
+        {
+            "feature_key": "missing_feature",
+            "feature_label": "Missing Feature",
+            "feature_family": "isolated_centroid",
+            "feature_type": "isolated_centroid_position",
+            "measurement_frame": "datum",
+            "sample_detected": False,
+            "failure_cause": "feature_not_found",
+            "dx_px": None,
+            "radial_offset_px": None,
+        },
+        {
+            "feature_key": "offset_feature",
+            "feature_label": "Offset Feature",
+            "feature_family": "isolated_centroid",
+            "feature_type": "isolated_centroid_position",
+            "measurement_frame": "datum",
+            "sample_detected": True,
+            "failure_cause": "feature_position",
+            "dx_px": 2.0,
+            "radial_offset_px": 2.0,
+            "center_offset_px": 2.0,
+        },
+    ]
+
+    result = evaluate_feature_gates(
+        feature_measurements,
+        {"feature_gate_thresholds": {"max_dx_px": 1.0}},
+    )
+
+    assert result["passed"] is False
+    assert result["summary"]["feature_gate_metric"] == "sample_detected"
+    assert result["summary"]["feature_gate_feature_key"] == "missing_feature"
+    assert result["summary"]["feature_gate_failure_cause"] == "feature_not_found"
+    assert result["feature_position_summary"]["feature_key"] == "missing_feature"

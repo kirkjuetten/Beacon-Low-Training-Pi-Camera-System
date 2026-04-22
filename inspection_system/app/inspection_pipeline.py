@@ -31,6 +31,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_FEATURE_POSITION_FAMILIES = (*DEFAULT_MOLDED_PART_FEATURE_FAMILIES, "datum_section")
 
 
+def _anomaly_evaluation_requested(inspection_cfg: dict) -> bool:
+    if not isinstance(inspection_cfg, dict):
+        return False
+
+    inspection_mode = str(inspection_cfg.get("inspection_mode", "mask_only")).strip().lower()
+    if inspection_mode in {"mask_and_ssim", "mask_and_ml", "full"}:
+        return True
+
+    return any(
+        inspection_cfg.get(key) is not None
+        for key in ("min_ssim", "max_mse", "min_anomaly_score")
+    )
+
+
 def _finite_float(value):
     if value is None:
         return None
@@ -398,10 +412,11 @@ def _measure_inspection_outcome(
     inspection_cfg: dict,
     score_sample,
     evaluate_metrics,
-    anomaly_metrics: dict,
+    anomaly_metrics: dict | None,
     cv2,
     np,
 ) -> dict:
+    resolved_anomaly_metrics = dict(anomaly_metrics or {})
     metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
     datum_section_metrics = None
     edge_measurement_mask = aligned_sample_mask
@@ -470,7 +485,7 @@ def _measure_inspection_outcome(
         "worst_section_edge_distance_px": worst_section_edge_distance_px,
         "worst_section_width_delta_ratio": worst_section_width_delta_ratio,
         "worst_section_center_offset_px": worst_section_center_offset_px,
-        **anomaly_metrics,
+        **resolved_anomaly_metrics,
     }
     feature_gate_result = evaluate_feature_gates(feature_measurements, inspection_cfg)
     if feature_gate_result["feature_position_summary"] is not None:
@@ -596,8 +611,6 @@ def inspect_against_reference(
         )
 
     # Compute anomaly metrics before alignment
-    anomaly_metrics = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
-
     sample_registration_image = build_registration_image(gray if gray is not None else roi_image, sample_mask, np)
     reference_registration_image = build_registration_image(reference_image, reference_mask, np)
 
@@ -633,6 +646,20 @@ def inspect_against_reference(
     )
 
     inspection_program = resolve_inspection_program(config)
+    anomaly_metrics_cache: dict | None = None
+
+    def _get_anomaly_metrics() -> dict:
+        nonlocal anomaly_metrics_cache
+
+        if anomaly_metrics_cache is not None:
+            return anomaly_metrics_cache
+
+        if registration_result.rejection_reason or not _anomaly_evaluation_requested(inspection_cfg):
+            anomaly_metrics_cache = {}
+            return anomaly_metrics_cache
+
+        anomaly_metrics_cache = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
+        return anomaly_metrics_cache
 
     def _run_lane_program(current_aligned_sample_mask, current_transform_summary):
         lane_results: list[dict] = []
@@ -651,7 +678,7 @@ def inspect_against_reference(
                     lane_inspection_cfg,
                     score_sample,
                     evaluate_metrics,
-                    anomaly_metrics,
+                    _get_anomaly_metrics(),
                     cv2,
                     np,
                 ),
@@ -875,7 +902,7 @@ def inspect_against_reference(
         "max_feature_radial_offset_px": threshold_summary.get("max_feature_radial_offset_px"),
         "max_feature_pair_spacing_delta_px": threshold_summary.get("max_feature_pair_spacing_delta_px"),
         "debug_paths": debug_paths,
-        **anomaly_metrics,
+        **_get_anomaly_metrics(),
     }
     inspection_outcome = InspectionOutcome.from_legacy_details(
         passed=passed,
