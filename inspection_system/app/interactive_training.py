@@ -530,13 +530,13 @@ class InspectionDisplay:
 
     def get_pointer_event_pos(self, event) -> Optional[tuple[int, int]]:
         """Normalize mouse and touchscreen press events into screen coordinates."""
-        if event.type == pygame.MOUSEBUTTONDOWN:
+        if event.type in {pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP}:
             pos = getattr(event, "pos", None)
             if pos is None:
                 return None
             return int(pos[0]), int(pos[1])
 
-        if event.type == pygame.FINGERDOWN:
+        if event.type in {pygame.FINGERDOWN, pygame.FINGERUP}:
             width, height = self.screen.get_size()
             x = int(float(getattr(event, "x", 0.0)) * width)
             y = int(float(getattr(event, "y", 0.0)) * height)

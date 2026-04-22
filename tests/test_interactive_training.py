@@ -831,13 +831,19 @@ def test_get_pointer_event_pos_supports_touch_events() -> None:
     fake_display.screen = type("FakeScreen", (), {"get_size": lambda self: (800, 480)})()
 
     finger_event = SimpleNamespace(type=interactive_training.pygame.FINGERDOWN, x=0.25, y=0.5)
+    finger_up_event = SimpleNamespace(type=interactive_training.pygame.FINGERUP, x=0.75, y=0.25)
     mouse_event = SimpleNamespace(type=interactive_training.pygame.MOUSEBUTTONDOWN, pos=(123, 45))
+    mouse_up_event = SimpleNamespace(type=interactive_training.pygame.MOUSEBUTTONUP, pos=(321, 54))
 
     finger_pos = interactive_training.InspectionDisplay.get_pointer_event_pos(fake_display, finger_event)
+    finger_up_pos = interactive_training.InspectionDisplay.get_pointer_event_pos(fake_display, finger_up_event)
     mouse_pos = interactive_training.InspectionDisplay.get_pointer_event_pos(fake_display, mouse_event)
+    mouse_up_pos = interactive_training.InspectionDisplay.get_pointer_event_pos(fake_display, mouse_up_event)
 
     assert finger_pos == (200, 240)
+    assert finger_up_pos == (600, 120)
     assert mouse_pos == (123, 45)
+    assert mouse_up_pos == (321, 54)
 
 
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:
