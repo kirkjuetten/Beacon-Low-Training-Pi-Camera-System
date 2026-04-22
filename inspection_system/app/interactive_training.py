@@ -621,6 +621,7 @@ class InspectionDisplay:
         last_surface: Optional[pygame.Surface] = None
         last_image_path: Optional[Path] = None
         status_color = self.YELLOW
+        needs_render = True
 
         def render() -> None:
             self._reflow_layout()
@@ -665,6 +666,7 @@ class InspectionDisplay:
                     new_w = max(event.w, self.MIN_WIDTH)
                     new_h = max(event.h, self.MIN_HEIGHT)
                     self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
+                    needs_render = True
                     render()
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     cleanup_temp_image()
@@ -693,11 +695,13 @@ class InspectionDisplay:
                         if self.wait_with_event_pump(900):
                             cleanup_temp_image()
                             return 'quit'
-                        render()
+                        needs_render = True
                     if self.buttons.get('home') and self.buttons['home'].collidepoint(pointer_pos):
                         return 'home'
 
-            render()
+            if needs_render:
+                render()
+                needs_render = False
 
             self.clock.tick(30)
 
