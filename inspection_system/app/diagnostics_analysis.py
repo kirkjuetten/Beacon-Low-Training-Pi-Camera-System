@@ -281,6 +281,89 @@ def _is_close_pass_margin(entry: dict) -> bool:
     return float(entry.get("margin", 999.0)) <= float(threshold)
 
 
+def _build_lane_expansion_assessment(
+    false_accept_lane_counts: Counter,
+    false_accept_near_gate_counts: Counter,
+    feature_gap_categories: Counter,
+    false_accept_category_counts: Counter,
+) -> dict:
+    total_false_accepts = int(sum(false_accept_category_counts.values()))
+    if total_false_accepts <= 0:
+        return {
+            "needed": False,
+            "priority": "low",
+            "rationale": "No reject escapes were observed in evaluation, so the current lane program does not justify expansion yet.",
+            "evidence": {
+                "false_accept_count": 0,
+                "top_escape_lane": None,
+                "feature_gap_categories": {},
+                "near_gate_counts": {},
+            },
+            "suggested_changes": [
+                "Keep the current lane set and revisit lane expansion only after new replay evidence shows escaping defect categories the active gates do not see.",
+            ],
+        }
+
+    top_escape_lane = None
+    top_escape_lane_count = 0
+    if false_accept_lane_counts:
+        top_escape_lane, top_escape_lane_count = false_accept_lane_counts.most_common(1)[0]
+
+    if feature_gap_categories:
+        top_categories = [category for category, _count in feature_gap_categories.most_common(3)]
+        return {
+            "needed": True,
+            "priority": "high",
+            "rationale": "Reject escapes are passing with comfortable margin on all active gates, which means the current lane program is not isolating those defect classes well enough.",
+            "evidence": {
+                "false_accept_count": total_false_accepts,
+                "top_escape_lane": top_escape_lane,
+                "top_escape_lane_count": top_escape_lane_count,
+                "feature_gap_categories": dict(feature_gap_categories),
+                "near_gate_counts": dict(false_accept_near_gate_counts),
+            },
+            "suggested_changes": [
+                "Add one or more defect-specific lanes for the dominant escaping categories before tightening unrelated global thresholds.",
+                "Use the escaping categories to decide whether the new lane should be authoritative or advisory, and attach only the localized checks needed for that defect family.",
+            ],
+            "target_categories": top_categories,
+        }
+
+    if total_false_accepts >= 2 and top_escape_lane is not None and not false_accept_near_gate_counts:
+        return {
+            "needed": True,
+            "priority": "medium",
+            "rationale": f"Reject escapes are clustering in lane '{top_escape_lane}' without landing near an existing gate, which suggests that lane may be too broad for the defect mix being evaluated.",
+            "evidence": {
+                "false_accept_count": total_false_accepts,
+                "top_escape_lane": top_escape_lane,
+                "top_escape_lane_count": top_escape_lane_count,
+                "feature_gap_categories": {},
+                "near_gate_counts": {},
+            },
+            "suggested_changes": [
+                "Split the overloaded escape lane into narrower defect-specific lanes only if the replay set keeps showing escapes concentrated in that same lane.",
+                "Prefer lane-specific checks over new global thresholds when the escapes are lane-local but not close to current gates.",
+            ],
+        }
+
+    return {
+        "needed": False,
+        "priority": "low",
+        "rationale": "Current reject escapes are better explained by threshold tuning than by missing lane structure, so expanding lanes is not the best next move.",
+        "evidence": {
+            "false_accept_count": total_false_accepts,
+            "top_escape_lane": top_escape_lane,
+            "top_escape_lane_count": top_escape_lane_count,
+            "feature_gap_categories": {},
+            "near_gate_counts": dict(false_accept_near_gate_counts),
+        },
+        "suggested_changes": [
+            "Tune the active lane thresholds first and only expand lanes if future replay still shows escapes that are not near any active gate.",
+        ],
+    }
+
+
 def _diagnose_result(record: dict, result: dict) -> dict:
     status = str(result.get("status", "UNKNOWN"))
     if status == INVALID_CAPTURE:
@@ -537,6 +620,24 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
             )
         )
 
+    lane_expansion_assessment = _build_lane_expansion_assessment(
+        false_accept_lane_counts,
+        false_accept_near_gate_counts,
+        feature_gap_categories,
+        false_accept_category_counts,
+    )
+    if lane_expansion_assessment["needed"]:
+        recommendations.append(
+            _build_recommendation(
+                lane_expansion_assessment["priority"],
+                "lane_expansion",
+                "Expand lane program only where replay supports it",
+                lane_expansion_assessment["rationale"],
+                list(lane_expansion_assessment["suggested_changes"]),
+                dict(lane_expansion_assessment["evidence"]),
+            )
+        )
+
     if false_accept_lane_counts:
         lane_id, count = false_accept_lane_counts.most_common(1)[0]
         recommendations.append(
@@ -630,6 +731,7 @@ def _build_episode_analysis(training_report: dict, evaluation_report: dict) -> d
             "near_gate_counts": dict(false_accept_near_gate_counts),
             "feature_gap_categories": dict(feature_gap_categories),
         },
+        "lane_expansion_assessment": lane_expansion_assessment,
         "registration_patterns": {
             "status_counts": dict(registration_status_counts),
             "rejection_reasons": dict(registration_rejection_reason_counts),

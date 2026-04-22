@@ -6,6 +6,7 @@ from inspection_system.app.dataset_diagnostics import (
     INVALID_CAPTURE,
     PASS,
     REGISTRATION_FAILED,
+    _build_episode_analysis,
     _diagnose_result,
     build_active_paths_from_project_root,
     build_diagnostic_output_path,
@@ -297,11 +298,35 @@ def test_simulate_training_episode_reports_confusion_metrics(tmp_path: Path, mon
     assert report["analysis"]["false_accept_patterns"]["feature_gap_categories"]["broken_coring"] == 1
     assert report["analysis"]["lane_patterns"]["false_rejects_by_active_lane"]["geometry"] == 1
     assert report["analysis"]["lane_patterns"]["false_accepts_by_primary_lane"]["print"] == 1
+    assert report["analysis"]["lane_expansion_assessment"]["needed"] is True
+    assert report["analysis"]["lane_expansion_assessment"]["priority"] == "high"
+    assert report["analysis"]["lane_expansion_assessment"]["evidence"]["feature_gap_categories"]["broken_coring"] == 1
+    assert any(recommendation["category"] == "lane_expansion" for recommendation in report["analysis"]["recommendations"])
     assert report["analysis"]["registration_patterns"]["status_counts"]["aligned"] >= 1
     assert report["analysis"]["recommendations"]
     assert report["analysis"]["recommendations"][0]["title"]
     assert report["training"]["update_events"]
     assert report["training"]["commissioning_status"]["ready"] is False
+
+
+def test_build_episode_analysis_marks_lane_expansion_not_needed_without_reject_escapes() -> None:
+    analysis = _build_episode_analysis(
+        {"commissioning_status": {"ready": True}},
+        {
+            "results": [
+                {
+                    "expected_status": PASS,
+                    "actual_status": PASS,
+                    "diagnosis": {"primary_cause": None, "closest_pass_gates": []},
+                    "result": {"inspection_program": {"primary_lane_id": "primary", "active_lane_id": "primary"}},
+                }
+            ]
+        },
+    )
+
+    assert analysis["lane_expansion_assessment"]["needed"] is False
+    assert analysis["lane_expansion_assessment"]["priority"] == "low"
+    assert analysis["lane_expansion_assessment"]["evidence"]["false_accept_count"] == 0
 
 
 def test_save_episode_report_writes_json(tmp_path: Path) -> None:
