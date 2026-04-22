@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import logging
 import math
 from pathlib import Path
@@ -29,6 +30,34 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_FEATURE_POSITION_FAMILIES = (*DEFAULT_MOLDED_PART_FEATURE_FAMILIES, "datum_section")
+
+
+@dataclass
+class _PreparedSampleData:
+    roi_image: object
+    gray: object | None
+    sample_mask: object
+    roi: tuple[int, int, int, int]
+    cv2: object
+    np: object
+
+
+@dataclass
+class _ReferenceAssets:
+    reference_mask: object
+    reference_image: object
+    reference_allowed: object
+    reference_required: object
+    section_masks: list
+
+
+@dataclass
+class _LaneProgramResult:
+    lane_results: list[dict]
+    lane_aggregation: dict
+    primary_lane_result: dict
+    active_lane_result: dict
+    measurement_result: dict
 
 
 def _anomaly_evaluation_requested(inspection_cfg: dict) -> bool:
@@ -562,6 +591,213 @@ def _should_prefer_coarse_moments_measurement(
     return True
 
 
+def _check_reference_settings_warning(config: dict) -> None:
+    try:
+        settings_match, mismatch_msg = check_reference_settings_match(config)
+        if not settings_match:
+            logger.warning(f"Reference settings mismatch: {mismatch_msg}")
+    except Exception as exc:
+        logger.debug(f"Could not check reference settings: {exc}")
+
+
+def _prepare_sample_data(
+    image_path: Path,
+    inspection_cfg: dict,
+    make_binary_mask,
+    import_cv2_and_numpy,
+    dilate_mask,
+    erode_mask,
+) -> _PreparedSampleData:
+    roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
+
+    sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
+    sample_dilate_iterations = int(inspection_cfg.get("sample_dilate_iterations", 1))
+    sample_mask = erode_mask(sample_mask, sample_erode_iterations, cv2, np)
+    sample_mask = dilate_mask(sample_mask, sample_dilate_iterations, cv2, np)
+
+    return _PreparedSampleData(
+        roi_image=roi_image,
+        gray=gray,
+        sample_mask=sample_mask,
+        roi=roi,
+        cv2=cv2,
+        np=np,
+    )
+
+
+def _load_reference_images(
+    reference_mask_path: Path,
+    reference_image_path: Path,
+    sample_mask,
+    cv2,
+) -> tuple[object, object]:
+    reference_mask = cv2.imread(str(reference_mask_path), cv2.IMREAD_GRAYSCALE)
+    if reference_mask is None:
+        raise FileNotFoundError(f"Reference mask not found: {reference_mask_path}")
+
+    reference_image = cv2.imread(str(reference_image_path), cv2.IMREAD_COLOR)
+    if reference_image is None:
+        raise FileNotFoundError(f"Reference image not found: {reference_image_path}")
+
+    if reference_mask.shape != sample_mask.shape:
+        raise ValueError(
+            f"Reference mask shape {reference_mask.shape} does not match sample mask shape {sample_mask.shape}."
+        )
+
+    return reference_mask, reference_image
+
+
+def _build_reference_assets(
+    reference_mask,
+    inspection_cfg: dict,
+    build_reference_regions,
+    compute_section_masks,
+    dilate_mask,
+    erode_mask,
+    cv2,
+    np,
+) -> _ReferenceAssets:
+    reference_allowed, reference_required = build_reference_regions(
+        reference_mask,
+        inspection_cfg,
+        lambda mask, iterations: dilate_mask(mask, iterations, cv2, np),
+        lambda mask, iterations: erode_mask(mask, iterations, cv2, np),
+    )
+
+    section_masks = compute_section_masks(
+        reference_required,
+        int(inspection_cfg.get("section_columns", 12)),
+        cv2,
+        np,
+    )
+
+    return _ReferenceAssets(
+        reference_mask=reference_mask,
+        reference_image=None,
+        reference_allowed=reference_allowed,
+        reference_required=reference_required,
+        section_masks=section_masks,
+    )
+
+
+def _build_anomaly_metrics_provider(
+    inspection_cfg: dict,
+    registration_result,
+    roi_image,
+    reference_image,
+    sample_mask,
+    anomaly_detector,
+):
+    anomaly_metrics_cache: dict | None = None
+
+    def _get_anomaly_metrics() -> dict:
+        nonlocal anomaly_metrics_cache
+
+        if anomaly_metrics_cache is not None:
+            return anomaly_metrics_cache
+
+        if registration_result.rejection_reason or not _anomaly_evaluation_requested(inspection_cfg):
+            anomaly_metrics_cache = {}
+            return anomaly_metrics_cache
+
+        anomaly_metrics_cache = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
+        return anomaly_metrics_cache
+
+    return _get_anomaly_metrics
+
+
+def _execute_measurement_program(
+    inspection_program,
+    inspection_cfg: dict,
+    sample_mask,
+    aligned_sample_mask,
+    transform_summary,
+    reference_assets: _ReferenceAssets,
+    score_sample,
+    evaluate_metrics,
+    anomaly_metrics_provider,
+    cv2,
+    np,
+) -> _LaneProgramResult:
+    lane_results: list[dict] = []
+    for lane in inspection_program.lanes:
+        lane_result = execute_inspection_lane(
+            lane,
+            base_inspection_cfg=inspection_cfg,
+            measure_lane=lambda lane_inspection_cfg: _measure_inspection_outcome(
+                sample_mask,
+                aligned_sample_mask,
+                transform_summary,
+                reference_assets.reference_mask,
+                reference_assets.reference_allowed,
+                reference_assets.reference_required,
+                reference_assets.section_masks,
+                lane_inspection_cfg,
+                score_sample,
+                evaluate_metrics,
+                anomaly_metrics_provider(),
+                cv2,
+                np,
+            ),
+        )
+        lane_result["inspection_failure_cause"] = _resolve_inspection_failure_cause(
+            False,
+            lane_result["threshold_summary"],
+            lane_result["feature_position_summary"],
+        )
+        lane_results.append(lane_result)
+
+    lane_aggregation = aggregate_lane_results(inspection_program, lane_results)
+    primary_lane_result = _find_lane_result(lane_results, lane_aggregation["primary_lane_id"])
+    active_lane_result = _find_lane_result(lane_results, lane_aggregation["active_lane_id"])
+    return _LaneProgramResult(
+        lane_results=lane_results,
+        lane_aggregation=lane_aggregation,
+        primary_lane_result=primary_lane_result,
+        active_lane_result=active_lane_result,
+        measurement_result=active_lane_result["measurement_result"],
+    )
+
+
+def _build_debug_diff(aligned_sample_mask, metrics: dict, reference_allowed, reference_required, np):
+    required_white = reference_required > 0
+    allowed_white = reference_allowed > 0
+
+    image_size = aligned_sample_mask.shape[0] * aligned_sample_mask.shape[1] * 3
+    max_reasonable_pixels = 50 * 1024 * 1024
+    if image_size > max_reasonable_pixels:
+        raise MemoryError(f"Image too large for processing: {image_size} pixels exceeds {max_reasonable_pixels} limit")
+
+    diff = np.zeros((aligned_sample_mask.shape[0], aligned_sample_mask.shape[1], 3), dtype=np.uint8)
+    diff[allowed_white] = (0, 80, 0)
+    diff[required_white] = (0, 255, 0)
+    diff[metrics["missing_required_mask"]] = (0, 0, 255)
+    diff[metrics["outside_allowed_mask"]] = (255, 0, 0)
+    return diff
+
+
+def _maybe_save_debug_outputs(
+    image_path: Path,
+    inspection_cfg: dict,
+    aligned_sample_mask,
+    metrics: dict,
+    reference_assets: _ReferenceAssets,
+    save_debug_outputs,
+    np,
+) -> dict:
+    if not bool(inspection_cfg.get("save_debug_images", True)):
+        return {}
+
+    diff = _build_debug_diff(
+        aligned_sample_mask,
+        metrics,
+        reference_assets.reference_allowed,
+        reference_assets.reference_required,
+        np,
+    )
+    return save_debug_outputs(image_path.stem, aligned_sample_mask, diff)
+
+
 def inspect_against_reference(
     config: dict,
     image_path: Path,
@@ -581,36 +817,30 @@ def inspect_against_reference(
 ) -> tuple[bool, dict]:
     inspection_cfg = config.get("inspection", {})
     alignment_cfg, alignment_profile = resolve_alignment_config(config)
-    
-    # Check if reference settings match current config (with safety wrapper)
-    try:
-        settings_match, mismatch_msg = check_reference_settings_match(config)
-        if not settings_match:
-            logger.warning(f"Reference settings mismatch: {mismatch_msg}")
-    except Exception as exc:
-        logger.debug(f"Could not check reference settings: {exc}")
-    
-    roi_image, gray, sample_mask, roi, cv2, np = make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy)
+    _check_reference_settings_warning(config)
 
-    sample_erode_iterations = int(inspection_cfg.get("sample_erode_iterations", 1))
-    sample_dilate_iterations = int(inspection_cfg.get("sample_dilate_iterations", 1))
-    sample_mask = erode_mask(sample_mask, sample_erode_iterations, cv2, np)
-    sample_mask = dilate_mask(sample_mask, sample_dilate_iterations, cv2, np)
+    sample_data = _prepare_sample_data(
+        image_path,
+        inspection_cfg,
+        make_binary_mask,
+        import_cv2_and_numpy,
+        dilate_mask,
+        erode_mask,
+    )
+    roi_image = sample_data.roi_image
+    gray = sample_data.gray
+    sample_mask = sample_data.sample_mask
+    roi = sample_data.roi
+    cv2 = sample_data.cv2
+    np = sample_data.np
 
-    reference_mask = cv2.imread(str(reference_mask_path), cv2.IMREAD_GRAYSCALE)
-    if reference_mask is None:
-        raise FileNotFoundError(f"Reference mask not found: {reference_mask_path}")
+    reference_mask, reference_image = _load_reference_images(
+        reference_mask_path,
+        reference_image_path,
+        sample_mask,
+        cv2,
+    )
 
-    reference_image = cv2.imread(str(reference_image_path), cv2.IMREAD_COLOR)
-    if reference_image is None:
-        raise FileNotFoundError(f"Reference image not found: {reference_image_path}")
-
-    if reference_mask.shape != sample_mask.shape:
-        raise ValueError(
-            f"Reference mask shape {reference_mask.shape} does not match sample mask shape {sample_mask.shape}."
-        )
-
-    # Compute anomaly metrics before alignment
     sample_registration_image = build_registration_image(gray if gray is not None else roi_image, sample_mask, np)
     reference_registration_image = build_registration_image(reference_image, reference_mask, np)
 
@@ -631,71 +861,46 @@ def inspect_against_reference(
     effective_transform_summary = registration_result.transform if registration_result.status == "aligned" else None
     registration_guard_reason = None
 
-    reference_allowed, reference_required = build_reference_regions(
+    reference_assets = _build_reference_assets(
         reference_mask,
         inspection_cfg,
-        lambda mask, iterations: dilate_mask(mask, iterations, cv2, np),
-        lambda mask, iterations: erode_mask(mask, iterations, cv2, np),
-    )
-
-    section_masks = compute_section_masks(
-        reference_required,
-        int(inspection_cfg.get("section_columns", 12)),
+        build_reference_regions,
+        compute_section_masks,
+        dilate_mask,
+        erode_mask,
         cv2,
         np,
     )
+    reference_assets.reference_image = reference_image
 
     inspection_program = resolve_inspection_program(config)
-    anomaly_metrics_cache: dict | None = None
+    anomaly_metrics_provider = _build_anomaly_metrics_provider(
+        inspection_cfg,
+        registration_result,
+        roi_image,
+        reference_image,
+        sample_mask,
+        anomaly_detector,
+    )
 
-    def _get_anomaly_metrics() -> dict:
-        nonlocal anomaly_metrics_cache
-
-        if anomaly_metrics_cache is not None:
-            return anomaly_metrics_cache
-
-        if registration_result.rejection_reason or not _anomaly_evaluation_requested(inspection_cfg):
-            anomaly_metrics_cache = {}
-            return anomaly_metrics_cache
-
-        anomaly_metrics_cache = detect_anomalies(roi_image, reference_image, sample_mask, anomaly_detector)
-        return anomaly_metrics_cache
-
-    def _run_lane_program(current_aligned_sample_mask, current_transform_summary):
-        lane_results: list[dict] = []
-        for lane in inspection_program.lanes:
-            lane_result = execute_inspection_lane(
-                lane,
-                base_inspection_cfg=inspection_cfg,
-                measure_lane=lambda lane_inspection_cfg: _measure_inspection_outcome(
-                    sample_mask,
-                    current_aligned_sample_mask,
-                    current_transform_summary,
-                    reference_mask,
-                    reference_allowed,
-                    reference_required,
-                    section_masks,
-                    lane_inspection_cfg,
-                    score_sample,
-                    evaluate_metrics,
-                    _get_anomaly_metrics(),
-                    cv2,
-                    np,
-                ),
-            )
-            lane_result["inspection_failure_cause"] = _resolve_inspection_failure_cause(
-                False,
-                lane_result["threshold_summary"],
-                lane_result["feature_position_summary"],
-            )
-            lane_results.append(lane_result)
-
-        return lane_results, aggregate_lane_results(inspection_program, lane_results)
-
-    lane_results, lane_aggregation = _run_lane_program(aligned_sample_mask, effective_transform_summary)
-    primary_lane_result = _find_lane_result(lane_results, lane_aggregation["primary_lane_id"])
-    active_lane_result = _find_lane_result(lane_results, lane_aggregation["active_lane_id"])
-    measurement_result = active_lane_result["measurement_result"]
+    lane_program_result = _execute_measurement_program(
+        inspection_program,
+        inspection_cfg,
+        sample_mask,
+        aligned_sample_mask,
+        effective_transform_summary,
+        reference_assets,
+        score_sample,
+        evaluate_metrics,
+        anomaly_metrics_provider,
+        cv2,
+        np,
+    )
+    lane_results = lane_program_result.lane_results
+    lane_aggregation = lane_program_result.lane_aggregation
+    primary_lane_result = lane_program_result.primary_lane_result
+    active_lane_result = lane_program_result.active_lane_result
+    measurement_result = lane_program_result.measurement_result
 
     if registration_result.status == "aligned" and registration_result.runtime_mode == "moments":
         coarse_aligned_sample_mask, coarse_angle_deg, coarse_shift_x, coarse_shift_y = align_sample_mask(
@@ -716,15 +921,21 @@ def inspect_against_reference(
             or int(coarse_shift_x) != int(best_shift_x)
             or int(coarse_shift_y) != int(best_shift_y)
         ):
-            coarse_lane_results, coarse_lane_aggregation = _run_lane_program(
+            coarse_lane_program_result = _execute_measurement_program(
+                inspection_program,
+                inspection_cfg,
+                sample_mask,
                 coarse_aligned_sample_mask,
                 coarse_transform_summary,
+                reference_assets,
+                score_sample,
+                evaluate_metrics,
+                anomaly_metrics_provider,
+                cv2,
+                np,
             )
-            coarse_primary_lane_result = _find_lane_result(
-                coarse_lane_results,
-                coarse_lane_aggregation["primary_lane_id"],
-            )
-            coarse_measurement_result = coarse_primary_lane_result["measurement_result"]
+            coarse_primary_lane_result = coarse_lane_program_result.primary_lane_result
+            coarse_measurement_result = coarse_lane_program_result.measurement_result
             if _should_prefer_coarse_moments_measurement(
                 primary_lane_result["measurement_result"],
                 coarse_measurement_result,
@@ -735,11 +946,11 @@ def inspect_against_reference(
                     "Moments refinement was ignored for scoring because it only removed a large section-width drift "
                     "without enough supporting improvement in independent metrics."
                 )
-                lane_results = coarse_lane_results
-                lane_aggregation = coarse_lane_aggregation
-                primary_lane_result = _find_lane_result(lane_results, lane_aggregation["primary_lane_id"])
-                active_lane_result = _find_lane_result(lane_results, lane_aggregation["active_lane_id"])
-                measurement_result = active_lane_result["measurement_result"]
+                lane_results = coarse_lane_program_result.lane_results
+                lane_aggregation = coarse_lane_program_result.lane_aggregation
+                primary_lane_result = coarse_lane_program_result.primary_lane_result
+                active_lane_result = coarse_lane_program_result.active_lane_result
+                measurement_result = coarse_lane_program_result.measurement_result
                 aligned_sample_mask = coarse_aligned_sample_mask
                 best_angle_deg = float(coarse_angle_deg)
                 best_shift_x = int(coarse_shift_x)
@@ -778,26 +989,15 @@ def inspect_against_reference(
     min_required_coverage = float(threshold_summary["min_required_coverage"])
     max_outside_allowed_ratio = float(threshold_summary["max_outside_allowed_ratio"])
     min_section_coverage_limit = float(threshold_summary["min_section_coverage_limit"])
-
-    required_white = reference_required > 0
-    allowed_white = reference_allowed > 0
-
-    # Check memory bounds before allocating large arrays
-    image_size = aligned_sample_mask.shape[0] * aligned_sample_mask.shape[1] * 3
-    max_reasonable_pixels = 50 * 1024 * 1024  # 50MP limit
-    if image_size > max_reasonable_pixels:
-        raise MemoryError(f"Image too large for processing: {image_size} pixels exceeds {max_reasonable_pixels} limit")
-
-    diff = np.zeros((aligned_sample_mask.shape[0], aligned_sample_mask.shape[1], 3), dtype=np.uint8)
-    diff[allowed_white] = (0, 80, 0)
-    diff[required_white] = (0, 255, 0)
-    diff[metrics["missing_required_mask"]] = (0, 0, 255)
-    diff[metrics["outside_allowed_mask"]] = (255, 0, 0)
-
-    debug_paths = {}
-    if bool(inspection_cfg.get("save_debug_images", True)):
-        stem = image_path.stem
-        debug_paths = save_debug_outputs(stem, aligned_sample_mask, diff)
+    debug_paths = _maybe_save_debug_outputs(
+        image_path,
+        inspection_cfg,
+        aligned_sample_mask,
+        metrics,
+        reference_assets,
+        save_debug_outputs,
+        np,
+    )
 
     registration_assessment = RegistrationAssessment.from_registration_result(
         registration_result,
@@ -902,7 +1102,7 @@ def inspect_against_reference(
         "max_feature_radial_offset_px": threshold_summary.get("max_feature_radial_offset_px"),
         "max_feature_pair_spacing_delta_px": threshold_summary.get("max_feature_pair_spacing_delta_px"),
         "debug_paths": debug_paths,
-        **_get_anomaly_metrics(),
+        **anomaly_metrics_provider(),
     }
     inspection_outcome = InspectionOutcome.from_legacy_details(
         passed=passed,
