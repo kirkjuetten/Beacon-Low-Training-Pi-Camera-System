@@ -5,36 +5,13 @@ from pathlib import Path
 from typing import Optional
 
 from inspection_system.app.camera_interface import get_active_runtime_paths, get_current_project
+from inspection_system.app.pilot_policy import (
+    CAPTURE_BUCKETS,
+    CAPTURE_DATASET_SPLITS,
+    resolve_supervised_pilot_policy,
+)
 from inspection_system.app.reference_service import list_runtime_reference_candidates
 from inspection_system.app.runtime_controller import get_commissioning_status, load_anomaly_detector
-
-
-CAPTURE_DATASET_SPLITS = ("tuning", "validation", "regression")
-CAPTURE_BUCKETS = ("good", "reject", "borderline", "invalid_capture")
-
-SUPERVISED_PILOT_TARGETS = {
-    "tuning": {
-        "good": 10,
-        "reject": 5,
-        "invalid_capture": 2,
-    },
-    "validation": {
-        "good": 5,
-        "reject": 3,
-        "invalid_capture": 2,
-    },
-    "regression": {
-        "good": 5,
-        "reject": 3,
-        "invalid_capture": 2,
-    },
-}
-
-MANUAL_FLOOR_GATES = [
-    "Engineering present at line start with authority to stop the run.",
-    "Controlled challenge kit staged at the station and segregated from production parts.",
-    "First lot executed as a supervised learning run with challenge inserts at a defined cadence.",
-]
 
 
 def _project_root_from_active_paths(active_paths: dict) -> Path:
@@ -132,6 +109,8 @@ def build_supervised_pilot_status(
     commissioning = get_commissioning_status(config, resolved_active_paths, resolved_anomaly_detector)
     reference_candidates = list_runtime_reference_candidates(config, resolved_active_paths)
     dataset_summary = summarize_test_data(resolved_active_paths)
+    policy = resolve_supervised_pilot_policy(config)
+    supervised_pilot_targets = policy["targets"]
 
     issues: list[str] = []
     actions: list[str] = []
@@ -156,7 +135,7 @@ def build_supervised_pilot_status(
                 actions.append(action)
 
     dataset_targets_met = True
-    for split, targets in SUPERVISED_PILOT_TARGETS.items():
+    for split, targets in supervised_pilot_targets.items():
         counts = dataset_summary["split_counts"][split]
         for bucket, target in targets.items():
             if counts.get(bucket, 0) < target:
@@ -255,11 +234,12 @@ def build_supervised_pilot_status(
         "reference_candidate_count": len(reference_candidates),
         "commissioning": commissioning,
         "dataset": dataset_summary,
+        "policy": policy,
         "issues": issues,
         "actions": list(dict.fromkeys(actions)),
         "warnings": warnings,
         "phases": phases,
-        "manual_floor_gates": list(MANUAL_FLOOR_GATES),
+        "manual_floor_gates": list(policy["manual_floor_gates"]),
     }
 
 
@@ -278,12 +258,13 @@ def format_supervised_pilot_report(status: dict) -> list[str]:
     ]
 
     split_counts = dataset.get("split_counts", {})
+    supervised_pilot_targets = status.get("policy", {}).get("targets", {})
     for split in CAPTURE_DATASET_SPLITS:
         lines.append(
             _format_split_count_line(
                 split,
                 split_counts.get(split, {}),
-                SUPERVISED_PILOT_TARGETS.get(split, {}),
+                supervised_pilot_targets.get(split, {}),
             )
         )
 

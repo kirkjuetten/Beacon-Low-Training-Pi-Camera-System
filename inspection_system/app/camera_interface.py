@@ -149,6 +149,30 @@ DEFAULT_CONFIG = {
         "default_split": "tuning",
         "auto_replay_after_capture": True,
     },
+    "pilot_readiness": {
+        "targets": {
+            "tuning": {
+                "good": 10,
+                "reject": 5,
+                "invalid_capture": 2,
+            },
+            "validation": {
+                "good": 5,
+                "reject": 3,
+                "invalid_capture": 2,
+            },
+            "regression": {
+                "good": 5,
+                "reject": 3,
+                "invalid_capture": 2,
+            },
+        },
+        "manual_floor_gates": [
+            "Engineering present at line start with authority to stop the run.",
+            "Controlled challenge kit staged at the station and segregated from production parts.",
+            "First lot executed as a supervised learning run with challenge inserts at a defined cadence.",
+        ],
+    },
     "indicator_led": {
         "enabled": False,
         "pass_gpio": 23,
