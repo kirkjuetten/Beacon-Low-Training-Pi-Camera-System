@@ -528,6 +528,22 @@ class InspectionDisplay:
             self.clock.tick(60)
         return False
 
+    def get_pointer_event_pos(self, event) -> Optional[tuple[int, int]]:
+        """Normalize mouse and touchscreen press events into screen coordinates."""
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            pos = getattr(event, "pos", None)
+            if pos is None:
+                return None
+            return int(pos[0]), int(pos[1])
+
+        if event.type == pygame.FINGERDOWN:
+            width, height = self.screen.get_size()
+            x = int(float(getattr(event, "x", 0.0)) * width)
+            y = int(float(getattr(event, "y", 0.0)) * height)
+            return x, y
+
+        return None
+
     def draw_description(self, description: str, area: pygame.Rect):
         """Draw the inspection description on screen."""
         lines = self._wrap_text_lines(description, area.width, font=self.small_font)
@@ -650,8 +666,14 @@ class InspectionDisplay:
                     new_h = max(event.h, self.MIN_HEIGHT)
                     self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
                     render()
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(event.pos):
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    cleanup_temp_image()
+                    return 'quit'
+                else:
+                    pointer_pos = self.get_pointer_event_pos(event)
+                    if pointer_pos is None:
+                        continue
+                    if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(pointer_pos):
                         self.show_message("Capturing reference...", self.YELLOW)
                         result_code, image_path, stderr_text = capture_to_temp(config)
                         if result_code == 0:
@@ -672,11 +694,8 @@ class InspectionDisplay:
                             cleanup_temp_image()
                             return 'quit'
                         render()
-                    if self.buttons.get('home') and self.buttons['home'].collidepoint(event.pos):
+                    if self.buttons.get('home') and self.buttons['home'].collidepoint(pointer_pos):
                         return 'home'
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    cleanup_temp_image()
-                    return 'quit'
 
             render()
 
@@ -741,18 +760,21 @@ class InspectionDisplay:
                     new_h = max(event.h, self.MIN_HEIGHT)
                     self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
                     render()
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if self.buttons.get("capture") and self.buttons["capture"].collidepoint(event.pos):
-                        return "capture"
-                    if self.buttons.get("set_ref") and self.buttons["set_ref"].collidepoint(event.pos):
-                        return "set_ref"
-                    if self.buttons.get("home") and self.buttons["home"].collidepoint(event.pos):
-                        return "home"
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         return "quit"
                     if event.key == pygame.K_RETURN:
                         return "capture"
+                else:
+                    pointer_pos = self.get_pointer_event_pos(event)
+                    if pointer_pos is None:
+                        continue
+                    if self.buttons.get("capture") and self.buttons["capture"].collidepoint(pointer_pos):
+                        return "capture"
+                    if self.buttons.get("set_ref") and self.buttons["set_ref"].collidepoint(pointer_pos):
+                        return "set_ref"
+                    if self.buttons.get("home") and self.buttons["home"].collidepoint(pointer_pos):
+                        return "home"
 
             self.clock.tick(30)
 
@@ -850,8 +872,15 @@ class InspectionDisplay:
                     new_height = max(event.h, self.MIN_HEIGHT)
                     self.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
                     render_frame()
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pos = event.pos
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return 'quit', False
+                    elif event.key == pygame.K_RETURN and user_feedback:
+                        return user_feedback, True
+                else:
+                    mouse_pos = self.get_pointer_event_pos(event)
+                    if mouse_pos is None:
+                        continue
 
                     if not user_feedback:
                         if self.buttons['approve'].collidepoint(mouse_pos):
@@ -884,12 +913,6 @@ class InspectionDisplay:
                             if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
                                 return 'quit', False
                             return user_feedback, True
-
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        return 'quit', False
-                    elif event.key == pygame.K_RETURN and user_feedback:
-                        return user_feedback, True
 
             self.clock.tick(30)
 
@@ -999,10 +1022,10 @@ class InspectionDisplay:
                     new_height = max(event.h, self.MIN_HEIGHT)
                     self.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
                     render()
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    pos = event.pos
+                pointer_pos = self.get_pointer_event_pos(event)
+                if pointer_pos is not None:
                     for action, rect in button_rects.items():
-                        if rect.collidepoint(pos):
+                        if rect.collidepoint(pointer_pos):
                             return action
 
             self.clock.tick(30)

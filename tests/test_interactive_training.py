@@ -826,6 +826,20 @@ def test_show_message_wraps_long_text() -> None:
     assert len(fake_display.screen.calls) >= 2
 
 
+def test_get_pointer_event_pos_supports_touch_events() -> None:
+    fake_display = type("FakeDisplay", (), {})()
+    fake_display.screen = type("FakeScreen", (), {"get_size": lambda self: (800, 480)})()
+
+    finger_event = SimpleNamespace(type=interactive_training.pygame.FINGERDOWN, x=0.25, y=0.5)
+    mouse_event = SimpleNamespace(type=interactive_training.pygame.MOUSEBUTTONDOWN, pos=(123, 45))
+
+    finger_pos = interactive_training.InspectionDisplay.get_pointer_event_pos(fake_display, finger_event)
+    mouse_pos = interactive_training.InspectionDisplay.get_pointer_event_pos(fake_display, mouse_event)
+
+    assert finger_pos == (200, 240)
+    assert mouse_pos == (123, 45)
+
+
 def test_training_review_warnings_surface_config_fit_problems(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config = {
