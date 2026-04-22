@@ -166,6 +166,8 @@ class InspectionDisplay:
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
             self.visible_buttons = ["approve", "reject", "review", "capture", "set_ref"]
+        elif mode == "await_capture":
+            self.visible_buttons = ["capture", "set_ref", "home"]
         else:
             self.reference_button_label = "SET REF"
             self.visible_buttons = ["set_ref", "home"]
@@ -493,17 +495,17 @@ class InspectionDisplay:
         """Generate human-readable description of inspection results."""
         return str(build_training_inspection_feedback(passed, details)["description"])
 
-    def draw_description(self, description: str, area: pygame.Rect):
-        """Draw the inspection description on screen."""
-        # Split description into lines that fit the screen
-        screen_width = area.width
-        words = description.split()
-        lines = []
-        current_line = ""
+    def _wrap_text_lines(self, text: str, max_width: int, *, font=None) -> List[str]:
+        active_font = font or self.small_font
+        words = str(text).split()
+        if not words:
+            return [""]
 
+        lines: List[str] = []
+        current_line = ""
         for word in words:
             test_line = current_line + " " + word if current_line else word
-            if self.small_font.size(test_line)[0] < screen_width:
+            if active_font.size(test_line)[0] < max_width:
                 current_line = test_line
             else:
                 if current_line:
@@ -512,6 +514,23 @@ class InspectionDisplay:
 
         if current_line:
             lines.append(current_line)
+        return lines
+
+    def wait_with_event_pump(self, duration_ms: int) -> bool:
+        """Pause briefly while still servicing window close events."""
+        end_tick = pygame.time.get_ticks() + max(0, int(duration_ms))
+        while pygame.time.get_ticks() < end_tick:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return True
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    return True
+            self.clock.tick(60)
+        return False
+
+    def draw_description(self, description: str, area: pygame.Rect):
+        """Draw the inspection description on screen."""
+        lines = self._wrap_text_lines(description, area.width, font=self.small_font)
 
         # Draw each line
         line_height = self.small_font.get_linesize() + 2
@@ -525,9 +544,22 @@ class InspectionDisplay:
         self._reflow_layout()
         self.screen.fill(self.BLACK)
         col = color or self.WHITE
-        text = self.font.render(message, True, col)
-        text_rect = text.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2))
-        self.screen.blit(text, text_rect)
+        pad = self._clamp(int(self.screen.get_height() * 0.04), 18, 36)
+        available_rect = pygame.Rect(
+            pad,
+            pad,
+            max(80, self.screen.get_width() - pad * 2),
+            max(80, self.screen.get_height() - pad * 2),
+        )
+        lines = self._wrap_text_lines(message, available_rect.width, font=self.font)
+        line_height = self.font.get_linesize() + 4
+        total_height = line_height * len(lines)
+        start_y = available_rect.y + max(0, (available_rect.height - total_height) // 2)
+        for index, line in enumerate(lines):
+            text = self.font.render(line, True, col)
+            text_rect = text.get_rect(centerx=self.screen.get_width() // 2)
+            text_rect.y = start_y + index * line_height
+            self.screen.blit(text, text_rect)
         pygame.display.flip()
 
     def flash_action_confirmation(self, message: str, color: tuple, duration_ms: int = 450) -> bool:
@@ -567,13 +599,12 @@ class InspectionDisplay:
         return 'capture'
 
     def run_reference_preview(self, config: dict, has_reference: bool) -> str:
-        """Show a live-ish preview loop until the operator captures/replaces the reference."""
+        """Wait for the operator to explicitly capture/replace the reference."""
         self.set_ui_mode("setup_reference")
-        self.reference_button_label = "SET REF"
+        self.reference_button_label = "CAPTURE REF"
         last_surface: Optional[pygame.Surface] = None
         last_image_path: Optional[Path] = None
         status_color = self.YELLOW
-        next_capture_time = 0.0
 
         def render() -> None:
             self._reflow_layout()
@@ -592,7 +623,7 @@ class InspectionDisplay:
                 scaled_surface = self._scale_surface_to_rect(last_surface, image_rect)
                 self.draw_image_with_border(scaled_surface, status_color, image_rect)
             else:
-                placeholder = self.font.render("Waiting for camera preview...", True, self.WHITE)
+                placeholder = self.font.render("Waiting for operator to capture reference", True, self.WHITE)
                 placeholder_rect = placeholder.get_rect(center=image_rect.center)
                 self.screen.blit(placeholder, placeholder_rect)
 
@@ -610,22 +641,6 @@ class InspectionDisplay:
             pygame.display.flip()
 
         while True:
-            now = time.time()
-            if now >= next_capture_time:
-                result_code, image_path, stderr_text = capture_to_temp(config)
-                if result_code == 0:
-                    surface = self.load_surface_from_image(image_path)
-                    if surface is not None:
-                        last_surface = surface
-                        last_image_path = image_path
-                        status_color = self.GREEN if has_reference else self.YELLOW
-                    else:
-                        status_color = self.RED
-                else:
-                    status_color = self.RED
-                next_capture_time = now + 0.35
-                render()
-
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     cleanup_temp_image()
@@ -637,15 +652,107 @@ class InspectionDisplay:
                     render()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(event.pos):
-                        return str(last_image_path) if last_image_path is not None else 'capture'
+                        self.show_message("Capturing reference...", self.YELLOW)
+                        result_code, image_path, stderr_text = capture_to_temp(config)
+                        if result_code == 0:
+                            surface = self.load_surface_from_image(image_path)
+                            if surface is not None:
+                                last_surface = surface
+                                last_image_path = image_path
+                                status_color = self.GREEN if has_reference else self.YELLOW
+                                render()
+                                return str(last_image_path)
+                            status_color = self.RED
+                            self.show_message("Captured reference image could not be displayed.", self.RED)
+                        else:
+                            status_color = self.RED
+                            message = stderr_text or "Camera capture failed while setting the reference."
+                            self.show_message(message, self.RED)
+                        if self.wait_with_event_pump(900):
+                            cleanup_temp_image()
+                            return 'quit'
+                        render()
                     if self.buttons.get('home') and self.buttons['home'].collidepoint(event.pos):
                         return 'home'
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     cleanup_temp_image()
                     return 'quit'
 
-            if last_surface is None:
-                render()
+            render()
+
+            self.clock.tick(30)
+
+    def wait_for_capture_start(
+        self,
+        config: dict,
+        has_reference: bool,
+        mode_lines: Optional[List[str]] = None,
+    ) -> str:
+        """Wait for the operator to explicitly begin the next inspection capture."""
+        self.set_ui_mode("await_capture")
+        self.reference_button_label = "RESET REF" if has_reference else "SET REF"
+        instructions = [
+            "Training is armed but idle.",
+            "Load the next part, then press CAPTURE to run the next inspection.",
+            "Use SET REF if the golden reference needs to be captured or replaced.",
+        ]
+        if mode_lines:
+            instructions.extend(mode_lines)
+
+        def render() -> None:
+            self._reflow_layout()
+            self.screen.fill(self.BLACK)
+
+            status_rect = self.layout["status_rect"]
+            image_rect = self.layout["image_rect"]
+            metrics_rect = self.layout["metrics_rect"]
+            description_rect = self.layout["description_rect"]
+
+            title = "Training Ready"
+            status_surface = self.font.render(title, True, self.YELLOW)
+            self.screen.blit(status_surface, status_rect.topleft)
+
+            placeholder = self.font.render("Waiting for operator to begin", True, self.WHITE)
+            placeholder_rect = placeholder.get_rect(center=image_rect.center)
+            self.screen.blit(placeholder, placeholder_rect)
+
+            y = metrics_rect.y
+            line_height = self.small_font.get_linesize() + 2
+            for line in instructions:
+                text = self.small_font.render(line, True, self.WHITE)
+                self.screen.blit(text, (metrics_rect.x, y))
+                y += line_height
+
+            self.draw_description(
+                "Press CAPTURE only when the next part is placed and ready for inspection.",
+                description_rect,
+            )
+            self.draw_buttons()
+            pygame.display.flip()
+
+        render()
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return "quit"
+                elif event.type == pygame.VIDEORESIZE:
+                    new_w = max(event.w, self.MIN_WIDTH)
+                    new_h = max(event.h, self.MIN_HEIGHT)
+                    self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
+                    render()
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.buttons.get("capture") and self.buttons["capture"].collidepoint(event.pos):
+                        return "capture"
+                    if self.buttons.get("set_ref") and self.buttons["set_ref"].collidepoint(event.pos):
+                        return "set_ref"
+                    if self.buttons.get("home") and self.buttons["home"].collidepoint(event.pos):
+                        return "home"
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return "quit"
+                    if event.key == pygame.K_RETURN:
+                        return "capture"
 
             self.clock.tick(30)
 
@@ -1748,13 +1855,52 @@ def run_interactive_training(config: dict) -> int:
                 refresh_runtime_state()
                 trainer.active_paths = active_paths
                 if success:
-                    display.show_message("Reference saved. Starting training...", display.GREEN)
-                    time.sleep(1)
+                    display.show_message("Reference saved. Press Capture to begin.", display.GREEN)
+                    time.sleep(0.8)
                     break
                 display.show_message(msg, display.RED)
                 time.sleep(2)
 
         while True:
+            action = display.wait_for_capture_start(
+                config,
+                has_reference=bool(reference_candidates),
+                mode_lines=format_operator_mode_lines(config, active_paths, anomaly_detector),
+            )
+            if action == 'home':
+                print("Returning to dashboard/home.")
+                break
+            if action == 'quit':
+                break
+            if action == 'set_ref':
+                go_home = False
+                while True:
+                    action = display.run_reference_preview(config, has_reference=active_paths["reference_mask"].exists())
+                    if action == 'home':
+                        go_home = True
+                        break
+                    if action == 'quit':
+                        break
+                    if action in {'capture', '', None}:
+                        display.show_message("Waiting for preview frame...", display.YELLOW)
+                        time.sleep(1)
+                        continue
+                    display.show_message("Saving reference...", display.YELLOW)
+                    success, msg = save_reference_from_image(config, Path(action))
+                    cleanup_temp_image()
+                    print(msg)
+                    refresh_runtime_state()
+                    trainer.active_paths = active_paths
+                    color = display.GREEN if success else display.RED
+                    display.show_message(msg, color)
+                    time.sleep(1.5)
+                    if success:
+                        break
+                if go_home:
+                    print("Returning to dashboard/home.")
+                    break
+                continue
+
             # Capture image
             result_code, image_path, stderr_text = capture_to_temp(config)
             if result_code != 0:
