@@ -167,8 +167,6 @@ class InspectionDisplay:
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
             self.visible_buttons = ["approve", "reject", "review", "capture", "set_ref"]
-        elif mode == "await_capture":
-            self.visible_buttons = ["capture", "set_ref", "home"]
         else:
             self.reference_button_label = "SET REF"
             self.visible_buttons = ["set_ref", "home"]
@@ -744,92 +742,6 @@ class InspectionDisplay:
             if needs_render:
                 render()
                 needs_render = False
-
-            self.clock.tick(30)
-
-    def wait_for_capture_start(
-        self,
-        config: dict,
-        has_reference: bool,
-        mode_lines: Optional[List[str]] = None,
-    ) -> str:
-        """Wait for the operator to explicitly begin the next inspection capture."""
-        self.set_ui_mode("await_capture")
-        self.reference_button_label = "RESET REF" if has_reference else "SET REF"
-        instructions = [
-            "Training is armed but idle.",
-            "Load the next part, then press CAPTURE to run the next inspection.",
-            "Use SET REF if the golden reference needs to be captured or replaced.",
-        ]
-        if mode_lines:
-            instructions.extend(mode_lines)
-
-        def render() -> None:
-            self._reflow_layout()
-            self.screen.fill(self.BLACK)
-
-            status_rect = self.layout["status_rect"]
-            image_rect = self.layout["image_rect"]
-            metrics_rect = self.layout["metrics_rect"]
-            description_rect = self.layout["description_rect"]
-
-            title = "Training Ready"
-            status_surface = self.font.render(title, True, self.YELLOW)
-            self.screen.blit(status_surface, status_rect.topleft)
-
-            placeholder = self.font.render("Waiting for operator to begin", True, self.WHITE)
-            placeholder_rect = placeholder.get_rect(center=image_rect.center)
-            self.screen.blit(placeholder, placeholder_rect)
-
-            y = metrics_rect.y
-            line_height = self.small_font.get_linesize() + 2
-            for line in instructions:
-                text = self.small_font.render(line, True, self.WHITE)
-                self.screen.blit(text, (metrics_rect.x, y))
-                y += line_height
-
-            self.draw_description(
-                "Press CAPTURE only when the next part is placed and ready for inspection.",
-                description_rect,
-            )
-            self.draw_buttons()
-            pygame.display.flip()
-
-        render()
-
-        while True:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    return "quit"
-                elif event.type == pygame.VIDEORESIZE:
-                    new_w = max(event.w, self.MIN_WIDTH)
-                    new_h = max(event.h, self.MIN_HEIGHT)
-                    self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
-                    render()
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        return "quit"
-                    if event.key == pygame.K_RETURN:
-                        return "capture"
-                else:
-                    pointer_pos = self.get_pointer_event_pos(event)
-                    if pointer_pos is None:
-                        continue
-                    if self.buttons.get("capture") and self.buttons["capture"].collidepoint(pointer_pos):
-                        return "capture"
-                    if self.buttons.get("set_ref") and self.buttons["set_ref"].collidepoint(pointer_pos):
-                        return "set_ref"
-                    if self.buttons.get("home") and self.buttons["home"].collidepoint(pointer_pos):
-                        return "home"
-
-            polled_pointer_pos = self.get_polled_pointer_press_pos()
-            if polled_pointer_pos is not None:
-                if self.buttons.get("capture") and self.buttons["capture"].collidepoint(polled_pointer_pos):
-                    return "capture"
-                if self.buttons.get("set_ref") and self.buttons["set_ref"].collidepoint(polled_pointer_pos):
-                    return "set_ref"
-                if self.buttons.get("home") and self.buttons["home"].collidepoint(polled_pointer_pos):
-                    return "home"
 
             self.clock.tick(30)
 
@@ -1972,52 +1884,13 @@ def run_interactive_training(config: dict) -> int:
                 refresh_runtime_state()
                 trainer.active_paths = active_paths
                 if success:
-                    display.show_message("Reference saved. Press Capture to begin.", display.GREEN)
+                    display.show_message("Reference saved. Starting training...", display.GREEN)
                     time.sleep(0.8)
                     break
                 display.show_message(msg, display.RED)
                 time.sleep(2)
 
         while True:
-            action = display.wait_for_capture_start(
-                config,
-                has_reference=bool(reference_candidates),
-                mode_lines=format_operator_mode_lines(config, active_paths, anomaly_detector),
-            )
-            if action == 'home':
-                print("Returning to dashboard/home.")
-                break
-            if action == 'quit':
-                break
-            if action == 'set_ref':
-                go_home = False
-                while True:
-                    action = display.run_reference_preview(config, has_reference=active_paths["reference_mask"].exists())
-                    if action == 'home':
-                        go_home = True
-                        break
-                    if action == 'quit':
-                        break
-                    if action in {'capture', '', None}:
-                        display.show_message("Waiting for preview frame...", display.YELLOW)
-                        time.sleep(1)
-                        continue
-                    display.show_message("Saving reference...", display.YELLOW)
-                    success, msg = save_reference_from_image(config, Path(action))
-                    cleanup_temp_image()
-                    print(msg)
-                    refresh_runtime_state()
-                    trainer.active_paths = active_paths
-                    color = display.GREEN if success else display.RED
-                    display.show_message(msg, color)
-                    time.sleep(1.5)
-                    if success:
-                        break
-                if go_home:
-                    print("Returning to dashboard/home.")
-                    break
-                continue
-
             # Capture image
             result_code, image_path, stderr_text = capture_to_temp(config)
             if result_code != 0:
