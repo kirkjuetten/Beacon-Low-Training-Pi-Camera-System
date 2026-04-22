@@ -346,8 +346,11 @@ def test_inspect_against_reference_aggregates_multiple_authoritative_lanes() -> 
     def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
         return [required_mask_arg]
 
+    score_sample_calls = 0
+
     def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
-        lane_id = None
+        nonlocal score_sample_calls
+        score_sample_calls += 1
         return {
             "required_coverage": 0.98,
             "outside_allowed_ratio": 0.01,
@@ -418,6 +421,7 @@ def test_inspect_against_reference_aggregates_multiple_authoritative_lanes() -> 
     assert details["lane_results"][0]["lane_id"] == "geometry"
     assert details["lane_results"][1]["lane_id"] == "print"
     assert details["required_coverage"] == 0.88
+    assert score_sample_calls == 1
 
 
 def test_compute_mean_edge_distance_px_detects_shifted_edges() -> None:
@@ -777,6 +781,8 @@ def test_inspect_against_references_selects_best_passing_reference() -> None:
         reference_image_path,
         *args,
         anomaly_detector=None,
+        prepared_sample_data=None,
+        reference_settings_checked=False,
     ):
         ref_name = Path(reference_mask_path).stem
         if ref_name == 'candidate_mask':
@@ -837,6 +843,89 @@ def test_inspect_against_references_selects_best_passing_reference() -> None:
     assert details['reference_candidate_summaries'][0]['reference_id'] == 'golden'
     assert details['reference_candidate_summaries'][1]['reference_id'] == 'candidate_1'
     assert details['reference_candidate_summaries'][1]['passed'] is True
+
+
+def test_inspect_against_references_reuses_prepared_sample_data() -> None:
+    sample_mask = np.zeros((20, 20), dtype=np.uint8)
+    sample_mask[5:15, 5:15] = 255
+    reference_mask = np.zeros((20, 20), dtype=np.uint8)
+    reference_mask[5:15, 5:15] = 255
+    roi_image = np.ones((20, 20, 3), dtype=np.uint8) * 128
+    fake_cv2 = FakeCv2(reference_mask, roi_image)
+    make_binary_mask_calls = 0
+
+    def fake_make_binary_mask(image_path, inspection_cfg, import_cv2_and_numpy):
+        nonlocal make_binary_mask_calls
+        make_binary_mask_calls += 1
+        return roi_image, None, sample_mask, (0, 0, 20, 20), fake_cv2, np
+
+    def fake_align_sample_mask(sample_mask_arg, reference_mask_arg, alignment_cfg, cv2, np_module):
+        return sample_mask_arg, 0.0, 0, 0
+
+    def fake_build_reference_regions(reference_mask_arg, inspection_cfg, dilate_fn, erode_fn):
+        return reference_mask_arg, reference_mask_arg
+
+    def fake_compute_section_masks(required_mask_arg, section_columns, cv2, np_module):
+        return [required_mask_arg]
+
+    def fake_score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks):
+        return {
+            'required_coverage': 0.95,
+            'outside_allowed_ratio': 0.01,
+            'min_section_coverage': 0.90,
+            'section_coverages': [0.90],
+            'sample_white_pixels': 4,
+            'missing_required_mask': np.zeros((20, 20), dtype=bool),
+            'outside_allowed_mask': np.zeros((20, 20), dtype=bool),
+        }
+
+    def fake_evaluate_metrics(metrics, inspection_cfg):
+        return True, {
+            'required_coverage': 0.95,
+            'outside_allowed_ratio': 0.01,
+            'min_section_coverage': 0.90,
+            'min_required_coverage': 0.92,
+            'max_outside_allowed_ratio': 0.02,
+            'min_section_coverage_limit': 0.85,
+        }
+
+    def fake_import_cv2_and_numpy():
+        return fake_cv2, np
+
+    passed, details = inspect_against_references(
+        {'inspection': {'save_debug_images': False, 'reference_strategy': 'hybrid'}, 'alignment': {}},
+        Path('sample.jpg'),
+        [
+            {
+                'reference_id': 'golden',
+                'label': 'Golden Reference',
+                'role': 'golden',
+                'reference_mask_path': Path('golden_mask.png'),
+                'reference_image_path': Path('golden_image.png'),
+            },
+            {
+                'reference_id': 'candidate_1',
+                'label': 'Approved Good 1',
+                'role': 'candidate',
+                'reference_mask_path': Path('candidate_mask.png'),
+                'reference_image_path': Path('candidate_image.png'),
+            },
+        ],
+        fake_make_binary_mask,
+        fake_align_sample_mask,
+        fake_build_reference_regions,
+        fake_compute_section_masks,
+        fake_score_sample,
+        fake_evaluate_metrics,
+        lambda stem, aligned_sample_mask, diff: {},
+        fake_import_cv2_and_numpy,
+        lambda mask, iterations, cv2, np_module: mask,
+        lambda mask, iterations, cv2, np_module: mask,
+    )
+
+    assert passed is True
+    assert details['reference_id'] == 'golden'
+    assert make_binary_mask_calls == 1
 
 
 def test_reference_candidate_rank_ignores_nonfinite_optional_gate_values() -> None:

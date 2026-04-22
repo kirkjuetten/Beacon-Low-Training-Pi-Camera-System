@@ -60,6 +60,21 @@ class _LaneProgramResult:
     measurement_result: dict
 
 
+@dataclass
+class _MeasurementBaseline:
+    resolved_anomaly_metrics: dict
+    metrics: dict
+    edge_measurement_mask: object
+    edge_measurement_frame: str
+    mean_edge_distance_px: float
+    section_edge_distances_px: list
+    worst_section_edge_distance_px: float
+    section_width_ratios: list
+    section_center_offsets_px: list
+    section_measurement_frame: str
+    section_measurements: list[dict]
+
+
 def _anomaly_evaluation_requested(inspection_cfg: dict) -> bool:
     if not isinstance(inspection_cfg, dict):
         return False
@@ -444,47 +459,34 @@ def _measure_inspection_outcome(
     anomaly_metrics: dict | None,
     cv2,
     np,
+    baseline_measurements: _MeasurementBaseline | None = None,
 ) -> dict:
-    resolved_anomaly_metrics = dict(anomaly_metrics or {})
-    metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
-    datum_section_metrics = None
-    edge_measurement_mask = aligned_sample_mask
-    edge_measurement_frame = "aligned_mask"
-    if transform_summary is not None:
-        datum_section_metrics = compute_datum_section_measurements(
+    if baseline_measurements is None:
+        baseline_measurements = _compute_measurement_baseline(
             sample_mask,
+            aligned_sample_mask,
+            transform_summary,
+            reference_mask,
+            reference_allowed,
+            reference_required,
             section_masks,
-            transform_summary,
-            np,
-        )
-        edge_measurement_mask = apply_transform_to_mask(
-            sample_mask,
-            transform_summary,
+            score_sample,
+            anomaly_metrics,
             cv2,
             np,
         )
-        edge_measurement_frame = "datum"
 
-    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, edge_measurement_mask, np, cv2)
-    section_edge_distances_px = compute_section_edge_distances_px(
-        reference_mask,
-        edge_measurement_mask,
-        section_masks,
-        np,
-        cv2,
-    )
-    worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
-
-    if datum_section_metrics is not None:
-        section_width_ratios = datum_section_metrics["section_width_ratios"]
-        section_center_offsets_px = datum_section_metrics["section_center_offsets_px"]
-        section_measurement_frame = datum_section_metrics["frame"]
-        section_measurements = datum_section_metrics["section_measurements"]
-    else:
-        section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
-        section_center_offsets_px = compute_section_center_offsets_px(reference_mask, aligned_sample_mask, section_masks, np)
-        section_measurement_frame = "aligned_mask"
-        section_measurements = []
+    resolved_anomaly_metrics = dict(baseline_measurements.resolved_anomaly_metrics)
+    metrics = baseline_measurements.metrics
+    edge_measurement_mask = baseline_measurements.edge_measurement_mask
+    edge_measurement_frame = baseline_measurements.edge_measurement_frame
+    mean_edge_distance_px = baseline_measurements.mean_edge_distance_px
+    section_edge_distances_px = baseline_measurements.section_edge_distances_px
+    worst_section_edge_distance_px = baseline_measurements.worst_section_edge_distance_px
+    section_width_ratios = baseline_measurements.section_width_ratios
+    section_center_offsets_px = baseline_measurements.section_center_offsets_px
+    section_measurement_frame = baseline_measurements.section_measurement_frame
+    section_measurements = baseline_measurements.section_measurements
 
     feature_measurements: list[dict] = []
     feature_position_summary = None
@@ -542,6 +544,75 @@ def _measure_inspection_outcome(
         "worst_section_center_offset_px": worst_section_center_offset_px,
         "edge_measurement_frame": edge_measurement_frame,
     }
+
+
+def _compute_measurement_baseline(
+    sample_mask,
+    aligned_sample_mask,
+    transform_summary: dict | None,
+    reference_mask,
+    reference_allowed,
+    reference_required,
+    section_masks,
+    score_sample,
+    anomaly_metrics: dict | None,
+    cv2,
+    np,
+) -> _MeasurementBaseline:
+    resolved_anomaly_metrics = dict(anomaly_metrics or {})
+    metrics = score_sample(reference_allowed, reference_required, aligned_sample_mask, section_masks)
+    datum_section_metrics = None
+    edge_measurement_mask = aligned_sample_mask
+    edge_measurement_frame = "aligned_mask"
+    if transform_summary is not None:
+        datum_section_metrics = compute_datum_section_measurements(
+            sample_mask,
+            section_masks,
+            transform_summary,
+            np,
+        )
+        edge_measurement_mask = apply_transform_to_mask(
+            sample_mask,
+            transform_summary,
+            cv2,
+            np,
+        )
+        edge_measurement_frame = "datum"
+
+    mean_edge_distance_px = compute_mean_edge_distance_px(reference_mask, edge_measurement_mask, np, cv2)
+    section_edge_distances_px = compute_section_edge_distances_px(
+        reference_mask,
+        edge_measurement_mask,
+        section_masks,
+        np,
+        cv2,
+    )
+    worst_section_edge_distance_px = max(section_edge_distances_px) if section_edge_distances_px else 0.0
+
+    if datum_section_metrics is not None:
+        section_width_ratios = datum_section_metrics["section_width_ratios"]
+        section_center_offsets_px = datum_section_metrics["section_center_offsets_px"]
+        section_measurement_frame = datum_section_metrics["frame"]
+        section_measurements = datum_section_metrics["section_measurements"]
+    else:
+        section_width_ratios = compute_section_width_ratios(reference_mask, aligned_sample_mask, section_masks, np)
+        section_center_offsets_px = compute_section_center_offsets_px(reference_mask, aligned_sample_mask, section_masks, np)
+        section_measurement_frame = "aligned_mask"
+        section_measurements = []
+
+    return _MeasurementBaseline(
+        resolved_anomaly_metrics=resolved_anomaly_metrics,
+        metrics=metrics,
+        edge_measurement_mask=edge_measurement_mask,
+        edge_measurement_frame=edge_measurement_frame,
+        mean_edge_distance_px=mean_edge_distance_px,
+        section_edge_distances_px=section_edge_distances_px,
+        worst_section_edge_distance_px=worst_section_edge_distance_px,
+        section_width_ratios=section_width_ratios,
+        section_center_offsets_px=section_center_offsets_px,
+        section_measurement_frame=section_measurement_frame,
+        section_measurements=section_measurements,
+    )
 
 
 def _should_prefer_coarse_moments_measurement(
@@ -719,6 +790,20 @@ def _execute_measurement_program(
     cv2,
     np,
 ) -> _LaneProgramResult:
+    baseline_measurements = _compute_measurement_baseline(
+        sample_mask,
+        aligned_sample_mask,
+        transform_summary,
+        reference_assets.reference_mask,
+        reference_assets.reference_allowed,
+        reference_assets.reference_required,
+        reference_assets.section_masks,
+        score_sample,
+        anomaly_metrics_provider(),
+        cv2,
+        np,
+    )
+
     lane_results: list[dict] = []
     for lane in inspection_program.lanes:
         lane_result = execute_inspection_lane(
@@ -735,9 +820,10 @@ def _execute_measurement_program(
                 lane_inspection_cfg,
                 score_sample,
                 evaluate_metrics,
-                anomaly_metrics_provider(),
+                baseline_measurements.resolved_anomaly_metrics,
                 cv2,
                 np,
+                baseline_measurements=baseline_measurements,
             ),
         )
         lane_result["inspection_failure_cause"] = _resolve_inspection_failure_cause(
@@ -814,12 +900,16 @@ def inspect_against_reference(
     dilate_mask,
     erode_mask,
     anomaly_detector=None,
+    *,
+    prepared_sample_data: _PreparedSampleData | None = None,
+    reference_settings_checked: bool = False,
 ) -> tuple[bool, dict]:
     inspection_cfg = config.get("inspection", {})
     alignment_cfg, alignment_profile = resolve_alignment_config(config)
-    _check_reference_settings_warning(config)
+    if not reference_settings_checked:
+        _check_reference_settings_warning(config)
 
-    sample_data = _prepare_sample_data(
+    sample_data = prepared_sample_data or _prepare_sample_data(
         image_path,
         inspection_cfg,
         make_binary_mask,
@@ -1133,6 +1223,21 @@ def inspect_against_references(
     if not reference_candidates:
         raise FileNotFoundError("No reference candidates are available for inspection.")
 
+    prepared_sample_data = None
+    reference_settings_checked = False
+    if all(callable(func) for func in (make_binary_mask, import_cv2_and_numpy, dilate_mask, erode_mask)):
+        inspection_cfg = config.get("inspection", {})
+        _check_reference_settings_warning(config)
+        reference_settings_checked = True
+        prepared_sample_data = _prepare_sample_data(
+            image_path,
+            inspection_cfg,
+            make_binary_mask,
+            import_cv2_and_numpy,
+            dilate_mask,
+            erode_mask,
+        )
+
     ranked_results: list[tuple[tuple[int, int, float], bool, dict]] = []
     candidate_summaries: list[dict] = []
     errors: list[str] = []
@@ -1158,6 +1263,8 @@ def inspect_against_references(
                 dilate_mask,
                 erode_mask,
                 anomaly_detector=anomaly_detector,
+                prepared_sample_data=prepared_sample_data,
+                reference_settings_checked=reference_settings_checked,
             )
         except (FileNotFoundError, ValueError) as exc:
             errors.append(f"{reference_id}: {exc}")
