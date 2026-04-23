@@ -880,6 +880,19 @@ def test_get_pointer_event_pos_supports_touch_events() -> None:
     assert mouse_up_pos == (321, 54)
 
 
+def test_set_ui_mode_supports_startup_capture() -> None:
+    fake_display = type("FakeDisplay", (), {})()
+    fake_display.reference_button_label = "SET REF"
+    fake_display.visible_buttons = []
+    fake_display.active_mode = "setup_reference"
+
+    interactive_training.InspectionDisplay.set_ui_mode(fake_display, "startup_capture")
+
+    assert fake_display.active_mode == "startup_capture"
+    assert fake_display.reference_button_label == "SET REF"
+    assert fake_display.visible_buttons == ["capture", "home"]
+
+
 def test_get_polled_pointer_press_pos_reports_only_new_presses(monkeypatch) -> None:
     fake_display = type("FakeDisplay", (), {})()
     fake_display._last_pointer_pressed = False

@@ -167,6 +167,9 @@ class InspectionDisplay:
         if mode == "inspection":
             self.reference_button_label = "RESET REF"
             self.visible_buttons = ["approve", "reject", "review", "capture", "set_ref"]
+        elif mode == "startup_capture":
+            self.reference_button_label = "SET REF"
+            self.visible_buttons = ["capture", "home"]
         else:
             self.reference_button_label = "SET REF"
             self.visible_buttons = ["set_ref", "home"]
@@ -739,6 +742,122 @@ class InspectionDisplay:
                         return 'quit'
                     needs_render = True
                 if self.buttons.get('home') and self.buttons['home'].collidepoint(polled_pointer_pos):
+                    return 'home'
+
+            if needs_render:
+                render()
+                needs_render = False
+
+            self.clock.tick(30)
+
+    def run_startup_capture_preview(self, config: dict) -> str:
+        """Capture and show a startup preview image without inspecting it."""
+        self.set_ui_mode("startup_capture")
+        last_surface: Optional[pygame.Surface] = None
+        status_color = self.YELLOW
+        needs_render = True
+
+        def render() -> None:
+            self._reflow_layout()
+            self.screen.fill(self.BLACK)
+
+            status_rect = self.layout["status_rect"]
+            image_rect = self.layout["image_rect"]
+            metrics_rect = self.layout["metrics_rect"]
+            description_rect = self.layout["description_rect"]
+
+            title = "Training Startup Preview"
+            title_surface = self.font.render(title, True, status_color)
+            self.screen.blit(title_surface, status_rect.topleft)
+
+            if last_surface is not None:
+                scaled_surface = self._scale_surface_to_rect(last_surface, image_rect)
+                self.draw_image_with_border(scaled_surface, status_color, image_rect)
+            else:
+                placeholder = self.font.render("Tap CAPTURE to take a preview-only image", True, self.WHITE)
+                placeholder_rect = placeholder.get_rect(center=image_rect.center)
+                self.screen.blit(placeholder, placeholder_rect)
+
+            metric_lines = [
+                "The first startup capture is preview-only.",
+                "No inspection result will be recorded for that image.",
+                "Use it to verify framing before training begins.",
+            ]
+            y = metrics_rect.y
+            line_height = self.small_font.get_linesize() + 2
+            for line in metric_lines:
+                text = self.small_font.render(line, True, self.WHITE)
+                self.screen.blit(text, (metrics_rect.x, y))
+                y += line_height
+
+            description = (
+                "Tap CAPTURE when you are ready. After the preview image is shown briefly, "
+                "training will begin on the next capture."
+            )
+            self.draw_description(description, description_rect)
+            self.draw_buttons()
+
+            pygame.display.flip()
+
+        def handle_capture() -> str | None:
+            nonlocal last_surface, status_color, needs_render
+            self.show_message("Capturing startup preview...", self.YELLOW)
+            result_code, image_path, stderr_text = capture_to_temp(config)
+            if result_code == 0:
+                surface = self.load_surface_from_image(image_path)
+                if surface is not None:
+                    last_surface = surface
+                    status_color = self.GREEN
+                    render()
+                    if self.wait_with_event_pump(1200):
+                        cleanup_temp_image()
+                        return 'quit'
+                    return str(image_path)
+                status_color = self.RED
+                self.show_message("Captured preview image could not be displayed.", self.RED)
+            else:
+                status_color = self.RED
+                message = stderr_text or "Camera capture failed while preparing startup preview."
+                self.show_message(message, self.RED)
+            if self.wait_with_event_pump(900):
+                cleanup_temp_image()
+                return 'quit'
+            needs_render = True
+            return None
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    cleanup_temp_image()
+                    return 'quit'
+                if event.type == pygame.VIDEORESIZE:
+                    new_w = max(event.w, self.MIN_WIDTH)
+                    new_h = max(event.h, self.MIN_HEIGHT)
+                    self.screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
+                    needs_render = True
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    cleanup_temp_image()
+                    return 'quit'
+                else:
+                    pointer_pos = self.get_pointer_event_pos(event)
+                    if pointer_pos is None:
+                        continue
+                    if self.buttons.get('capture') and self.buttons['capture'].collidepoint(pointer_pos):
+                        action = handle_capture()
+                        if action is not None:
+                            return action
+                    if self.buttons.get('home') and self.buttons['home'].collidepoint(pointer_pos):
+                        cleanup_temp_image()
+                        return 'home'
+
+            polled_pointer_pos = self.get_polled_pointer_press_pos()
+            if polled_pointer_pos is not None:
+                if self.buttons.get('capture') and self.buttons['capture'].collidepoint(polled_pointer_pos):
+                    action = handle_capture()
+                    if action is not None:
+                        return action
+                if self.buttons.get('home') and self.buttons['home'].collidepoint(polled_pointer_pos):
+                    cleanup_temp_image()
                     return 'home'
 
             if needs_render:
@@ -1832,6 +1951,7 @@ def run_interactive_training(config: dict) -> int:
     )
 
     training_cfg = config.get("training", {})
+    startup_hold_seconds = float(training_cfg.get("startup_hold_seconds", 20.0))
     early_review_parts = int(training_cfg.get("early_review_parts", 25))
     early_review_interval = int(training_cfg.get("early_review_interval", 5))
     steady_review_interval = int(training_cfg.get("steady_review_interval", 10))
@@ -1891,6 +2011,25 @@ def run_interactive_training(config: dict) -> int:
                     break
                 display.show_message(msg, display.RED)
                 time.sleep(2)
+
+        display.show_message(
+            "Training will start after a 20-second pause. The first capture after that pause is preview-only and will not be inspected.",
+            display.YELLOW,
+        )
+        if display.wait_with_event_pump(int(max(0.0, startup_hold_seconds) * 1000)):
+            return 0
+
+        startup_action = display.run_startup_capture_preview(config)
+        if startup_action == 'home':
+            print("Returning to dashboard/home.")
+            return 0
+        if startup_action == 'quit':
+            return 0
+        if startup_action not in {'capture', '', None}:
+            cleanup_temp_image()
+            display.show_message("Startup preview captured. Beginning training inspections...", display.GREEN)
+            if display.wait_with_event_pump(1200):
+                return 0
 
         while True:
             # Capture image
