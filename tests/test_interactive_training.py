@@ -271,6 +271,8 @@ def test_draw_metrics_ignores_none_optional_geometry_values() -> None:
             "max_section_width_delta_ratio": 0.2,
             "worst_section_center_offset_px": None,
             "max_section_center_offset_px": 1.0,
+            "ssim": None,
+            "anomaly_score": None,
         },
         area,
     )
@@ -279,6 +281,39 @@ def test_draw_metrics_ignores_none_optional_geometry_values() -> None:
     assert any("Mean Edge Distance" in line for line in rendered_lines)
     assert all("Worst Section Edge Distance" not in line for line in rendered_lines)
     assert all("Worst Section Center Offset" not in line for line in rendered_lines)
+    assert all("SSIM:" not in line for line in rendered_lines)
+    assert all("Anomaly Score:" not in line for line in rendered_lines)
+
+
+def test_training_logger_ignores_none_optional_metrics(tmp_path) -> None:
+    logger = interactive_training.TrainingLogger(tmp_path)
+    logger.start_session()
+
+    logger.log_inspection(
+        tmp_path / "sample.png",
+        True,
+        {
+            "required_coverage": 0.95,
+            "outside_allowed_ratio": 0.01,
+            "mean_edge_distance_px": None,
+            "worst_section_edge_distance_px": None,
+            "worst_section_width_delta_ratio": None,
+            "worst_section_center_offset_px": None,
+            "ssim": None,
+            "anomaly_score": None,
+        },
+        "approve",
+        "Accepted sample",
+    )
+
+    log_files = list(tmp_path.glob("training_session_*.log"))
+    assert len(log_files) == 1
+    log_text = log_files[0].read_text(encoding="utf-8")
+    assert "APPROVE" in log_text
+    assert "EdgeDist" not in log_text
+    assert "SectEdge" not in log_text
+    assert "SSIM" not in log_text
+    assert "Anomaly" not in log_text
 
 
 def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:

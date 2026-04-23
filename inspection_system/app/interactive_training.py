@@ -474,10 +474,12 @@ class InspectionDisplay:
                 )
             else:
                 metrics.append(f"Worst Section Center Offset: {worst_section_center_offset:.3f}px")
-        if 'ssim' in details:
-            metrics.append(f"SSIM: {details['ssim']:.4f}")
-        if 'anomaly_score' in details:
-            metrics.append(f"Anomaly Score: {details['anomaly_score']:.4f}")
+        ssim_value = details.get('ssim')
+        if ssim_value is not None:
+            metrics.append(f"SSIM: {ssim_value:.4f}")
+        anomaly_score = details.get('anomaly_score')
+        if anomaly_score is not None:
+            metrics.append(f"Anomaly Score: {anomaly_score:.4f}")
         metrics.append(f"Alignment profile: {details.get('alignment_profile', 'balanced')}")
         for line in details.get('operator_mode_lines', []) or []:
             metrics.append(line)
@@ -1103,6 +1105,13 @@ class TrainingLogger:
         self.current_session = f"training_session_{session_id}.log"
         self._log(f"=== TRAINING SESSION STARTED: {session_id} ===")
 
+    @staticmethod
+    def _append_optional_metric(log_entry: str, details: dict, key: str, template: str) -> str:
+        value = details.get(key)
+        if value is None:
+            return log_entry
+        return log_entry + template.format(value=value)
+
     def log_inspection(self, image_path: Path, passed: bool, details: dict, feedback: str, description: str):
         """Log an inspection result and feedback."""
         if not self.current_session:
@@ -1115,19 +1124,12 @@ class TrainingLogger:
         log_entry += f" | {Path(image_path).name}"
         log_entry += f" | Coverage: {details.get('required_coverage', 0):.3f}"
         log_entry += f" | Outside: {details.get('outside_allowed_ratio', 0):.3f}"
-        if 'mean_edge_distance_px' in details:
-            log_entry += f" | EdgeDist: {details['mean_edge_distance_px']:.3f}px"
-        if 'worst_section_edge_distance_px' in details:
-            log_entry += f" | SectEdge: {details['worst_section_edge_distance_px']:.3f}px"
-        if 'worst_section_width_delta_ratio' in details:
-            log_entry += f" | SectWidth: {details['worst_section_width_delta_ratio']:.1%}"
-        if 'worst_section_center_offset_px' in details:
-            log_entry += f" | SectCenter: {details['worst_section_center_offset_px']:.3f}px"
-
-        if 'ssim' in details:
-            log_entry += f" | SSIM: {details['ssim']:.3f}"
-        if 'anomaly_score' in details:
-            log_entry += f" | Anomaly: {details['anomaly_score']:.3f}"
+        log_entry = self._append_optional_metric(log_entry, details, 'mean_edge_distance_px', " | EdgeDist: {value:.3f}px")
+        log_entry = self._append_optional_metric(log_entry, details, 'worst_section_edge_distance_px', " | SectEdge: {value:.3f}px")
+        log_entry = self._append_optional_metric(log_entry, details, 'worst_section_width_delta_ratio', " | SectWidth: {value:.1%}")
+        log_entry = self._append_optional_metric(log_entry, details, 'worst_section_center_offset_px', " | SectCenter: {value:.3f}px")
+        log_entry = self._append_optional_metric(log_entry, details, 'ssim', " | SSIM: {value:.3f}")
+        log_entry = self._append_optional_metric(log_entry, details, 'anomaly_score', " | Anomaly: {value:.3f}")
 
         log_entry += f" | {description}"
 
