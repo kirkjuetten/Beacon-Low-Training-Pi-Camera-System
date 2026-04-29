@@ -48,5 +48,26 @@
     "pass_gpio": 23,
     "fail_gpio": 24,
     "pulse_ms": 750
+  },
+  "io": {
+    "mode": "gpio",
+    "pulse_ms": 750,
+    "modbus": {
+      "enabled": false,
+      "port": "/dev/ttyUSB0",
+      "baud": 9600,
+      "parity": "N",
+      "stopbits": 1,
+      "bytesize": 8,
+      "slave_id": 1,
+      "pass_channel": 0,
+      "fail_channel": 1,
+      "timeout_s": 1.0
+    },
+    "relay": {
+      "slave_id": 2,
+      "pass_channel": null,
+      "fail_channel": null
+    }
   }
 }
