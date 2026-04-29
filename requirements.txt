@@ -10,6 +10,11 @@ Pillow>=8.0.0
 # Testing
 pytest>=7.0.0
 
+# Optional: Modbus RTU I/O over Waveshare USB->RS-485 (8CH IO + optional 4CH relay)
+# Lazy-imported by inspection_system.app.io.indicator_bus when io.mode == "modbus".
+# Install on the Pi only when wiring real hardware.
+# pymodbus>=3.6.0
+
 # Optional: Interactive training GUI
 # Install with: pip install pygame
 pygame>=2.0.0
