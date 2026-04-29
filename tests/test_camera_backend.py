@@ -176,10 +176,24 @@ def test_capture_releases_lock_on_subprocess_error(tmp_path):
 # --- frame_acquisition shim back-compat ------------------------------------
 
 
+def _patched_backend(tmp_path: Path, monkeypatch) -> RpicamStillBackend:
+    """Swap the frame_acquisition module-level backend for one in tmp_path.
+
+    The default backend points at ``inspection_system/temp_capture.jpg`` whose
+    parent may not exist on CI runners; tests must not depend on that path.
+    """
+    from inspection_system.app import frame_acquisition
+
+    backend = RpicamStillBackend(temp_image=tmp_path / "temp.jpg")
+    monkeypatch.setattr(frame_acquisition, "_default_backend", backend)
+    return backend
+
+
 def test_frame_acquisition_capture_to_temp_returns_legacy_tuple(tmp_path, monkeypatch):
     """The legacy 3-tuple signature must still hold for existing callers."""
     from inspection_system.app import frame_acquisition
 
+    _patched_backend(tmp_path, monkeypatch)
     fake_completed = mock.Mock()
     fake_completed.returncode = 0
     fake_completed.stderr = ""
@@ -194,9 +208,10 @@ def test_frame_acquisition_capture_to_temp_returns_legacy_tuple(tmp_path, monkey
     assert isinstance(stderr, str)
 
 
-def test_frame_acquisition_capture_frame_returns_capture_result(monkeypatch):
+def test_frame_acquisition_capture_frame_returns_capture_result(tmp_path, monkeypatch):
     from inspection_system.app import frame_acquisition
 
+    _patched_backend(tmp_path, monkeypatch)
     fake_completed = mock.Mock()
     fake_completed.returncode = 0
     fake_completed.stderr = ""
