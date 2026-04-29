@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -43,6 +44,7 @@ from inspection_system.app.runtime_controller import (
     get_inspection_runtime_warnings,
     load_anomaly_detector,
 )
+from inspection_system.app.run_summary import LatencyTracker, format_run_summary
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 
@@ -551,6 +553,8 @@ def run_production_mode(config: dict, indicator) -> int:
 
     display = ProductionDisplay()
     session = ProductionSessionState()
+    latency = LatencyTracker()
+    indicator_errors = 0
     source_surface: Optional[pygame.Surface] = None
     processed_surface: Optional[pygame.Surface] = None
     status_message = "Ready. Press MANUAL INSPECT to inspect the next part."
@@ -578,7 +582,9 @@ def run_production_mode(config: dict, indicator) -> int:
                     pos = event.pos
                     if display.buttons["manual_inspect"].collidepoint(pos):
                         display.show_message("INSPECTING...", display.YELLOW)
+                        _t0 = time.perf_counter()
                         outcome, details, image_path, error_message = _perform_inspection(config, runtime_context)
+                        latency.record((time.perf_counter() - _t0) * 1000.0)
                         if error_message is not None:
                             source_surface = None
                             processed_surface = None
@@ -597,9 +603,17 @@ def run_production_mode(config: dict, indicator) -> int:
 
                         session.record(outcome, details)
                         if outcome.status == GOOD:
-                            indicator.pulse_pass()
+                            try:
+                                indicator.pulse_pass()
+                            except Exception as exc:
+                                indicator_errors += 1
+                                print(f"Indicator I/O error on pulse_pass: {exc}")
                         elif outcome.status == REJECT:
-                            indicator.pulse_fail()
+                            try:
+                                indicator.pulse_fail()
+                            except Exception as exc:
+                                indicator_errors += 1
+                                print(f"Indicator I/O error on pulse_fail: {exc}")
 
                         reason_label = REASON_LABELS.get(outcome.primary_reason, "-") if outcome.primary_reason else "-"
                         status_message = f"Last result: {outcome.banner_text} | Reason: {reason_label}"
@@ -620,3 +634,7 @@ def run_production_mode(config: dict, indicator) -> int:
     finally:
         cleanup_temp_image()
         display.cleanup()
+        try:
+            print(format_run_summary(session.run_totals, latency, indicator_errors))
+        except Exception as exc:
+            print(f"Failed to render run summary: {exc}")
