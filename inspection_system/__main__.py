@@ -111,6 +111,34 @@ def run_self_test() -> int:
     return 0
 
 
+def run_explain(key: str) -> int:
+    """Print the help entry for ``key`` (or all entries when key == 'all').
+
+    Returns 0 on success and 1 when the key is unknown so the caller can
+    distinguish a typo from a clean lookup in scripts.
+    """
+    from inspection_system.app.config_help import (
+        all_entries,
+        format_all,
+        format_entry,
+        get_entry,
+    )
+
+    requested = (key or "").strip()
+    if requested.lower() == "all":
+        print(format_all())
+        return 0
+    entry = get_entry(requested)
+    if entry is None:
+        print(f"Unknown config key: {requested!r}")
+        print("Known keys:")
+        for e in all_entries():
+            print(f"  - {e.key}")
+        return 1
+    print(format_entry(entry))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m inspection_system")
     parser.add_argument(
@@ -118,9 +146,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run the offline smoke test (config, indicator bus, camera, pilot status).",
     )
+    parser.add_argument(
+        "--explain",
+        metavar="KEY",
+        help=(
+            "Print operator/engineer guidance for a config key (e.g. "
+            "'inspection.threshold_value') or 'all' to print every entry."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.self_test:
         return run_self_test()
+    if args.explain is not None:
+        return run_explain(args.explain)
     parser.print_help()
     return 0
 

@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from inspection_system.app.config_help import hint_for
+
 
 _VALID_IO_MODES = {"none", "gpio", "modbus"}
 _VALID_MODBUS_PARITY = {"N", "E", "O"}
@@ -33,23 +35,27 @@ def _get(d: Any, key: str, default: Any = None) -> Any:
     return d.get(key, default) if isinstance(d, dict) else default
 
 
+def _add(issues: list[str], label: str, message: str) -> None:
+    issues.append(f"{label}: {message}{hint_for(label)}")
+
+
 def _check_int_range(
     issues: list[str], value: Any, label: str, lo: int, hi: int
 ) -> None:
     if value is None:
         return
     if not isinstance(value, int) or isinstance(value, bool):
-        issues.append(f"{label}: expected integer, got {type(value).__name__}")
+        _add(issues, label, f"expected integer, got {type(value).__name__}")
         return
     if value < lo or value > hi:
-        issues.append(f"{label}: {value} is outside {lo}..{hi}")
+        _add(issues, label, f"{value} is outside {lo}..{hi}")
 
 
 def _check_positive_int(issues: list[str], value: Any, label: str) -> None:
     if value is None:
         return
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        issues.append(f"{label}: expected positive integer, got {value!r}")
+        _add(issues, label, f"expected positive integer, got {value!r}")
 
 
 def validate_config(config: Any) -> list[str]:
@@ -69,8 +75,10 @@ def validate_config(config: Any) -> list[str]:
 
     threshold_mode = inspection.get("threshold_mode")
     if threshold_mode is not None and threshold_mode not in _VALID_THRESHOLD_MODES:
-        issues.append(
-            f"inspection.threshold_mode: {threshold_mode!r} not in {sorted(_VALID_THRESHOLD_MODES)}"
+        _add(
+            issues,
+            "inspection.threshold_mode",
+            f"{threshold_mode!r} not in {sorted(_VALID_THRESHOLD_MODES)}",
         )
 
     roi = inspection.get("roi", {})
@@ -82,7 +90,7 @@ def validate_config(config: Any) -> list[str]:
         for axis in ("x", "y"):
             value = roi.get(axis)
             if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
-                issues.append(f"inspection.roi.{axis}: expected non-negative integer, got {value!r}")
+                _add(issues, f"inspection.roi.{axis}", f"expected non-negative integer, got {value!r}")
 
     io_block = _get(config, "io", {})
     if not isinstance(io_block, dict):
@@ -90,20 +98,22 @@ def validate_config(config: Any) -> list[str]:
     else:
         mode = io_block.get("mode")
         if mode is not None and str(mode).lower() not in _VALID_IO_MODES:
-            issues.append(f"io.mode: {mode!r} not in {sorted(_VALID_IO_MODES)}")
+            _add(issues, "io.mode", f"{mode!r} not in {sorted(_VALID_IO_MODES)}")
 
         modbus = io_block.get("modbus", {})
         if isinstance(modbus, dict):
             parity = modbus.get("parity")
             if parity is not None and parity not in _VALID_MODBUS_PARITY:
-                issues.append(
-                    f"io.modbus.parity: {parity!r} not in {sorted(_VALID_MODBUS_PARITY)}"
+                _add(
+                    issues,
+                    "io.modbus.parity",
+                    f"{parity!r} not in {sorted(_VALID_MODBUS_PARITY)}",
                 )
             _check_int_range(issues, modbus.get("slave_id"), "io.modbus.slave_id", 1, 247)
             for ch in ("pass_channel", "fail_channel"):
                 value = modbus.get(ch)
                 if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
-                    issues.append(f"io.modbus.{ch}: expected non-negative integer, got {value!r}")
+                    _add(issues, f"io.modbus.{ch}", f"expected non-negative integer, got {value!r}")
 
     return issues
 
