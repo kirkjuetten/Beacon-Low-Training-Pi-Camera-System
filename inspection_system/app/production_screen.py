@@ -491,10 +491,51 @@ def _perform_inspection(
         return None, {}, None, str(exc)
 
 
+def _pilot_gate_enforced(config: dict) -> bool:
+    """Whether the pilot-readiness gate should block production launch.
+
+    Defaults to ``True`` so production cannot be launched on a project that
+    has not finished commissioning. Set ``pilot_readiness.enforce`` to
+    ``false`` in ``camera_config.json`` only for engineering bring-up runs.
+    """
+    if not isinstance(config, dict):
+        return True
+    policy = config.get("pilot_readiness", {})
+    if not isinstance(policy, dict):
+        return True
+    return bool(policy.get("enforce", True))
+
+
 def run_production_mode(config: dict, indicator) -> int:
     if not PYGAME_AVAILABLE:
         print("pygame is required for production mode. Install with: pip install pygame")
         return 1
+
+    # Hard gate: refuse to open the production screen on a recipe that has
+    # not passed supervised-pilot readiness. Engineering can opt out via
+    # config ``pilot_readiness.enforce: false``; the override is logged so
+    # it cannot be silent.
+    if _pilot_gate_enforced(config):
+        from inspection_system.app.pilot_readiness import (
+            build_supervised_pilot_status,
+            format_supervised_pilot_report,
+        )
+
+        status = build_supervised_pilot_status(config)
+        if not status.get("ready", False):
+            print("Production launch blocked: supervised pilot readiness not met.")
+            for line in format_supervised_pilot_report(status):
+                print(line)
+            print(
+                "To override for engineering bring-up, set"
+                " 'pilot_readiness.enforce' to false in camera_config.json."
+            )
+            return 1
+    else:
+        print(
+            "Warning: pilot_readiness.enforce=false. Production gate is bypassed"
+            " (engineering override)."
+        )
 
     runtime_context = build_inspection_runtime_context(
         config,
