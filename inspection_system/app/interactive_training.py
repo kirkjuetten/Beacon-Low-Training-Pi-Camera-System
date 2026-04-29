@@ -1208,104 +1208,11 @@ def build_training_inspection_feedback(passed: bool, details: dict) -> dict[str,
     }
 
 
-class TrainingLogger:
-    """Logs training sessions and decisions for analysis."""
+# TrainingLogger now lives in app.training.logger; re-exported here so that
+# `from inspection_system.app.interactive_training import TrainingLogger` and
+# `interactive_training.TrainingLogger(...)` continue to work unchanged.
+from inspection_system.app.training.logger import TrainingLogger  # noqa: E402
 
-    def __init__(self, log_dir: Path):
-        self.log_dir = log_dir
-        self.log_dir.mkdir(exist_ok=True)
-        self.current_session = None
-        self.session_start_time = None
-
-    def start_session(self):
-        """Start a new training session."""
-        self.session_start_time = time.time()
-        session_id = time.strftime("%Y%m%d_%H%M%S", time.localtime(self.session_start_time))
-        self.current_session = f"training_session_{session_id}.log"
-        self._log(f"=== TRAINING SESSION STARTED: {session_id} ===")
-
-    @staticmethod
-    def _append_optional_metric(log_entry: str, details: dict, key: str, template: str) -> str:
-        value = details.get(key)
-        if value is None:
-            return log_entry
-        return log_entry + template.format(value=value)
-
-    def log_inspection(self, image_path: Path, passed: bool, details: dict, feedback: str, description: str):
-        """Log an inspection result and feedback."""
-        if not self.current_session:
-            self.start_session()
-
-        timestamp = time.strftime("%H:%M:%S", time.localtime(time.time()))
-        status = "PASS" if passed else "FAIL"
-
-        log_entry = f"[{timestamp}] {status} -> {feedback.upper()}"
-        log_entry += f" | {Path(image_path).name}"
-        log_entry += f" | Coverage: {details.get('required_coverage', 0):.3f}"
-        log_entry += f" | Outside: {details.get('outside_allowed_ratio', 0):.3f}"
-        log_entry = self._append_optional_metric(log_entry, details, 'mean_edge_distance_px', " | EdgeDist: {value:.3f}px")
-        log_entry = self._append_optional_metric(log_entry, details, 'worst_section_edge_distance_px', " | SectEdge: {value:.3f}px")
-        log_entry = self._append_optional_metric(log_entry, details, 'worst_section_width_delta_ratio', " | SectWidth: {value:.1%}")
-        log_entry = self._append_optional_metric(log_entry, details, 'worst_section_center_offset_px', " | SectCenter: {value:.3f}px")
-        log_entry = self._append_optional_metric(log_entry, details, 'ssim', " | SSIM: {value:.3f}")
-        log_entry = self._append_optional_metric(log_entry, details, 'anomaly_score', " | Anomaly: {value:.3f}")
-
-        log_entry += f" | {description}"
-
-        self._log(log_entry)
-
-    def log_threshold_suggestion(self, suggestions: dict):
-        """Log threshold adjustment suggestions."""
-        if suggestions:
-            self._log("=== THRESHOLD SUGGESTIONS ===")
-            for key, value in suggestions.items():
-                self._log(f"Suggested {key}: {value:.4f}")
-            self._log("=" * 30)
-
-    def log_review_findings(self, warnings: list[str]):
-        """Log review-stage warnings about config fit and prerequisites."""
-        if warnings:
-            self._log("=== REVIEW WARNINGS ===")
-            for warning in warnings:
-                self._log(warning)
-            self._log("=" * 30)
-
-    def end_session(self):
-        """End the current training session."""
-        if self.current_session:
-            duration = time.time() - self.session_start_time
-            self._log(f"=== SESSION ENDED: Duration {duration:.1f}s ===")
-            self.current_session = None
-
-    def _log(self, message: str):
-        """Write message to current session log."""
-        if self.current_session:
-            log_path = self.log_dir / self.current_session
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(message + '\n')
-
-    def get_session_summary(self) -> Dict[str, int]:
-        """Get summary of current session decisions."""
-        if not self.current_session:
-            return {}
-
-        log_path = self.log_dir / self.current_session
-        if not log_path.exists():
-            return {}
-
-        summary = {'approve': 0, 'reject': 0, 'review': 0, 'total': 0}
-
-        with open(log_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if '-> APPROVE' in line:
-                    summary['approve'] += 1
-                elif '-> REJECT' in line:
-                    summary['reject'] += 1
-                elif '-> REVIEW' in line:
-                    summary['review'] += 1
-                summary['total'] += 1 if any(x in line for x in ['PASS', 'FAIL']) else 0
-
-        return summary
 
 
 class ThresholdTrainer:
