@@ -206,7 +206,9 @@ def load_config() -> dict:
             project_config_file = Path(project_info["config_file"])
             if project_config_file.exists():
                 with project_config_file.open("r", encoding="utf-8") as f:
-                    return _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
+                    config = _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
+                _warn_on_config_issues(config, source=str(project_config_file))
+                return config
 
     # Fall back to global config
     if not CONFIG_FILE.exists():
@@ -214,7 +216,19 @@ def load_config() -> dict:
         print(f"Created default config: {CONFIG_FILE}")
 
     with CONFIG_FILE.open("r", encoding="utf-8") as f:
-        return _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
+        config = _deep_merge_defaults(DEFAULT_CONFIG, json.load(f))
+    _warn_on_config_issues(config, source=str(CONFIG_FILE))
+    return config
+
+
+def _warn_on_config_issues(config: dict, *, source: str) -> None:
+    """Print validation warnings without breaking already-deployed recipes."""
+    from inspection_system.app.config_validation import format_issues, validate_config
+
+    issues = validate_config(config)
+    if issues:
+        print(f"Config validation warnings for {source}:")
+        print(format_issues(issues))
 
 
 def import_cv2_and_numpy():
