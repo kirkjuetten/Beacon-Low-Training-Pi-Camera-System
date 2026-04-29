@@ -15,6 +15,9 @@ def _safe_int(value, default: int = 0) -> int:
 
 
 def get_roi(image, roi_cfg: dict):
+    if image is None or getattr(image, "size", 0) == 0 or image.shape[0] == 0 or image.shape[1] == 0:
+        raise ValueError("Configured ROI is outside the image bounds.")
+
     x = _safe_int(roi_cfg.get("x", 0), 0)
     y = _safe_int(roi_cfg.get("y", 0), 0)
     w = _safe_int(roi_cfg.get("width", 0), 0)
