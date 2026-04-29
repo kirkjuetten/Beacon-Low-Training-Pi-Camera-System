@@ -256,3 +256,75 @@ Why this stays stable:
 1. The shortcut always calls `scripts/pi-launch-dashboard.sh` in your repo path.
 2. As code updates, the launcher path stays the same.
 3. Simple logs are written to `~/beacon-dashboard.log` for troubleshooting.
+
+## RS-485 / Modbus IO Wiring (Phase 1+ Hardware)
+
+This project uses a USB↔RS-485 converter (Waveshare-class) plus a Modbus RTU
+8CH digital-input module and an optional 4CH relay board to drive pass/fail
+indicators and read sensor states. None of this is required for camera-only
+operation; it is how the production indicator stack is wired when
+`io.mode = "modbus"` in `inspection_system/config/camera_config.json`.
+
+### Default Wiring
+
+1. Pi USB-A port → Waveshare USB↔RS-485 converter (appears as `/dev/ttyUSB0`).
+2. Converter `A` (D+) → Modbus IO module `A`.
+3. Converter `B` (D-) → Modbus IO module `B`.
+4. Converter `GND` → Modbus IO module `GND`.
+5. 12V or 24V supply → Modbus IO module V+ / V- per the module's label.
+6. Optional: chain a 4CH relay board on the same A/B pair using a different
+   `slave_id`.
+
+For longer cable runs (more than ~3 m) or if you see communication errors,
+add a 120 Ω termination resistor across A/B at each end of the bus.
+
+### Default Modbus Settings
+
+- Serial port: `/dev/ttyUSB0`
+- Baud rate: 9600 (8N1)
+- Slave ID: `1` for the 8CH inputs; `2` if a relay board is chained
+- Parity: `N`
+- Function: read coils for inputs; write coil for relays
+
+These match the defaults shipped in `inspection_system/config/camera_config.json`
+under `io.modbus`. If you change the baud rate or slave ID, update the config
+to match; `load_config` will print a non-blocking warning if the values are
+out of the expected ranges (slave ID 1..247, parity in {N, E, O}).
+
+### Quick Verification on the Pi
+
+```bash
+ls -l /dev/ttyUSB*
+python3 -m inspection_system --self-test
+```
+
+The `--self-test` entrypoint exercises config load, indicator-bus construction
+(forced to `none` mode, no hardware required), and a mock camera capture
+round-trip. If your wiring is correct and the Modbus module is powered, you
+can switch `io.mode` to `modbus` in the config and re-run a production
+session; the end-of-session summary now reports indicator I/O error counts.
+
+### End-of-Session Summary
+
+When you exit a production session, the dashboard prints a summary block:
+
+```
+Production session summary
+--------------------------
+Inspections : 42
+  Good      : 39
+  Reject    : 2
+  Review    : 1
+  Pass rate : 92.9%
+Latency
+  Samples   : 42
+  Mean      : 380 ms
+  p50       : 360 ms
+  p95       : 510 ms
+Indicator I/O errors : 0
+```
+
+A non-zero `Indicator I/O errors` count points to an RS-485 problem (loose
+A/B wiring, wrong parity, slave ID mismatch, or missing termination on a
+long cable run). The session continues even when an indicator pulse fails,
+so the operator never loses inspection data because of a wiring fault.
