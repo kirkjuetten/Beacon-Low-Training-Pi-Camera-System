@@ -28,7 +28,9 @@ note() { echo "[$1] $2" | tee -a "$LOG_FILE"; }
 # --- Step 1: enumerate sensors -------------------------------------------------
 echo
 echo "Step 1: detect camera sensor"
-if rpicam-hello --list-cameras 2>&1 | tee -a "$LOG_FILE" | grep -qE '^[0-9]+ : '; then
+list_output=$(rpicam-hello --list-cameras 2>&1 || true)
+echo "$list_output" >>"$LOG_FILE"
+if echo "$list_output" | grep -qE '^[[:space:]]*[0-9]+ : '; then
     note PASS "Camera sensor detected on CSI bus."
     pass=$((pass + 1))
 else
