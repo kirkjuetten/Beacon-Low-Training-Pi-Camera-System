@@ -30,3 +30,15 @@ samples/**/*.webp
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Editor/runtime swap and scratch files
+*.json.save
+*.swp
+*.swo
+.~lock.*
+/tmp/copilot_*
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
