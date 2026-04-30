@@ -71,6 +71,15 @@
       "slave_id": 2,
       "pass_channel": 0,
       "fail_channel": 1
+    },
+    "trigger": {
+      "enabled": false,
+      "slave_id": 1,
+      "register": 0,
+      "channel": 0,
+      "count": 8,
+      "debounce_ms": 30,
+      "timeout_s": 0.3
     }
   }
 }
