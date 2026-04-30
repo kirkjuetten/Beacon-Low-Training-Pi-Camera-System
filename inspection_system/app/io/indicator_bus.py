@@ -58,9 +58,13 @@ class NullIndicatorBus:
 
 @dataclass
 class _ModbusRelayMap:
-    """Optional Waveshare Modbus RTU 4CH relay configuration.
+    """Waveshare Modbus RTU 4CH relay (V3 firmware) configuration.
 
-    Reserved in config for forward compatibility -- not required for Phase 1.
+    When :attr:`pass_channel` and :attr:`fail_channel` are set and the bus's
+    ``indicator_target`` is ``"relay"``, ``pulse_pass``/``pulse_fail`` route
+    to this module instead of the IO module's coils. The V3 protocol's
+    "flash-on" command makes the relay self-time the pulse so the Python
+    side stays non-blocking.
     """
 
     slave_id: int = 2
@@ -68,14 +72,62 @@ class _ModbusRelayMap:
     fail_channel: Optional[int] = None
 
 
+# Waveshare Modbus RTU Relay V3 protocol constants.
+_FLASH_ON_BASE_REGISTER = 0x0200  # +channel 0..7
+_MAX_FLASH_DECISECONDS = 0x7FFF   # ~54 minutes; protocol limit
+_MIN_FLASH_DECISECONDS = 0x0001   # 100 ms minimum (zero is "do nothing")
+
+
+def _crc16_modbus(data: bytes) -> bytes:
+    """Compute the Modbus RTU CRC-16 (low byte first) for ``data``."""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ 0xA001
+            else:
+                crc >>= 1
+    return bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+
+
+def _build_flash_on_frame(slave_id: int, channel: int, deciseconds: int) -> bytes:
+    """Build a Waveshare V3 flash-on frame.
+
+    Frame layout: ``[slave] 05 [reg_hi reg_lo] [val_hi val_lo] [crc_lo crc_hi]``
+    where ``reg = 0x0200 + channel`` and ``val = duration in 100ms units``.
+    """
+    if not 0 <= channel <= 7:
+        raise ValueError(f"channel must be in 0..7, got {channel}")
+    if not _MIN_FLASH_DECISECONDS <= deciseconds <= _MAX_FLASH_DECISECONDS:
+        raise ValueError(
+            f"deciseconds must be in {_MIN_FLASH_DECISECONDS}..{_MAX_FLASH_DECISECONDS}, "
+            f"got {deciseconds}"
+        )
+    register = _FLASH_ON_BASE_REGISTER + channel
+    body = bytes([slave_id & 0xFF, 0x05]) + bytes([
+        (register >> 8) & 0xFF, register & 0xFF,
+        (deciseconds >> 8) & 0xFF, deciseconds & 0xFF,
+    ])
+    return body + _crc16_modbus(body)
+
+
 @dataclass
 class ModbusIndicatorBus:
-    """Drive Waveshare Modbus RTU 8CH IO outputs as pass/fail indicators.
+    """Drive a Waveshare Modbus RTU 8CH IO module and/or 4CH relay as indicators.
 
-    Coil addresses correspond to the 8CH IO module's digital outputs (DO0..DO7).
-    The bus performs the same "exclusive-OR pulse" semantics as the legacy
-    GPIO ``IndicatorLED``: clears both outputs, sets the chosen one, sleeps,
-    clears it again.
+    Two routing modes via :attr:`indicator_target`:
+
+    * ``"io_module"`` (default, legacy): pulses the IO module's digital outputs
+      using ``write_coil`` with a Python ``time.sleep`` for the pulse width.
+      Blocking; OK for short pulses (<= 1 s).
+    * ``"relay"``: pulses the V3 relay using the protocol's "flash-on" command
+      (function 0x05 to register ``0x0200 + channel`` with duration in 100ms
+      units). The relay self-times the pulse, so the call returns immediately.
+      Required for any pulse longer than ~1 s in production.
+
+    Per-pulse durations :attr:`pass_pulse_ms` and :attr:`fail_pulse_ms` may
+    differ; both fall back to :attr:`pulse_ms` when unset (legacy behavior).
 
     ``pymodbus`` is imported lazily so the rest of the codebase (and CI) does
     not require the dependency unless the Modbus mode is actually selected.
@@ -90,6 +142,9 @@ class ModbusIndicatorBus:
     pass_channel: int = 0
     fail_channel: int = 1
     pulse_ms: int = 750
+    pass_pulse_ms: Optional[int] = None
+    fail_pulse_ms: Optional[int] = None
+    indicator_target: str = "io_module"
     timeout_s: float = 1.0
     enabled: bool = True
     relay: Optional[_ModbusRelayMap] = None
@@ -128,17 +183,22 @@ class ModbusIndicatorBus:
     # --- protocol surface ---------------------------------------------------
 
     def pulse_pass(self) -> None:
-        self._pulse(self.pass_channel)
+        ms = self.pass_pulse_ms if self.pass_pulse_ms is not None else self.pulse_ms
+        self._dispatch_pulse(is_pass=True, ms=ms)
 
     def pulse_fail(self) -> None:
-        self._pulse(self.fail_channel)
+        ms = self.fail_pulse_ms if self.fail_pulse_ms is not None else self.pulse_ms
+        self._dispatch_pulse(is_pass=False, ms=ms)
 
     def cleanup(self) -> None:
         if not self.enabled or self._client is None:
             return
         try:
-            self._write_coil(self.pass_channel, False)
-            self._write_coil(self.fail_channel, False)
+            # Only the IO-module path sets coils that need explicit clearing.
+            # Relay flash-on auto-clears, so nothing to do for that path.
+            if self.indicator_target == "io_module":
+                self._write_coil(self.pass_channel, False)
+                self._write_coil(self.fail_channel, False)
         finally:
             close = getattr(self._client, "close", None)
             if callable(close):
@@ -167,16 +227,88 @@ class ModbusIndicatorBus:
 
     # --- internals ----------------------------------------------------------
 
-    def _pulse(self, channel: int) -> None:
+    def _dispatch_pulse(self, *, is_pass: bool, ms: int) -> None:
         if not self.enabled or self._client is None:
             return
+        if self.indicator_target == "relay":
+            self._pulse_relay(is_pass=is_pass, ms=ms)
+        else:
+            channel = self.pass_channel if is_pass else self.fail_channel
+            self._pulse_io_module(channel=channel, ms=ms)
+
+    def _pulse_io_module(self, *, channel: int, ms: int) -> None:
         # Clear both indicator channels first so we always end up in a known state.
         self._write_coil(self.pass_channel, False)
         self._write_coil(self.fail_channel, False)
         if not self._write_coil(channel, True):
             return
-        time.sleep(self.pulse_ms / 1000.0)
+        time.sleep(ms / 1000.0)
         self._write_coil(channel, False)
+
+    def _pulse_relay(self, *, is_pass: bool, ms: int) -> None:
+        if self.relay is None:
+            self._last_error = "indicator_target=relay but no relay map configured"
+            return
+        channel = self.relay.pass_channel if is_pass else self.relay.fail_channel
+        if channel is None:
+            self._last_error = (
+                f"indicator_target=relay but {'pass' if is_pass else 'fail'}_channel is None"
+            )
+            return
+        # Clamp duration to the V3 protocol's range. Round to nearest 100 ms,
+        # minimum 1 decisecond (100 ms), maximum 0x7FFF.
+        deciseconds = max(_MIN_FLASH_DECISECONDS, min(_MAX_FLASH_DECISECONDS, round(ms / 100)))
+        try:
+            frame = _build_flash_on_frame(self.relay.slave_id, channel, deciseconds)
+        except ValueError as exc:
+            self._last_error = f"flash-on frame error: {exc}"
+            return
+        self._send_raw_frame(frame)
+
+    def _send_raw_frame(self, frame: bytes) -> None:
+        """Write a raw Modbus RTU frame via pymodbus's underlying pyserial port.
+
+        After writing, we read up to ``len(frame)`` bytes from the input buffer
+        with a short timeout. Modbus 0x05 echoes the request on success, so
+        this both (a) confirms delivery and (b) serializes back-to-back frames
+        — without it, two ``pulse_*`` calls in quick succession will collide
+        on the wire and the second one will silently fail.
+        """
+        port = self._raw_serial_port()
+        if port is None:
+            return
+        try:
+            port.reset_input_buffer()
+            port.write(frame)
+            port.flush()
+            # Drain the echo (function 0x05 always echoes the 8-byte request).
+            # A short read with the port's existing timeout is plenty.
+            _ = port.read(len(frame))
+        except Exception as exc:  # pragma: no cover - hardware-only path
+            self._last_error = f"raw frame write error: {exc}"
+
+    def _raw_serial_port(self):
+        """Return the underlying pyserial Serial held by pymodbus, or None.
+
+        pymodbus 3.x exposes the serial port as ``client.socket``. We probe
+        common attribute names to stay tolerant of minor version drift.
+        """
+        client = self._client
+        if client is None:
+            return None
+        for attr in ("socket", "_socket"):
+            port = getattr(client, attr, None)
+            if port is not None and hasattr(port, "write"):
+                return port
+        # pymodbus 3.7+ wraps the port behind a transport object.
+        transport = getattr(client, "transport", None)
+        if transport is not None:
+            for attr in ("serial", "socket"):
+                port = getattr(transport, attr, None)
+                if port is not None and hasattr(port, "write"):
+                    return port
+        self._last_error = "could not locate underlying serial port on pymodbus client"
+        return None
 
     def _write_coil(self, channel: int, value: bool) -> bool:
         if self._client is None:
@@ -223,6 +355,9 @@ def build_indicator_bus(config: dict) -> IndicatorBus:
                 pass_channel=relay_cfg.get("pass_channel"),
                 fail_channel=relay_cfg.get("fail_channel"),
             )
+        # Per-pulse durations. None means "fall back to io.pulse_ms".
+        pass_pulse_ms_raw = io_cfg.get("pass_pulse_ms")
+        fail_pulse_ms_raw = io_cfg.get("fail_pulse_ms")
         return ModbusIndicatorBus(
             port=str(modbus_cfg.get("port", "/dev/ttyUSB0")),
             baud=int(modbus_cfg.get("baud", 9600)),
@@ -233,6 +368,9 @@ def build_indicator_bus(config: dict) -> IndicatorBus:
             pass_channel=int(modbus_cfg.get("pass_channel", 0)),
             fail_channel=int(modbus_cfg.get("fail_channel", 1)),
             pulse_ms=int(io_cfg.get("pulse_ms", 750)),
+            pass_pulse_ms=int(pass_pulse_ms_raw) if pass_pulse_ms_raw is not None else None,
+            fail_pulse_ms=int(fail_pulse_ms_raw) if fail_pulse_ms_raw is not None else None,
+            indicator_target=str(io_cfg.get("indicator_target", "io_module")).strip().lower(),
             timeout_s=float(modbus_cfg.get("timeout_s", 1.0)),
             enabled=bool(modbus_cfg.get("enabled", True)),
             relay=relay,
