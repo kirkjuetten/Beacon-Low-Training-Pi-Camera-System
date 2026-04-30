@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol, runtime_checkable
 
+from inspection_system.app.io.modbus_session import open_shared_modbus_client
+
 
 @runtime_checkable
 class InputTrigger(Protocol):
@@ -62,10 +64,9 @@ class ModbusInputTrigger:
     events. A press is registered when the bit transitions from low to
     high and stays high for at least ``debounce_ms``.
 
-    The class manages its own ``pymodbus`` client so it can run
-    independently of :class:`ModbusIndicatorBus`. Production deployments
-    that need both on the same serial port should share a client via a
-    bus manager (future refactor).
+    The class manages a shared ``pymodbus`` client so it can coexist with
+    :class:`ModbusIndicatorBus` on the same serial port without opening the
+    device twice.
     """
 
     port: str
@@ -181,22 +182,20 @@ class ModbusInputTrigger:
         if self.client_factory is not None:
             return self.client_factory()
         try:
-            from pymodbus.client import ModbusSerialClient  # type: ignore
+            return open_shared_modbus_client(
+                port=self.port,
+                baudrate=self.baud,
+                parity=self.parity,
+                stopbits=self.stopbits,
+                bytesize=self.bytesize,
+                timeout_s=self.timeout_s,
+            )
         except ImportError as exc:
             self._last_error = f"pymodbus not installed: {exc}"
             return None  # type: ignore[return-value]
-        client = ModbusSerialClient(
-            port=self.port,
-            baudrate=self.baud,
-            parity=self.parity,
-            stopbits=self.stopbits,
-            bytesize=self.bytesize,
-            timeout=self.timeout_s,
-        )
-        if not client.connect():
-            self._last_error = f"Modbus connect failed on {self.port}"
+        except Exception as exc:
+            self._last_error = str(exc)
             return None  # type: ignore[return-value]
-        return client
 
     def _read_bits(self) -> Optional[list[bool]]:
         client = self._client

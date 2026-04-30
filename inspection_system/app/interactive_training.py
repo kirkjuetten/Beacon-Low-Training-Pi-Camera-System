@@ -23,10 +23,11 @@ except ImportError:
 from inspection_system.app.camera_interface import (
     load_config,
     import_cv2_and_numpy,
-    IndicatorLED,
     get_active_runtime_paths,
 )
 from inspection_system.app.frame_acquisition import cleanup_temp_image, capture_to_temp
+from inspection_system.app.io.indicator_bus import build_indicator_bus
+from inspection_system.app.io.input_trigger import InputTrigger, build_input_trigger
 from inspection_system.app.inspection_runtime_context import (
     build_inspection_runtime_context,
     refresh_inspection_runtime_context,
@@ -77,6 +78,17 @@ from inspection_system.app.runtime_controller import (
     get_inspection_runtime_warnings,
     load_anomaly_detector,
 )
+
+
+def _capture_trigger_requested(trigger: Optional[InputTrigger], *, context: str) -> bool:
+    """Return True when the external trigger requests a capture step."""
+    if trigger is None or not getattr(trigger, "enabled", False):
+        return False
+    try:
+        return bool(trigger.poll())
+    except Exception as exc:
+        print(f"Input trigger poll error during {context}: {exc}")
+        return False
 
 
 TRAINING_DATA_SCHEMA_VERSION = 2
@@ -633,7 +645,12 @@ class InspectionDisplay:
         """Deprecated compatibility wrapper for older callers."""
         return 'capture'
 
-    def run_reference_preview(self, config: dict, has_reference: bool) -> str:
+    def run_reference_preview(
+        self,
+        config: dict,
+        has_reference: bool,
+        trigger: Optional[InputTrigger] = None,
+    ) -> str:
         """Wait for the operator to explicitly capture/replace the reference."""
         self.set_ui_mode("setup_reference")
         self.reference_button_label = "CAPTURE REF"
@@ -676,6 +693,30 @@ class InspectionDisplay:
 
             pygame.display.flip()
 
+        def handle_capture() -> str | None:
+            nonlocal last_surface, last_image_path, status_color, needs_render
+            self.show_message("Capturing reference...", self.YELLOW)
+            result_code, image_path, stderr_text = capture_to_temp(config)
+            if result_code == 0:
+                surface = self.load_surface_from_image(image_path)
+                if surface is not None:
+                    last_surface = surface
+                    last_image_path = image_path
+                    status_color = self.GREEN if has_reference else self.YELLOW
+                    render()
+                    return str(last_image_path)
+                status_color = self.RED
+                self.show_message("Captured reference image could not be displayed.", self.RED)
+            else:
+                status_color = self.RED
+                message = stderr_text or "Camera capture failed while setting the reference."
+                self.show_message(message, self.RED)
+            if self.wait_with_event_pump(900):
+                cleanup_temp_image()
+                return 'quit'
+            needs_render = True
+            return None
+
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -695,54 +736,25 @@ class InspectionDisplay:
                     if pointer_pos is None:
                         continue
                     if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(pointer_pos):
-                        self.show_message("Capturing reference...", self.YELLOW)
-                        result_code, image_path, stderr_text = capture_to_temp(config)
-                        if result_code == 0:
-                            surface = self.load_surface_from_image(image_path)
-                            if surface is not None:
-                                last_surface = surface
-                                last_image_path = image_path
-                                status_color = self.GREEN if has_reference else self.YELLOW
-                                render()
-                                return str(last_image_path)
-                            status_color = self.RED
-                            self.show_message("Captured reference image could not be displayed.", self.RED)
-                        else:
-                            status_color = self.RED
-                            message = stderr_text or "Camera capture failed while setting the reference."
-                            self.show_message(message, self.RED)
-                        if self.wait_with_event_pump(900):
-                            cleanup_temp_image()
-                            return 'quit'
-                        needs_render = True
+                        action = handle_capture()
+                        if action is not None:
+                            return action
                     if self.buttons.get('home') and self.buttons['home'].collidepoint(pointer_pos):
                         return 'home'
 
             polled_pointer_pos = self.get_polled_pointer_press_pos()
             if polled_pointer_pos is not None:
                 if self.buttons.get('set_ref') and self.buttons['set_ref'].collidepoint(polled_pointer_pos):
-                    self.show_message("Capturing reference...", self.YELLOW)
-                    result_code, image_path, stderr_text = capture_to_temp(config)
-                    if result_code == 0:
-                        surface = self.load_surface_from_image(image_path)
-                        if surface is not None:
-                            last_surface = surface
-                            last_image_path = image_path
-                            status_color = self.GREEN if has_reference else self.YELLOW
-                            render()
-                            return str(last_image_path)
-                        status_color = self.RED
-                        self.show_message("Captured reference image could not be displayed.", self.RED)
-                    else:
-                        status_color = self.RED
-                        message = stderr_text or "Camera capture failed while setting the reference."
-                        self.show_message(message, self.RED)
-                    if self.wait_with_event_pump(900):
-                        cleanup_temp_image()
-                        return 'quit'
-                    needs_render = True
+                    action = handle_capture()
+                    if action is not None:
+                        return action
                 if self.buttons.get('home') and self.buttons['home'].collidepoint(polled_pointer_pos):
                     return 'home'
+
+            if _capture_trigger_requested(trigger, context="reference preview"):
+                action = handle_capture()
+                if action is not None:
+                    return action
 
             if needs_render:
                 render()
@@ -750,7 +762,11 @@ class InspectionDisplay:
 
             self.clock.tick(30)
 
-    def run_startup_capture_preview(self, config: dict) -> str:
+    def run_startup_capture_preview(
+        self,
+        config: dict,
+        trigger: Optional[InputTrigger] = None,
+    ) -> str:
         """Capture and show a startup preview image without inspecting it."""
         self.set_ui_mode("startup_capture")
         last_surface: Optional[pygame.Surface] = None
@@ -860,6 +876,11 @@ class InspectionDisplay:
                     cleanup_temp_image()
                     return 'home'
 
+            if _capture_trigger_requested(trigger, context="startup preview"):
+                action = handle_capture()
+                if action is not None:
+                    return action
+
             if needs_render:
                 render()
                 needs_render = False
@@ -874,6 +895,7 @@ class InspectionDisplay:
         logger: Optional["TrainingLogger"] = None,
         config: Optional[dict] = None,
         reference_mask_path: Optional[Path] = None,
+        trigger: Optional[InputTrigger] = None,
     ) -> tuple[Optional[str], bool]:
         """Display inspection result and wait for user input.
 
@@ -1034,6 +1056,11 @@ class InspectionDisplay:
                     if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
                         return 'quit', False
                     return user_feedback, True
+
+            if user_feedback and _capture_trigger_requested(trigger, context="training inspection"):
+                if self.flash_action_confirmation("CAPTURING...", (70, 130, 220)):
+                    return 'quit', False
+                return user_feedback, True
 
             self.clock.tick(30)
 
@@ -1850,12 +1877,8 @@ def run_interactive_training(config: dict) -> int:
         return warnings
 
     led_cfg = config.get("indicator_led", {})
-    indicator = IndicatorLED(
-        enabled=bool(led_cfg.get("enabled", False)),
-        pass_gpio=int(led_cfg.get("pass_gpio", 23)),
-        fail_gpio=int(led_cfg.get("fail_gpio", 24)),
-        pulse_ms=int(led_cfg.get("pulse_ms", 750)),
-    )
+    indicator = build_indicator_bus(config)
+    trigger = build_input_trigger(config)
 
     training_cfg = config.get("training", {})
     startup_hold_seconds = float(training_cfg.get("startup_hold_seconds", 20.0))
@@ -1875,6 +1898,8 @@ def run_interactive_training(config: dict) -> int:
         print("Entering training workflow.")
         for line in format_operator_mode_lines(config, active_paths, anomaly_detector):
             print(f"  {line}")
+        if getattr(trigger, "enabled", False):
+            print(f"Input trigger active: {type(trigger).__name__}")
         print("Controls:")
         print("- Green APPROVE button: Accept the sample")
         print("- Red REJECT button: Reject the sample")
@@ -1896,7 +1921,7 @@ def run_interactive_training(config: dict) -> int:
         if not reference_candidates:
             print("No reference mask found. Prompting operator to capture reference.")
             while True:
-                action = display.run_reference_preview(config, has_reference=False)
+                action = display.run_reference_preview(config, has_reference=False, trigger=trigger)
                 if action == 'home':
                     print("Returning to dashboard/home.")
                     return 0
@@ -1926,7 +1951,7 @@ def run_interactive_training(config: dict) -> int:
         if display.wait_with_event_pump(int(max(0.0, startup_hold_seconds) * 1000)):
             return 0
 
-        startup_action = display.run_startup_capture_preview(config)
+        startup_action = display.run_startup_capture_preview(config, trigger=trigger)
         if startup_action == 'home':
             print("Returning to dashboard/home.")
             return 0
@@ -2008,6 +2033,7 @@ def run_interactive_training(config: dict) -> int:
                     logger,
                     config=config,
                     reference_mask_path=active_paths["reference_mask"],
+                    trigger=trigger,
                 )
 
                 if feedback == 'home':
@@ -2018,7 +2044,11 @@ def run_interactive_training(config: dict) -> int:
                 elif feedback == 'set_ref':
                     go_home = False
                     while True:
-                        action = display.run_reference_preview(config, has_reference=active_paths["reference_mask"].exists())
+                        action = display.run_reference_preview(
+                            config,
+                            has_reference=active_paths["reference_mask"].exists(),
+                            trigger=trigger,
+                        )
                         if action == 'home':
                             go_home = True
                             break
@@ -2134,6 +2164,7 @@ def run_interactive_training(config: dict) -> int:
         logger.end_session()
         display.cleanup()
         indicator.cleanup()
+        trigger.cleanup()
 
         # Final session summary
         summary = logger.get_session_summary()
