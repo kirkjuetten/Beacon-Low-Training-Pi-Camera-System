@@ -14,6 +14,11 @@ from inspection_system.app.io.indicator_bus import (
     NullIndicatorBus,
     build_indicator_bus,
 )
+from inspection_system.app.io.indicator_bus import (
+    _build_flash_on_frame,
+    _crc16_modbus,
+    _ModbusRelayMap,
+)
 
 
 def test_null_bus_records_calls_and_satisfies_protocol():
@@ -48,12 +53,29 @@ def _install_fake_pymodbus(monkeypatch, write_coil_impl):
 
     instances: list[Any] = []
 
+    class _FakeSerialPort:
+        def __init__(self):
+            self.writes: list[bytes] = []
+            self.flushed = 0
+            self.input_resets = 0
+
+        def write(self, data: bytes) -> int:
+            self.writes.append(bytes(data))
+            return len(data)
+
+        def flush(self) -> None:
+            self.flushed += 1
+
+        def reset_input_buffer(self) -> None:
+            self.input_resets += 1
+
     class _FakeClient:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.connected = False
             self.write_coil = mock.Mock(side_effect=write_coil_impl)
             self.close = mock.Mock()
+            self.socket = _FakeSerialPort()
             instances.append(self)
 
         def connect(self):
@@ -130,3 +152,152 @@ def test_build_indicator_bus_modbus_mode_uses_modbus_bus(monkeypatch):
 def test_modbus_bus_set_outputs_returns_false_when_disabled():
     bus = ModbusIndicatorBus(port="/dev/null", enabled=False)
     assert bus.set_outputs([0, 1, 2], True) is False
+
+
+# --- V3 flash-on protocol primitives -----------------------------------------
+
+
+def test_crc16_matches_known_waveshare_example():
+    # From the Waveshare wiki: relay 0 flash-on for 700ms (slave 0x01):
+    #   01 05 02 00 00 07 8D B0
+    body = bytes.fromhex("01 05 02 00 00 07")
+    assert _crc16_modbus(body) == bytes([0x8D, 0xB0])
+
+
+def test_build_flash_on_frame_matches_known_waveshare_example():
+    # slave=1, channel=0, deciseconds=7 (700 ms) -> 01 05 02 00 00 07 8D B0
+    frame = _build_flash_on_frame(slave_id=1, channel=0, deciseconds=7)
+    assert frame.hex(" ") == "01 05 02 00 00 07 8d b0"
+
+
+def test_build_flash_on_frame_uses_correct_register_offset():
+    # Channel 1 -> register 0x0201.
+    frame = _build_flash_on_frame(slave_id=2, channel=1, deciseconds=10)
+    assert frame[0] == 0x02
+    assert frame[1] == 0x05
+    assert frame[2:4] == bytes([0x02, 0x01])
+    assert frame[4:6] == bytes([0x00, 0x0A])
+
+
+@pytest.mark.parametrize("channel", [-1, 8, 99])
+def test_build_flash_on_frame_rejects_out_of_range_channel(channel):
+    with pytest.raises(ValueError):
+        _build_flash_on_frame(slave_id=2, channel=channel, deciseconds=10)
+
+
+@pytest.mark.parametrize("deciseconds", [0, -1, 0x8000, 0x10000])
+def test_build_flash_on_frame_rejects_out_of_range_duration(deciseconds):
+    with pytest.raises(ValueError):
+        _build_flash_on_frame(slave_id=2, channel=0, deciseconds=deciseconds)
+
+
+# --- relay-routing pulse behavior --------------------------------------------
+
+
+def test_modbus_bus_relay_target_writes_flash_on_frame_and_does_not_sleep(monkeypatch):
+    instances = _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(
+        port="/dev/ttyUSB0",
+        indicator_target="relay",
+        pass_pulse_ms=3000,
+        fail_pulse_ms=2500,
+        relay=_ModbusRelayMap(slave_id=2, pass_channel=0, fail_channel=1),
+    )
+    with mock.patch("inspection_system.app.io.indicator_bus.time.sleep") as sleep_mock:
+        bus.pulse_pass()
+        bus.pulse_fail()
+
+    client = instances[0]
+    # Flash-on path must NOT touch write_coil at all (no IO-module coils).
+    assert client.write_coil.call_count == 0
+    # And it must not block the calling thread.
+    sleep_mock.assert_not_called()
+
+    writes = client.socket.writes
+    assert len(writes) == 2
+    # pass: slave 2, channel 0, 30 deciseconds (3000ms)
+    assert writes[0] == _build_flash_on_frame(2, 0, 30)
+    # fail: slave 2, channel 1, 25 deciseconds (2500ms)
+    assert writes[1] == _build_flash_on_frame(2, 1, 25)
+
+
+def test_modbus_bus_relay_target_clamps_duration_to_protocol_range(monkeypatch):
+    instances = _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(
+        port="/dev/ttyUSB0",
+        indicator_target="relay",
+        pass_pulse_ms=10,                  # rounds to 0 -> clamped up to 1 decisecond
+        fail_pulse_ms=10_000_000,          # huge -> clamped down to 0x7FFF
+        relay=_ModbusRelayMap(slave_id=2, pass_channel=0, fail_channel=1),
+    )
+    bus.pulse_pass()
+    bus.pulse_fail()
+    writes = instances[0].socket.writes
+    assert writes[0] == _build_flash_on_frame(2, 0, 1)
+    assert writes[1] == _build_flash_on_frame(2, 1, 0x7FFF)
+
+
+def test_modbus_bus_relay_target_records_error_when_relay_not_configured(monkeypatch):
+    _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(port="/dev/ttyUSB0", indicator_target="relay", relay=None)
+    bus.pulse_pass()
+    assert bus._last_error is not None
+    assert "no relay map" in bus._last_error
+
+
+def test_modbus_bus_relay_target_records_error_when_channel_unset(monkeypatch):
+    _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(
+        port="/dev/ttyUSB0",
+        indicator_target="relay",
+        relay=_ModbusRelayMap(slave_id=2, pass_channel=None, fail_channel=1),
+    )
+    bus.pulse_pass()  # no pass_channel -> error
+    assert bus._last_error is not None and "pass_channel" in bus._last_error
+
+
+def test_modbus_bus_io_module_target_uses_per_pulse_duration_when_set(monkeypatch):
+    _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(
+        port="/dev/ttyUSB0",
+        indicator_target="io_module",
+        pulse_ms=500,
+        pass_pulse_ms=1234,
+    )
+    with mock.patch("inspection_system.app.io.indicator_bus.time.sleep") as sleep_mock:
+        bus.pulse_pass()
+    sleep_mock.assert_called_once()
+    assert sleep_mock.call_args.args[0] == pytest.approx(1.234)
+
+
+def test_modbus_bus_cleanup_skips_coil_writes_in_relay_mode(monkeypatch):
+    instances = _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(
+        port="/dev/ttyUSB0",
+        indicator_target="relay",
+        relay=_ModbusRelayMap(slave_id=2, pass_channel=0, fail_channel=1),
+    )
+    bus.cleanup()
+    # No write_coil during cleanup; relay flash-on auto-clears.
+    assert instances[0].write_coil.call_count == 0
+
+
+def test_build_indicator_bus_reads_relay_routing_and_per_pulse_durations(monkeypatch):
+    _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    config = {
+        "io": {
+            "mode": "modbus",
+            "indicator_target": "relay",
+            "pulse_ms": 750,
+            "pass_pulse_ms": 3000,
+            "fail_pulse_ms": 2000,
+            "modbus": {"port": "/dev/ttyUSB0"},
+            "relay": {"slave_id": 2, "pass_channel": 0, "fail_channel": 1},
+        }
+    }
+    bus = build_indicator_bus(config)
+    assert isinstance(bus, ModbusIndicatorBus)
+    assert bus.indicator_target == "relay"
+    assert bus.pass_pulse_ms == 3000
+    assert bus.fail_pulse_ms == 2000
+    assert bus.relay is not None and bus.relay.pass_channel == 0
