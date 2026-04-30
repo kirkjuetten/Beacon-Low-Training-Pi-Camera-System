@@ -328,3 +328,53 @@ A non-zero `Indicator I/O errors` count points to an RS-485 problem (loose
 A/B wiring, wrong parity, slave ID mismatch, or missing termination on a
 long cable run). The session continues even when an indicator pulse fails,
 so the operator never loses inspection data because of a wiring fault.
+
+## Camera Selection (Swapping Sensors)
+
+Pi 4's `camera_auto_detect=1` recognises most Raspberry Pi CSI cameras
+(including the imx296 Global Shutter Camera) but does **not** cover the
+Sony IMX500 AI Camera. Swapping between the two requires editing
+`/boot/firmware/config.txt` and rebooting.
+
+Use the helper script instead of editing by hand:
+
+```bash
+# Show what is currently selected (no sudo required).
+bash ~/Beacon-Low-Training-Pi-Camera-System/scripts/pi-camera-select.sh status
+
+# Swap to the Global Shutter Camera (imx296), then reboot.
+sudo bash ~/Beacon-Low-Training-Pi-Camera-System/scripts/pi-camera-select.sh imx296
+sudo reboot
+
+# Swap to the AI Camera (IMX500), then reboot.
+sudo bash ~/Beacon-Low-Training-Pi-Camera-System/scripts/pi-camera-select.sh imx500
+sudo reboot
+```
+
+The script:
+
+1. Takes a one-time backup at `/boot/firmware/config.txt.bak.camera-select`.
+2. Maintains a single labelled block in `config.txt` so swaps are clean and
+   reversible.
+3. Refuses to touch the file without `sudo` for write modes; `status` is
+   read-only.
+
+After reboot, run the desktop **Beacon Camera Test** (or
+`scripts/pi-launch-camera-test.sh`) to confirm the sensor enumerates and
+captures a frame.
+
+### Diagnosing connection errors
+
+If the sensor is enumerated but capture times out (`Dequeue timer expired`,
+`Camera frontend has timed out`), that is almost always a CSI ribbon issue,
+not an overlay issue. In order of likelihood:
+
+1. Ribbon not fully seated. Pull the black latch all the way up, slide the
+   ribbon in square, press the latch down evenly on both sides.
+2. Ribbon flipped. On the Pi 4 CSI port, the silver/contact side faces the
+   HDMI ports; on the camera board it faces away from the lens.
+3. Marginal or damaged ribbon. Try a known-good cable.
+
+If the sensor is **not** enumerated at all (`No cameras available!`), that
+is an overlay/driver issue: confirm the right mode with
+`pi-camera-select.sh status` and reboot after any change.
