@@ -1,6 +1,5 @@
-"""
-indicator_context.py: Helper for indicator LED lifecycle/context management.
-"""
+"""Indicator lifecycle/context management."""
+
 from inspection_system.app.camera_interface import IndicatorLED
 
 def build_indicator_from_config(config: dict) -> IndicatorLED:
@@ -14,8 +13,12 @@ def build_indicator_from_config(config: dict) -> IndicatorLED:
 
 class IndicatorContext:
     def __init__(self, config: dict):
-        self.indicator = build_indicator_from_config(config)
+        from inspection_system.app.io.indicator_bus import build_indicator_bus
+
+        self.indicator = build_indicator_bus(config)
+
     def __enter__(self):
         return self.indicator
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.indicator.cleanup()

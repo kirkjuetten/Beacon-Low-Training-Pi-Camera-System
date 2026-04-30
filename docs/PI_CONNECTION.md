@@ -325,8 +325,10 @@ slave ID `1`, with a 30 ms software debounce. To enable, set:
 ```
 
 When `production_screen` runs, every rising edge fires the same inspection
-cycle as the on-screen `MANUAL INSPECT` button. The end-of-run summary now
-includes a `Trigger events: N` line.
+cycle as the on-screen `MANUAL INSPECT` button. `interactive_training` also
+accepts the trigger anywhere the UI is waiting for the next capture step
+(startup preview, reference capture, or post-decision CAPTURE). The
+production end-of-run summary reports `Trigger events: N`.
 
 To verify the wiring without launching production, use the live trigger probe:
 
@@ -344,14 +346,26 @@ You can also bench-poll the trigger directly:
 python3 -m inspection_system.app.io.input_trigger --watch 20
 ```
 
-### Bus Sharing Caveat
-
-`io.mode = "modbus"` (relay-as-indicator) and `io.trigger.enabled = true`
-both want to open `/dev/ttyUSB0`. Today they each create their own
-`pymodbus` client, so running them simultaneously will fail with a serial
-port-in-use error. Use them one at a time until a shared modbus session is
-introduced, or run the indicator on `mode: "gpio"` while the trigger uses
 the modbus bus.
+### Shared Modbus Session
+
+The trigger and Modbus indicator stack now share one `pymodbus` serial
+session per port. That means the common production layout below is now
+supported directly:
+
+- `io.mode = "modbus"`
+- `io.indicator_target = "relay"`
+- `io.trigger.enabled = true`
+- one USB↔RS-485 adapter on `/dev/ttyUSB0`
+
+Default addressing for this layout:
+
+- slave `1`: Waveshare 8CH digital-input module (`io.trigger`)
+- slave `2`: Waveshare relay module (`io.relay`)
+
+If trigger and relay traffic both stop working at once, debug the shared
+bus first: USB adapter presence, A/B polarity, parity/baud match, slave IDs,
+and external module power.
 
 ### End-of-Session Summary
 

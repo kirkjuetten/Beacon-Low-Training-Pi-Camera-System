@@ -23,6 +23,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, Protocol, Sequence, runtime_checkable
 
+from inspection_system.app.io.modbus_session import (
+    open_shared_modbus_client,
+    resolve_raw_serial_port,
+)
+
 
 @runtime_checkable
 class IndicatorBus(Protocol):
@@ -131,6 +136,8 @@ class ModbusIndicatorBus:
 
     ``pymodbus`` is imported lazily so the rest of the codebase (and CI) does
     not require the dependency unless the Modbus mode is actually selected.
+    Clients are shared per serial port so the relay indicator can coexist with
+    the input trigger on the same ``/dev/ttyUSB0`` bus.
     """
 
     port: str
@@ -156,26 +163,17 @@ class ModbusIndicatorBus:
         if not self.enabled:
             return
         try:
-            from pymodbus.client import ModbusSerialClient  # type: ignore
-        except ImportError as exc:
-            self._last_error = f"pymodbus not installed: {exc}"
-            self.enabled = False
-            return
-
-        try:
-            client = ModbusSerialClient(
+            self._client = open_shared_modbus_client(
                 port=self.port,
                 baudrate=self.baud,
                 parity=self.parity,
                 stopbits=self.stopbits,
                 bytesize=self.bytesize,
-                timeout=self.timeout_s,
+                timeout_s=self.timeout_s,
             )
-            if not client.connect():
-                self._last_error = f"Modbus connect failed on {self.port}"
-                self.enabled = False
-                return
-            self._client = client
+        except ImportError as exc:
+            self._last_error = f"pymodbus not installed: {exc}"
+            self.enabled = False
         except Exception as exc:  # pragma: no cover - hardware-only path
             self._last_error = f"Modbus init error: {exc}"
             self.enabled = False
@@ -274,8 +272,9 @@ class ModbusIndicatorBus:
         — without it, two ``pulse_*`` calls in quick succession will collide
         on the wire and the second one will silently fail.
         """
-        port = self._raw_serial_port()
+        port = resolve_raw_serial_port(self._client)
         if port is None:
+            self._last_error = "could not locate underlying serial port on pymodbus client"
             return
         try:
             port.reset_input_buffer()
@@ -286,29 +285,6 @@ class ModbusIndicatorBus:
             _ = port.read(len(frame))
         except Exception as exc:  # pragma: no cover - hardware-only path
             self._last_error = f"raw frame write error: {exc}"
-
-    def _raw_serial_port(self):
-        """Return the underlying pyserial Serial held by pymodbus, or None.
-
-        pymodbus 3.x exposes the serial port as ``client.socket``. We probe
-        common attribute names to stay tolerant of minor version drift.
-        """
-        client = self._client
-        if client is None:
-            return None
-        for attr in ("socket", "_socket"):
-            port = getattr(client, attr, None)
-            if port is not None and hasattr(port, "write"):
-                return port
-        # pymodbus 3.7+ wraps the port behind a transport object.
-        transport = getattr(client, "transport", None)
-        if transport is not None:
-            for attr in ("serial", "socket"):
-                port = getattr(transport, attr, None)
-                if port is not None and hasattr(port, "write"):
-                    return port
-        self._last_error = "could not locate underlying serial port on pymodbus client"
-        return None
 
     def _write_coil(self, channel: int, value: bool) -> bool:
         if self._client is None:

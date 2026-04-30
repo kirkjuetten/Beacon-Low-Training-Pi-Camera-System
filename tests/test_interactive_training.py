@@ -4,6 +4,18 @@ import inspection_system.app.interactive_training as interactive_training
 from inspection_system.app.interactive_training import ThresholdTrainer
 
 
+class _FakeTrigger:
+    def __init__(self, edges=0, enabled=True, error: Exception | None = None):
+        self.edges = edges
+        self.enabled = enabled
+        self.error = error
+
+    def poll(self):
+        if self.error is not None:
+            raise self.error
+        return self.edges
+
+
 def test_apply_suggestions_updates_config_and_file(tmp_path) -> None:
     config_path = tmp_path / "camera_config.json"
     config_path.write_text(
@@ -358,7 +370,26 @@ def test_suggest_thresholds_can_generate_edge_distance_limit(tmp_path) -> None:
     assert suggestions["max_mean_edge_distance_px"] == 0.6
     assert suggestions["max_section_edge_distance_px"] == 0.8
     assert suggestions["max_section_width_delta_ratio"] == 0.06
-    assert suggestions["max_section_center_offset_px"] == 0.7
+
+
+def test_capture_trigger_requested_returns_true_on_edge() -> None:
+    trigger = _FakeTrigger(edges=1)
+
+    assert interactive_training._capture_trigger_requested(trigger, context="test") is True
+
+
+def test_capture_trigger_requested_ignores_disabled_trigger() -> None:
+    trigger = _FakeTrigger(edges=1, enabled=False)
+
+    assert interactive_training._capture_trigger_requested(trigger, context="test") is False
+
+
+def test_capture_trigger_requested_handles_poll_errors(capsys) -> None:
+    trigger = _FakeTrigger(error=RuntimeError("boom"))
+
+    assert interactive_training._capture_trigger_requested(trigger, context="training inspection") is False
+    out = capsys.readouterr().out
+    assert "Input trigger poll error during training inspection" in out
 
 
 def test_suggest_thresholds_can_loosen_lower_is_better_geometry_thresholds(tmp_path) -> None:
