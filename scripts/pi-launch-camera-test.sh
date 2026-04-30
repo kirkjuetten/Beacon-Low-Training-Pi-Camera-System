@@ -79,9 +79,16 @@ if [ "$fail" -eq 0 ]; then
 else
     echo "Result: $fail FAILED, $pass PASSED"
     echo
-    echo "Most common cause: CSI ribbon not seated. Power off the Pi,"
-    echo "lift the latches at both ends, fully insert the ribbon, close"
-    echo "the latches, and run this test again."
+    echo "If the camera was NOT detected (Step 1 failed):"
+    echo "  - Confirm the right sensor mode is selected:"
+    echo "      bash $REPO_DIR/scripts/pi-camera-select.sh status"
+    echo "  - imx296 / most CSI cameras: 'sudo bash ... imx296' then reboot"
+    echo "  - Sony IMX500 AI Camera:     'sudo bash ... imx500' then reboot"
+    echo
+    echo "If the camera was detected but capture timed out (Steps 2/3):"
+    echo "  - Power off the Pi, lift the CSI latches at BOTH ends, fully"
+    echo "    insert the ribbon square (silver side toward the HDMI ports"
+    echo "    on the Pi), close the latches, and run this test again."
 fi
 echo "Log: $LOG_FILE"
 echo
