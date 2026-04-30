@@ -268,9 +268,11 @@ class ModbusIndicatorBus:
     def _send_raw_frame(self, frame: bytes) -> None:
         """Write a raw Modbus RTU frame via pymodbus's underlying pyserial port.
 
-        Fire-and-forget: we don't read the response. Modbus 0x05 echoes the
-        request on success; nothing actionable happens if the frame is lost
-        (the next inspection will overwrite the indicator state anyway).
+        After writing, we read up to ``len(frame)`` bytes from the input buffer
+        with a short timeout. Modbus 0x05 echoes the request on success, so
+        this both (a) confirms delivery and (b) serializes back-to-back frames
+        — without it, two ``pulse_*`` calls in quick succession will collide
+        on the wire and the second one will silently fail.
         """
         port = self._raw_serial_port()
         if port is None:
@@ -279,6 +281,9 @@ class ModbusIndicatorBus:
             port.reset_input_buffer()
             port.write(frame)
             port.flush()
+            # Drain the echo (function 0x05 always echoes the 8-byte request).
+            # A short read with the port's existing timeout is plenty.
+            _ = port.read(len(frame))
         except Exception as exc:  # pragma: no cover - hardware-only path
             self._last_error = f"raw frame write error: {exc}"
 

@@ -58,6 +58,7 @@ def _install_fake_pymodbus(monkeypatch, write_coil_impl):
             self.writes: list[bytes] = []
             self.flushed = 0
             self.input_resets = 0
+            self.reads: list[int] = []
 
         def write(self, data: bytes) -> int:
             self.writes.append(bytes(data))
@@ -68,6 +69,13 @@ def _install_fake_pymodbus(monkeypatch, write_coil_impl):
 
         def reset_input_buffer(self) -> None:
             self.input_resets += 1
+
+        def read(self, size: int) -> bytes:
+            # Echo the most recent write back, like a real Modbus 0x05 device.
+            self.reads.append(size)
+            if self.writes:
+                return self.writes[-1][:size]
+            return b""
 
     class _FakeClient:
         def __init__(self, **kwargs):
