@@ -304,6 +304,55 @@ round-trip. If your wiring is correct and the Modbus module is powered, you
 can switch `io.mode` to `modbus` in the config and re-run a production
 session; the end-of-session summary now reports indicator I/O error counts.
 
+### Operator Trigger Switch (`io.trigger`)
+
+A momentary switch wired to one of the 8CH IO module's discrete inputs can
+drive captures hands-free. The default mapping uses **DI0** (channel `0`) on
+slave ID `1`, with a 30 ms software debounce. To enable, set:
+
+```json
+"io": {
+  "trigger": {
+    "enabled": true,
+    "slave_id": 1,
+    "register": 0,
+    "channel": 0,
+    "count": 8,
+    "debounce_ms": 30,
+    "timeout_s": 0.3
+  }
+}
+```
+
+When `production_screen` runs, every rising edge fires the same inspection
+cycle as the on-screen `MANUAL INSPECT` button. The end-of-run summary now
+includes a `Trigger events: N` line.
+
+To verify the wiring without launching production, use the live trigger probe:
+
+```bash
+python3 -m inspection_system --self-test --wait-for-trigger 15
+```
+
+This first runs the offline smoke test, then opens the configured trigger
+and waits up to 15 seconds for the first rising edge. Exit code: `0` on
+edge, `1` on timeout, `2` if the trigger is disabled in config.
+
+You can also bench-poll the trigger directly:
+
+```bash
+python3 -m inspection_system.app.io.input_trigger --watch 20
+```
+
+### Bus Sharing Caveat
+
+`io.mode = "modbus"` (relay-as-indicator) and `io.trigger.enabled = true`
+both want to open `/dev/ttyUSB0`. Today they each create their own
+`pymodbus` client, so running them simultaneously will fail with a serial
+port-in-use error. Use them one at a time until a shared modbus session is
+introduced, or run the indicator on `mode: "gpio"` while the trigger uses
+the modbus bus.
+
 ### End-of-Session Summary
 
 When you exit a production session, the dashboard prints a summary block:

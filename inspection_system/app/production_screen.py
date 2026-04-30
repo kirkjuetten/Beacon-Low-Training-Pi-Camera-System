@@ -44,6 +44,7 @@ from inspection_system.app.runtime_controller import (
     get_inspection_runtime_warnings,
     load_anomaly_detector,
 )
+from inspection_system.app.io.input_trigger import build_input_trigger
 from inspection_system.app.run_summary import LatencyTracker, format_run_summary
 from inspection_system.app.scoring_utils import evaluate_metrics, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
@@ -555,6 +556,11 @@ def run_production_mode(config: dict, indicator) -> int:
     session = ProductionSessionState()
     latency = LatencyTracker()
     indicator_errors = 0
+    trigger = build_input_trigger(config)
+    trigger_enabled = bool(getattr(trigger, "enabled", False))
+    trigger_events = 0
+    if trigger_enabled:
+        print(f"Production: input trigger active ({type(trigger).__name__})")
     source_surface: Optional[pygame.Surface] = None
     processed_surface: Optional[pygame.Surface] = None
     status_message = "Ready. Press MANUAL INSPECT to inspect the next part."
@@ -565,6 +571,50 @@ def run_production_mode(config: dict, indicator) -> int:
         for warning in mode_warnings:
             print(f"Warning: {warning}")
         status_message = f"Warning: {mode_warnings[0]}"
+
+    def _run_inspection_cycle(source: str) -> None:
+        """Run a single inspection cycle (manual button or external trigger)."""
+        nonlocal source_surface, processed_surface, status_message, indicator_errors
+
+        display.show_message("INSPECTING...", display.YELLOW)
+        _t0 = time.perf_counter()
+        outcome, details, image_path, error_message = _perform_inspection(config, runtime_context)
+        latency.record((time.perf_counter() - _t0) * 1000.0)
+        if error_message is not None:
+            source_surface = None
+            processed_surface = None
+            status_message = f"Inspection error: {error_message}"
+            display.render(session, source_surface, processed_surface, status_message, mode_lines)
+            return
+
+        assert outcome is not None
+        assert image_path is not None
+        source_surface = display.load_surface_from_image(image_path)
+        processed_surface = None
+        if session.display_mode in {"processed", "split"}:
+            processed_surface = display._make_processed_surface(image_path, config)
+            if processed_surface is None:
+                session.display_mode = "raw"
+
+        session.record(outcome, details)
+        if outcome.status == GOOD:
+            try:
+                indicator.pulse_pass()
+            except Exception as exc:
+                indicator_errors += 1
+                print(f"Indicator I/O error on pulse_pass: {exc}")
+        elif outcome.status == REJECT:
+            try:
+                indicator.pulse_fail()
+            except Exception as exc:
+                indicator_errors += 1
+                print(f"Indicator I/O error on pulse_fail: {exc}")
+
+        reason_label = REASON_LABELS.get(outcome.primary_reason, "-") if outcome.primary_reason else "-"
+        prefix = "[trigger] " if source == "trigger" else ""
+        status_message = f"{prefix}Last result: {outcome.banner_text} | Reason: {reason_label}"
+        cleanup_temp_image()
+        display.render(session, source_surface, processed_surface, status_message, mode_lines)
 
     try:
         display.render(session, source_surface, processed_surface, status_message, mode_lines)
@@ -581,44 +631,7 @@ def run_production_mode(config: dict, indicator) -> int:
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     pos = event.pos
                     if display.buttons["manual_inspect"].collidepoint(pos):
-                        display.show_message("INSPECTING...", display.YELLOW)
-                        _t0 = time.perf_counter()
-                        outcome, details, image_path, error_message = _perform_inspection(config, runtime_context)
-                        latency.record((time.perf_counter() - _t0) * 1000.0)
-                        if error_message is not None:
-                            source_surface = None
-                            processed_surface = None
-                            status_message = f"Inspection error: {error_message}"
-                            display.render(session, source_surface, processed_surface, status_message, mode_lines)
-                            continue
-
-                        assert outcome is not None
-                        assert image_path is not None
-                        source_surface = display.load_surface_from_image(image_path)
-                        processed_surface = None
-                        if session.display_mode in {"processed", "split"}:
-                            processed_surface = display._make_processed_surface(image_path, config)
-                            if processed_surface is None:
-                                session.display_mode = "raw"
-
-                        session.record(outcome, details)
-                        if outcome.status == GOOD:
-                            try:
-                                indicator.pulse_pass()
-                            except Exception as exc:
-                                indicator_errors += 1
-                                print(f"Indicator I/O error on pulse_pass: {exc}")
-                        elif outcome.status == REJECT:
-                            try:
-                                indicator.pulse_fail()
-                            except Exception as exc:
-                                indicator_errors += 1
-                                print(f"Indicator I/O error on pulse_fail: {exc}")
-
-                        reason_label = REASON_LABELS.get(outcome.primary_reason, "-") if outcome.primary_reason else "-"
-                        status_message = f"Last result: {outcome.banner_text} | Reason: {reason_label}"
-                        cleanup_temp_image()
-                        display.render(session, source_surface, processed_surface, status_message, mode_lines)
+                        _run_inspection_cycle("manual")
                     elif display.buttons["reset_run"].collidepoint(pos):
                         session.run_totals.reset()
                         status_message = "Run totals reset. Shift totals preserved."
@@ -630,11 +643,31 @@ def run_production_mode(config: dict, indicator) -> int:
                     elif display.buttons["home"].collidepoint(pos):
                         return 0
 
+            # Poll the external input trigger (no-op when disabled). A
+            # rising edge runs the same cycle as the manual-inspect
+            # button, so behavior stays identical regardless of source.
+            if trigger_enabled:
+                try:
+                    edges = trigger.poll()
+                except Exception as exc:
+                    edges = 0
+                    print(f"Input trigger poll error: {exc}")
+                if edges:
+                    trigger_events += edges
+                    _run_inspection_cycle("trigger")
+
             display.clock.tick(30)
     finally:
         cleanup_temp_image()
         display.cleanup()
         try:
-            print(format_run_summary(session.run_totals, latency, indicator_errors))
+            trigger.cleanup()
+        except Exception as exc:
+            print(f"Input trigger cleanup error: {exc}")
+        try:
+            summary = format_run_summary(session.run_totals, latency, indicator_errors)
+            if trigger_enabled:
+                summary += f"\nTrigger events: {trigger_events}"
+            print(summary)
         except Exception as exc:
             print(f"Failed to render run summary: {exc}")

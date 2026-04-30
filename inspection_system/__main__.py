@@ -87,6 +87,64 @@ def _check_pilot_readiness() -> str:
     return f"{state} project={status.get('current_project') or '<none>'}"
 
 
+def _wait_for_trigger(seconds: float) -> int:
+    """Live trigger probe: build the trigger from camera_config.json and watch.
+
+    This is the operator's manual integration sanity check. Returns 0 on
+    a captured rising edge, 1 on timeout, 2 if the trigger is disabled.
+    Unlike :func:`run_self_test`, this *does* talk to the live serial
+    bus, so it is opt-in via ``--self-test --wait-for-trigger N``.
+    """
+    import time
+
+    from inspection_system.app.camera_interface import load_config
+    from inspection_system.app.io.input_trigger import build_input_trigger
+
+    config = load_config()
+    trigger = build_input_trigger(config)
+    enabled = bool(getattr(trigger, "enabled", False))
+    print(
+        f"[wait-for-trigger] trigger={type(trigger).__name__} enabled={enabled}"
+    )
+    if not enabled:
+        last_err = getattr(trigger, "_last_error", None)
+        if last_err:
+            print(f"  trigger disabled: {last_err}")
+        else:
+            print("  trigger is not configured (io.trigger.enabled=false).")
+        try:
+            trigger.cleanup()
+        except Exception:
+            pass
+        return 2
+
+    print(f"[wait-for-trigger] press your switch within {seconds:.1f}s ...", flush=True)
+    period = 0.02  # 50 Hz, matches production_screen
+    deadline = time.monotonic() + seconds
+    edges = 0
+    polls = 0
+    try:
+        while time.monotonic() < deadline:
+            try:
+                edges = trigger.poll()
+            except Exception as exc:
+                print(f"  poll error: {exc}")
+                edges = 0
+            polls += 1
+            if edges:
+                elapsed = seconds - (deadline - time.monotonic())
+                print(f"[wait-for-trigger] EDGE caught after {elapsed:.2f}s, {polls} polls.")
+                return 0
+            time.sleep(period)
+    finally:
+        try:
+            trigger.cleanup()
+        except Exception:
+            pass
+    print(f"[wait-for-trigger] TIMEOUT after {seconds:.1f}s ({polls} polls, no edge).")
+    return 1
+
+
 def run_self_test() -> int:
     print("inspection_system self-test")
     print("=" * 40)
@@ -147,6 +205,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Run the offline smoke test (config, indicator bus, camera, pilot status).",
     )
     parser.add_argument(
+        "--wait-for-trigger",
+        type=float,
+        metavar="SECONDS",
+        default=None,
+        help=(
+            "Used with --self-test: after the offline smoke test passes, "
+            "watch the configured input trigger for SECONDS and exit 0 "
+            "on the first rising edge, 1 on timeout, 2 if disabled. "
+            "Talks to live hardware."
+        ),
+    )
+    parser.add_argument(
         "--explain",
         metavar="KEY",
         help=(
@@ -156,7 +226,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if args.self_test:
-        return run_self_test()
+        rc = run_self_test()
+        if rc != 0:
+            return rc
+        if args.wait_for_trigger is not None:
+            return _wait_for_trigger(float(args.wait_for_trigger))
+        return 0
     if args.explain is not None:
         return run_explain(args.explain)
     parser.print_help()
