@@ -83,6 +83,255 @@ REGISTRATION_SETUP_DROPDOWN_OPTIONS = {
     "alignment.registration.datum_frame.orientation": CONFIG_DROPDOWN_OPTIONS["alignment.registration.datum_frame.orientation"],
 }
 
+IO_SETUP_DROPDOWN_OPTIONS = {
+    "io.mode": ["none", "modbus"],
+    "io.modbus.enabled": ["True", "False"],
+    "io.indicator_target": ["relay", "io_module"],
+    "io.modbus.parity": ["N", "E", "O"],
+    "io.inputs.trigger_capture.enabled": ["True", "False"],
+    "io.inputs.trigger_capture.channel": [str(i) for i in range(8)],
+    "io.inputs.trigger_capture.active_high": ["True", "False"],
+    "io.inputs.part_in_nest.enabled": ["True", "False"],
+    "io.inputs.part_in_nest.channel": [str(i) for i in range(8)],
+    "io.inputs.part_in_nest.active_high": ["True", "False"],
+    "io.outputs.inspection_pass.channel": ["off"] + [str(i) for i in range(8)],
+    "io.outputs.inspection_fail.channel": ["off"] + [str(i) for i in range(8)],
+    "io.outputs.review_needed.channel": ["off"] + [str(i) for i in range(8)],
+    "io.outputs.system_ready.channel": ["off"] + [str(i) for i in range(8)],
+}
+
+
+def _normalize_io_mode(value: object) -> str:
+    mode = str(value or "none").strip().lower()
+    return mode if mode in {"none", "modbus"} else "none"
+
+
+def _normalize_indicator_target(value: object) -> str:
+    target = str(value or "relay").strip().lower()
+    return target if target in {"relay", "io_module"} else "relay"
+
+
+def _channel_value(value: object, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, str) and value.strip().lower() in {"", "off", "none"}:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _channel_display(value: int | None) -> str:
+    return "off" if value is None else str(int(value))
+
+
+def _pulse_value(value: object, default: int) -> int:
+    return max(100, _safe_int(value, default))
+
+
+def build_io_setup_values(config: dict) -> dict[str, object]:
+    io_cfg = config.get("io", {}) if isinstance(config, dict) else {}
+    modbus_cfg = io_cfg.get("modbus", {}) if isinstance(io_cfg, dict) else {}
+    relay_cfg = io_cfg.get("relay", {}) if isinstance(io_cfg, dict) else {}
+    legacy_trigger_cfg = io_cfg.get("trigger", {}) if isinstance(io_cfg, dict) else {}
+    inputs_cfg = io_cfg.get("inputs", {}) if isinstance(io_cfg, dict) else {}
+    outputs_cfg = io_cfg.get("outputs", {}) if isinstance(io_cfg, dict) else {}
+
+    trigger_cfg = inputs_cfg.get("trigger_capture", {}) if isinstance(inputs_cfg, dict) else {}
+    part_cfg = inputs_cfg.get("part_in_nest", {}) if isinstance(inputs_cfg, dict) else {}
+    pass_cfg = outputs_cfg.get("inspection_pass", {}) if isinstance(outputs_cfg, dict) else {}
+    fail_cfg = outputs_cfg.get("inspection_fail", {}) if isinstance(outputs_cfg, dict) else {}
+    review_cfg = outputs_cfg.get("review_needed", {}) if isinstance(outputs_cfg, dict) else {}
+    ready_cfg = outputs_cfg.get("system_ready", {}) if isinstance(outputs_cfg, dict) else {}
+
+    default_pulse_ms = _pulse_value(io_cfg.get("pulse_ms", 3000), 3000)
+    pass_channel = _channel_value(pass_cfg.get("channel"), _channel_value(relay_cfg.get("pass_channel"), 0))
+    fail_channel = _channel_value(fail_cfg.get("channel"), _channel_value(relay_cfg.get("fail_channel"), 1))
+    review_channel = _channel_value(review_cfg.get("channel"), None)
+    ready_channel = _channel_value(ready_cfg.get("channel"), None)
+
+    return {
+        "io.mode": _normalize_io_mode(io_cfg.get("mode", "none")),
+        "io.modbus.enabled": bool(modbus_cfg.get("enabled", False)),
+        "io.indicator_target": _normalize_indicator_target(io_cfg.get("indicator_target", "relay")),
+        "io.modbus.port": str(modbus_cfg.get("port", "/dev/ttyUSB0")),
+        "io.modbus.baud": int(modbus_cfg.get("baud", 9600)),
+        "io.modbus.parity": str(modbus_cfg.get("parity", "N")).upper() or "N",
+        "io.modbus.stopbits": int(modbus_cfg.get("stopbits", 1)),
+        "io.modbus.bytesize": int(modbus_cfg.get("bytesize", 8)),
+        "io.modbus.timeout_s": float(modbus_cfg.get("timeout_s", 1.0)),
+        "io.modbus.slave_id": int(modbus_cfg.get("slave_id", 1)),
+        "io.relay.slave_id": int(relay_cfg.get("slave_id", 2)),
+        "io.inputs.trigger_capture.enabled": bool(trigger_cfg.get("enabled", legacy_trigger_cfg.get("enabled", False))),
+        "io.inputs.trigger_capture.channel": int(trigger_cfg.get("channel", legacy_trigger_cfg.get("channel", 0))),
+        "io.inputs.trigger_capture.active_high": bool(trigger_cfg.get("active_high", True)),
+        "io.inputs.trigger_capture.debounce_ms": int(trigger_cfg.get("debounce_ms", legacy_trigger_cfg.get("debounce_ms", 30))),
+        "io.inputs.part_in_nest.enabled": bool(part_cfg.get("enabled", False)),
+        "io.inputs.part_in_nest.channel": int(part_cfg.get("channel", 1)),
+        "io.inputs.part_in_nest.active_high": bool(part_cfg.get("active_high", True)),
+        "io.outputs.inspection_pass.channel": _channel_display(pass_channel),
+        "io.outputs.inspection_pass.pulse_ms": int(pass_cfg.get("pulse_ms", io_cfg.get("pass_pulse_ms", default_pulse_ms))),
+        "io.outputs.inspection_fail.channel": _channel_display(fail_channel),
+        "io.outputs.inspection_fail.pulse_ms": int(fail_cfg.get("pulse_ms", io_cfg.get("fail_pulse_ms", default_pulse_ms))),
+        "io.outputs.review_needed.channel": _channel_display(review_channel),
+        "io.outputs.review_needed.pulse_ms": int(review_cfg.get("pulse_ms", default_pulse_ms)),
+        "io.outputs.system_ready.channel": _channel_display(ready_channel),
+        "io.outputs.system_ready.pulse_ms": int(ready_cfg.get("pulse_ms", default_pulse_ms)),
+    }
+
+
+def apply_io_setup(config: dict, raw_values: dict[str, object]) -> dict:
+    updated = json.loads(json.dumps(config or {}))
+    io_cfg = updated.setdefault("io", {})
+    modbus_cfg = io_cfg.setdefault("modbus", {})
+    relay_cfg = io_cfg.setdefault("relay", {})
+    inputs_cfg = io_cfg.setdefault("inputs", {})
+    outputs_cfg = io_cfg.setdefault("outputs", {})
+    trigger_cfg = io_cfg.setdefault("trigger", {})
+
+    io_cfg["mode"] = _normalize_io_mode(raw_values.get("io.mode", io_cfg.get("mode", "none")))
+    io_cfg["indicator_target"] = _normalize_indicator_target(
+        raw_values.get("io.indicator_target", io_cfg.get("indicator_target", "relay"))
+    )
+
+    modbus_cfg["enabled"] = _safe_bool(raw_values.get("io.modbus.enabled"), modbus_cfg.get("enabled", False))
+    modbus_cfg["port"] = str(raw_values.get("io.modbus.port", modbus_cfg.get("port", "/dev/ttyUSB0"))).strip() or "/dev/ttyUSB0"
+    modbus_cfg["baud"] = max(1, _safe_int(raw_values.get("io.modbus.baud"), modbus_cfg.get("baud", 9600)))
+    modbus_cfg["parity"] = str(raw_values.get("io.modbus.parity", modbus_cfg.get("parity", "N"))).strip().upper() or "N"
+    if modbus_cfg["parity"] not in {"N", "E", "O"}:
+        modbus_cfg["parity"] = "N"
+    modbus_cfg["stopbits"] = max(1, _safe_int(raw_values.get("io.modbus.stopbits"), modbus_cfg.get("stopbits", 1)))
+    modbus_cfg["bytesize"] = max(5, _safe_int(raw_values.get("io.modbus.bytesize"), modbus_cfg.get("bytesize", 8)))
+    modbus_cfg["timeout_s"] = max(0.1, _safe_float(raw_values.get("io.modbus.timeout_s"), modbus_cfg.get("timeout_s", 1.0)))
+    modbus_cfg["slave_id"] = min(247, max(1, _safe_int(raw_values.get("io.modbus.slave_id"), modbus_cfg.get("slave_id", 1))))
+    relay_cfg["slave_id"] = min(247, max(1, _safe_int(raw_values.get("io.relay.slave_id"), relay_cfg.get("slave_id", 2))))
+
+    trigger_input_cfg = inputs_cfg.setdefault("trigger_capture", {})
+    trigger_enabled = _safe_bool(
+        raw_values.get("io.inputs.trigger_capture.enabled"),
+        trigger_input_cfg.get("enabled", trigger_cfg.get("enabled", False)),
+    )
+    trigger_channel = max(
+        0,
+        _safe_int(
+            raw_values.get("io.inputs.trigger_capture.channel"),
+            trigger_input_cfg.get("channel", trigger_cfg.get("channel", 0)),
+        ),
+    )
+    trigger_active_high = _safe_bool(
+        raw_values.get("io.inputs.trigger_capture.active_high"),
+        trigger_input_cfg.get("active_high", True),
+    )
+    trigger_debounce_ms = max(
+        0,
+        _safe_int(
+            raw_values.get("io.inputs.trigger_capture.debounce_ms"),
+            trigger_input_cfg.get("debounce_ms", trigger_cfg.get("debounce_ms", 30)),
+        ),
+    )
+    trigger_input_cfg.update(
+        {
+            "enabled": trigger_enabled,
+            "channel": trigger_channel,
+            "active_high": trigger_active_high,
+            "debounce_ms": trigger_debounce_ms,
+        }
+    )
+    trigger_cfg["enabled"] = trigger_enabled
+    trigger_cfg["slave_id"] = modbus_cfg["slave_id"]
+    trigger_cfg["register"] = int(trigger_cfg.get("register", 0))
+    trigger_cfg["channel"] = trigger_channel
+    trigger_cfg["count"] = max(1, int(trigger_cfg.get("count", 8)))
+    trigger_cfg["debounce_ms"] = trigger_debounce_ms
+    trigger_cfg["timeout_s"] = min(float(modbus_cfg["timeout_s"]), float(trigger_cfg.get("timeout_s", 0.3)))
+
+    part_input_cfg = inputs_cfg.setdefault("part_in_nest", {})
+    part_input_cfg.update(
+        {
+            "enabled": _safe_bool(raw_values.get("io.inputs.part_in_nest.enabled"), part_input_cfg.get("enabled", False)),
+            "channel": max(0, _safe_int(raw_values.get("io.inputs.part_in_nest.channel"), part_input_cfg.get("channel", 1))),
+            "active_high": _safe_bool(raw_values.get("io.inputs.part_in_nest.active_high"), part_input_cfg.get("active_high", True)),
+        }
+    )
+
+    default_pulse_ms = _pulse_value(io_cfg.get("pulse_ms", 3000), 3000)
+
+    def _apply_output_hook(name: str, *, channel_key: str, pulse_key: str, fallback_channel: int | None, fallback_pulse: int) -> tuple[int | None, int]:
+        hook_cfg = outputs_cfg.setdefault(name, {})
+        channel = _channel_value(raw_values.get(channel_key), _channel_value(hook_cfg.get("channel"), fallback_channel))
+        pulse_ms = _pulse_value(raw_values.get(pulse_key), int(hook_cfg.get("pulse_ms", fallback_pulse)))
+        hook_cfg.update({
+            "enabled": channel is not None,
+            "channel": channel,
+            "pulse_ms": pulse_ms,
+        })
+        return channel, pulse_ms
+
+    pass_channel, pass_pulse_ms = _apply_output_hook(
+        "inspection_pass",
+        channel_key="io.outputs.inspection_pass.channel",
+        pulse_key="io.outputs.inspection_pass.pulse_ms",
+        fallback_channel=_channel_value(relay_cfg.get("pass_channel"), 0),
+        fallback_pulse=int(io_cfg.get("pass_pulse_ms", default_pulse_ms)),
+    )
+    fail_channel, fail_pulse_ms = _apply_output_hook(
+        "inspection_fail",
+        channel_key="io.outputs.inspection_fail.channel",
+        pulse_key="io.outputs.inspection_fail.pulse_ms",
+        fallback_channel=_channel_value(relay_cfg.get("fail_channel"), 1),
+        fallback_pulse=int(io_cfg.get("fail_pulse_ms", default_pulse_ms)),
+    )
+    _apply_output_hook(
+        "review_needed",
+        channel_key="io.outputs.review_needed.channel",
+        pulse_key="io.outputs.review_needed.pulse_ms",
+        fallback_channel=_channel_value(outputs_cfg.get("review_needed", {}).get("channel"), None),
+        fallback_pulse=default_pulse_ms,
+    )
+    _apply_output_hook(
+        "system_ready",
+        channel_key="io.outputs.system_ready.channel",
+        pulse_key="io.outputs.system_ready.pulse_ms",
+        fallback_channel=_channel_value(outputs_cfg.get("system_ready", {}).get("channel"), None),
+        fallback_pulse=default_pulse_ms,
+    )
+
+    relay_cfg["pass_channel"] = pass_channel
+    relay_cfg["fail_channel"] = fail_channel
+    modbus_cfg["pass_channel"] = 0 if pass_channel is None else int(pass_channel)
+    modbus_cfg["fail_channel"] = 1 if fail_channel is None else int(fail_channel)
+    io_cfg["pulse_ms"] = default_pulse_ms
+    io_cfg["pass_pulse_ms"] = pass_pulse_ms
+    io_cfg["fail_pulse_ms"] = fail_pulse_ms
+
+    return updated
+
+
+def format_io_setup_summary(config: dict) -> str:
+    values = build_io_setup_values(config)
+    mode = values["io.mode"]
+    if mode == "none":
+        return "IO setup: disabled"
+
+    def _output_text(value: object) -> str:
+        return "off" if str(value).strip().lower() == "off" else f"R{value}"
+
+    trigger_text = "off"
+    if values["io.inputs.trigger_capture.enabled"]:
+        trigger_text = f"DI{values['io.inputs.trigger_capture.channel']}"
+    nest_text = "off"
+    if values["io.inputs.part_in_nest.enabled"]:
+        nest_text = f"DI{values['io.inputs.part_in_nest.channel']}"
+    return (
+        "IO setup: "
+        f"{str(values['io.indicator_target']).upper()} | "
+        f"trigger {trigger_text} | "
+        f"nest {nest_text} | "
+        f"pass {_output_text(values['io.outputs.inspection_pass.channel'])} | "
+        f"fail {_output_text(values['io.outputs.inspection_fail.channel'])}"
+    )
+
 
 def build_registration_setup_values(config: dict) -> dict[str, object]:
     alignment_cfg = config.get("alignment", {}) if isinstance(config, dict) else {}
@@ -976,6 +1225,119 @@ class RegistrationSetupDialog:
         self.dialog.destroy()
 
 
+class IOSetupDialog:
+    """Dedicated RS-485 / IO role-mapping editor."""
+
+    SECTION_FIELDS = {
+        "Bus / Hardware": [
+            ("io.mode", "Hardware Mode"),
+            ("io.modbus.enabled", "Modbus Enabled"),
+            ("io.indicator_target", "Output Target"),
+            ("io.modbus.port", "Serial Port"),
+            ("io.modbus.baud", "Baud"),
+            ("io.modbus.parity", "Parity"),
+            ("io.modbus.stopbits", "Stop Bits"),
+            ("io.modbus.bytesize", "Data Bits"),
+            ("io.modbus.timeout_s", "Timeout (s)"),
+            ("io.modbus.slave_id", "Input Module Slave ID"),
+            ("io.relay.slave_id", "Relay Module Slave ID"),
+        ],
+        "Input Hooks": [
+            ("io.inputs.trigger_capture.enabled", "Trigger Enabled"),
+            ("io.inputs.trigger_capture.channel", "Trigger Channel (DI)"),
+            ("io.inputs.trigger_capture.active_high", "Trigger Active High"),
+            ("io.inputs.trigger_capture.debounce_ms", "Trigger Debounce (ms)"),
+            ("io.inputs.part_in_nest.enabled", "Part-In-Nest Enabled"),
+            ("io.inputs.part_in_nest.channel", "Part-In-Nest Channel (DI)"),
+            ("io.inputs.part_in_nest.active_high", "Part-In-Nest Active High"),
+        ],
+        "Output Hooks": [
+            ("io.outputs.inspection_pass.channel", "PASS Output (relay/output)"),
+            ("io.outputs.inspection_pass.pulse_ms", "PASS Pulse (ms)"),
+            ("io.outputs.inspection_fail.channel", "FAIL Output (relay/output)"),
+            ("io.outputs.inspection_fail.pulse_ms", "FAIL Pulse (ms)"),
+            ("io.outputs.review_needed.channel", "REVIEW Output (relay/output)"),
+            ("io.outputs.review_needed.pulse_ms", "REVIEW Pulse (ms)"),
+            ("io.outputs.system_ready.channel", "READY Output (relay/output)"),
+            ("io.outputs.system_ready.pulse_ms", "READY Pulse (ms)"),
+        ],
+    }
+
+    def __init__(self, parent: tk.Tk, on_saved) -> None:
+        self.parent = parent
+        self.on_saved = on_saved
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("IO / RS-485 Setup")
+        self.dialog.geometry("920x760")
+        self.dialog.minsize(780, 620)
+        self.dialog.transient(parent)
+
+        active_paths = get_active_runtime_paths()
+        self.config_path = active_paths["config_file"]
+        self.status_var = tk.StringVar(value="Configure RS-485 bus settings and hook assignments.")
+        self.vars: dict[str, tk.StringVar] = {}
+
+        self._build_layout()
+        self.reload()
+        self.dialog.protocol("WM_DELETE_WINDOW", self.close)
+
+    def _build_layout(self) -> None:
+        self.dialog.columnconfigure(0, weight=1)
+        self.dialog.rowconfigure(0, weight=1)
+
+        shell = VerticalScrolledFrame(self.dialog, content_padding=12)
+        shell.grid(row=0, column=0, sticky="nsew")
+        main = shell.content
+        main.columnconfigure(0, weight=1)
+
+        ttk.Label(main, text="IO / RS-485 Setup", font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(main, textvariable=self.status_var, wraplength=820, justify="left").grid(row=1, column=0, sticky="w", pady=(4, 10))
+
+        for row_index, (section_label, fields) in enumerate(self.SECTION_FIELDS.items(), start=2):
+            frame = ttk.LabelFrame(main, text=section_label, padding=10)
+            frame.grid(row=row_index, column=0, sticky="ew", pady=(0, 10))
+            frame.columnconfigure(1, weight=1)
+            for field_row, (key, label) in enumerate(fields):
+                ttk.Label(frame, text=label).grid(row=field_row, column=0, sticky="w", padx=(0, 8), pady=3)
+                var = tk.StringVar()
+                self.vars[key] = var
+                if key in IO_SETUP_DROPDOWN_OPTIONS:
+                    widget = ttk.Combobox(
+                        frame,
+                        textvariable=var,
+                        values=IO_SETUP_DROPDOWN_OPTIONS[key],
+                        state="readonly",
+                    )
+                else:
+                    widget = ttk.Entry(frame, textvariable=var)
+                widget.grid(row=field_row, column=1, sticky="ew", pady=3)
+
+        actions = ttk.Frame(main)
+        actions.grid(row=len(self.SECTION_FIELDS) + 2, column=0, sticky="ew", pady=(4, 0))
+        for idx in range(3):
+            actions.columnconfigure(idx, weight=1)
+        ttk.Button(actions, text="Reload", command=self.reload).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(actions, text="Save", command=self.save).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(actions, text="Close", command=self.close).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+
+    def reload(self) -> None:
+        values = build_io_setup_values(read_json_file(self.config_path))
+        for key, value in values.items():
+            if key in self.vars:
+                self.vars[key].set("" if value is None else str(value))
+        self.status_var.set(f"Loaded IO setup from {self.config_path}")
+
+    def save(self) -> None:
+        updated = apply_io_setup(read_json_file(self.config_path), {key: var.get() for key, var in self.vars.items()})
+        write_json_file(self.config_path, updated)
+        self.status_var.set(f"Saved IO setup to {self.config_path}")
+        if self.on_saved is not None:
+            self.on_saved(updated)
+
+    def close(self) -> None:
+        self.dialog.destroy()
+
+
 class ConfigEditorPage:
     """Full-screen config tuning view with integrated preview panel."""
 
@@ -996,9 +1358,11 @@ class ConfigEditorPage:
         self.status_var = tk.StringVar(value="Ready")
         self.current_project_var = tk.StringVar(value="Current project: None")
         self.registration_status_var = tk.StringVar(value="Registration setup: unknown")
+        self.io_status_var = tk.StringVar(value="IO setup: unknown")
         self.preview_path_var = tk.StringVar(value="Preview: none")
         self.roi_dialog: ROISetupDialog | None = None
         self.registration_dialog: RegistrationSetupDialog | None = None
+        self.io_dialog: IOSetupDialog | None = None
         self.touch_keyboard = TouchKeyboardManager(self.root)
 
         self._build_layout()
@@ -1032,6 +1396,7 @@ class ConfigEditorPage:
         info.columnconfigure(0, weight=1)
         ttk.Label(info, textvariable=self.current_project_var).grid(row=0, column=0, sticky="w")
         ttk.Label(info, textvariable=self.registration_status_var, wraplength=480, justify="left").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(info, textvariable=self.io_status_var, wraplength=480, justify="left").grid(row=2, column=0, sticky="w", pady=(4, 0))
 
         preview = ttk.LabelFrame(meta, text="Latest Preview", padding=10)
         preview.grid(row=1, column=0, sticky="nsew")
@@ -1097,7 +1462,7 @@ class ConfigEditorPage:
 
         actions = ttk.Frame(config)
         actions.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        for idx in range(6):
+        for idx in range(7):
             actions.columnconfigure(idx, weight=1)
 
         self.reload_button = ttk.Button(actions, text="Reload", command=self.reload_config_editor)
@@ -1110,8 +1475,10 @@ class ConfigEditorPage:
         self.roi_button.grid(row=0, column=3, sticky="ew", padx=(4, 4))
         self.registration_button = ttk.Button(actions, text="Registration", command=self.open_registration_setup)
         self.registration_button.grid(row=0, column=4, sticky="ew", padx=(4, 4))
+        self.io_button = ttk.Button(actions, text="IO / RS485", command=self.open_io_setup)
+        self.io_button.grid(row=0, column=5, sticky="ew", padx=(4, 4))
         self.info_button = ttk.Button(actions, text="Info", command=self.show_settings_info)
-        self.info_button.grid(row=0, column=5, sticky="ew", padx=(4, 0))
+        self.info_button.grid(row=0, column=6, sticky="ew", padx=(4, 0))
 
     def _schedule_preview_render(self, _event=None) -> None:
         if self._preview_render_job is not None:
@@ -1148,6 +1515,7 @@ class ConfigEditorPage:
             self.back_button,
             self.roi_button,
             self.registration_button,
+            self.io_button,
             self.info_button,
         ]:
             button.configure(state=state)
@@ -1273,6 +1641,18 @@ class ConfigEditorPage:
             initial_image_path=initial_path,
         )
 
+    def open_io_setup(self) -> None:
+        if self.io_dialog is not None and self.io_dialog.dialog.winfo_exists():
+            self.io_dialog.dialog.focus_set()
+            return
+
+        def _on_io_saved(updated_config: dict) -> None:
+            self.io_status_var.set(format_io_setup_summary(updated_config))
+            self.status_var.set("Saved IO / RS-485 setup updates")
+            self.refresh_view()
+
+        self.io_dialog = IOSetupDialog(self.root, _on_io_saved)
+
     def reload_config_editor(self) -> None:
         config = read_json_file(get_active_runtime_paths()["config_file"])
         for dotted_path, value in build_config_editor_values(config).items():
@@ -1389,6 +1769,7 @@ class ConfigEditorPage:
         self.registration_status_var.set(
             f"Registration setup: {build_registration_commissioning_summary(config).get('summary', 'unknown')}"
         )
+        self.io_status_var.set(format_io_setup_summary(config))
         self.reload_config_editor()
         if self.display_mode != "live":
             self.display_mode = "stored"

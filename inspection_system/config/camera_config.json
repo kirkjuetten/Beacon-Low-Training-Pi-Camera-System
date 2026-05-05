@@ -50,9 +50,9 @@
     "pulse_ms": 750
   },
   "io": {
-    "mode": "gpio",
-    "indicator_target": "io_module",
-    "pulse_ms": 750,
+    "mode": "none",
+    "indicator_target": "relay",
+    "pulse_ms": 3000,
     "pass_pulse_ms": 3000,
     "fail_pulse_ms": 3000,
     "modbus": {
@@ -80,6 +80,41 @@
       "count": 8,
       "debounce_ms": 30,
       "timeout_s": 0.3
+    },
+    "inputs": {
+      "trigger_capture": {
+        "enabled": false,
+        "channel": 0,
+        "active_high": true,
+        "debounce_ms": 30
+      },
+      "part_in_nest": {
+        "enabled": false,
+        "channel": 1,
+        "active_high": true
+      }
+    },
+    "outputs": {
+      "inspection_pass": {
+        "enabled": true,
+        "channel": 0,
+        "pulse_ms": 3000
+      },
+      "inspection_fail": {
+        "enabled": true,
+        "channel": 1,
+        "pulse_ms": 3000
+      },
+      "review_needed": {
+        "enabled": false,
+        "channel": null,
+        "pulse_ms": 3000
+      },
+      "system_ready": {
+        "enabled": false,
+        "channel": null,
+        "pulse_ms": 3000
+      }
     }
   }
 }

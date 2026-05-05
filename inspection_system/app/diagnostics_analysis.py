@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 
 from inspection_system.app.result_status import CONFIG_ERROR, FAIL, INVALID_CAPTURE, PASS, REGISTRATION_FAILED
+from inspection_system.app.runtime_inspection_result import RuntimeInspectionResult
 
 
 GATE_SPECS = [
@@ -365,9 +366,11 @@ def _build_lane_expansion_assessment(
 
 
 def _diagnose_result(record: dict, result: dict) -> dict:
-    status = str(result.get("status", "UNKNOWN"))
+    runtime_result = RuntimeInspectionResult.from_serialized_result(result)
+    status = runtime_result.status
+    details = runtime_result.evidence
     if status == INVALID_CAPTURE:
-        reason = result.get("reason", "Invalid capture")
+        reason = runtime_result.reason or "Invalid capture"
         return {
             "primary_cause": "invalid_capture",
             "summary": str(reason),
@@ -376,7 +379,7 @@ def _diagnose_result(record: dict, result: dict) -> dict:
             "alignment_warnings": [],
         }
     if status == CONFIG_ERROR:
-        reason = result.get("reason", "Configuration error")
+        reason = runtime_result.reason or "Configuration error"
         return {
             "primary_cause": "config_error",
             "summary": str(reason),
@@ -385,22 +388,22 @@ def _diagnose_result(record: dict, result: dict) -> dict:
             "alignment_warnings": [],
         }
     if status == REGISTRATION_FAILED:
-        registration_reason = result.get("registration_rejection_reason") or result.get("reason") or "Registration failed"
-        alignment_warnings = _alignment_warnings(result)
+        registration_reason = runtime_result.registration_rejection_reason or "Registration failed"
+        alignment_warnings = _alignment_warnings(details)
         summary_parts = [str(registration_reason)]
         if alignment_warnings:
             summary_parts.append(alignment_warnings[0])
         return {
             "primary_cause": "registration_failure",
             "summary": "; ".join(summary_parts),
-            "failure_modes": list(result.get("registration_quality_gate_failures", [])),
+            "failure_modes": runtime_result.registration_quality_gate_failures,
             "closest_pass_gates": [],
             "alignment_warnings": alignment_warnings,
         }
 
-    feature_failure_mode = _build_feature_position_failure_mode(result)
+    feature_failure_mode = _build_feature_position_failure_mode(details)
     if status == FAIL and feature_failure_mode is not None:
-        alignment_warnings = _alignment_warnings(result)
+        alignment_warnings = _alignment_warnings(details)
         summary_parts = [feature_failure_mode["summary"]]
         if alignment_warnings:
             summary_parts.append(alignment_warnings[0])
@@ -415,19 +418,19 @@ def _diagnose_result(record: dict, result: dict) -> dict:
     failure_modes = []
     closest_pass_gates = []
     for spec in GATE_SPECS:
-        if not _is_gate_active(result, spec):
+        if not _is_gate_active(details, spec):
             continue
-        margin = _compute_gate_margin(result, spec)
+        margin = _compute_gate_margin(details, spec)
         if margin is None:
             continue
-        entry = _build_gate_entry(result, spec, margin)
+        entry = _build_gate_entry(details, spec, margin)
         if margin < 0:
             failure_modes.append(entry)
         else:
             closest_pass_gates.append(entry)
 
     closest_pass_gates.sort(key=lambda entry: entry["margin"])
-    alignment_warnings = _alignment_warnings(result)
+    alignment_warnings = _alignment_warnings(details)
 
     if status == PASS:
         summary_parts = ["Sample passed inspection"]

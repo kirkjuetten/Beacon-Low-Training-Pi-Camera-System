@@ -5,6 +5,39 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 
+OUTCOME_KIND_PASS = "pass"
+OUTCOME_KIND_INSPECTION_FAILURE = "inspection_failure"
+OUTCOME_KIND_REGISTRATION_FAILURE = "registration_failure"
+OUTCOME_KIND_INVALID_CAPTURE = "invalid_capture"
+OUTCOME_KIND_CONFIG_ERROR = "config_error"
+
+_VALID_OUTCOME_KINDS = {
+    OUTCOME_KIND_PASS,
+    OUTCOME_KIND_INSPECTION_FAILURE,
+    OUTCOME_KIND_REGISTRATION_FAILURE,
+    OUTCOME_KIND_INVALID_CAPTURE,
+    OUTCOME_KIND_CONFIG_ERROR,
+}
+
+
+def infer_outcome_kind(*, passed: bool, details: dict) -> str:
+    raw_outcome_kind = str(details.get("outcome_kind", "")).strip().lower()
+    if raw_outcome_kind in _VALID_OUTCOME_KINDS:
+        return raw_outcome_kind
+
+    if passed:
+        return OUTCOME_KIND_PASS
+
+    failure_stage = str(details.get("failure_stage", "")).strip().lower()
+    if failure_stage == "registration":
+        return OUTCOME_KIND_REGISTRATION_FAILURE
+    if failure_stage == "invalid_capture":
+        return OUTCOME_KIND_INVALID_CAPTURE
+    if failure_stage == "config":
+        return OUTCOME_KIND_CONFIG_ERROR
+    return OUTCOME_KIND_INSPECTION_FAILURE
+
+
 @dataclass(frozen=True)
 class GateDecision:
     passed: bool
@@ -156,7 +189,73 @@ class MeasurementBundle:
 
 
 @dataclass(frozen=True)
+class LaneResult:
+    lane_id: str
+    lane_type: str
+    authoritative: bool
+    passed: bool
+    inspection_cfg: dict
+    measurement_result: dict
+    threshold_summary: dict
+    feature_measurements: list[dict]
+    feature_position_summary: dict | None
+    edge_measurement_frame: str
+    section_measurement_frame: str
+    inspection_failure_cause: str | None = None
+
+    @classmethod
+    def from_legacy(cls, lane_result: dict) -> "LaneResult":
+        return cls(
+            lane_id=str(lane_result.get("lane_id", "")),
+            lane_type=str(lane_result.get("lane_type", "measurement")),
+            authoritative=bool(lane_result.get("authoritative", False)),
+            passed=bool(lane_result.get("passed", False)),
+            inspection_cfg=deepcopy(lane_result.get("inspection_cfg", {})),
+            measurement_result=deepcopy(lane_result.get("measurement_result", {})),
+            threshold_summary=deepcopy(lane_result.get("threshold_summary", {})),
+            feature_measurements=deepcopy(lane_result.get("feature_measurements", [])),
+            feature_position_summary=deepcopy(lane_result.get("feature_position_summary")),
+            edge_measurement_frame=str(lane_result.get("edge_measurement_frame", "aligned_mask")),
+            section_measurement_frame=str(lane_result.get("section_measurement_frame", "aligned_mask")),
+            inspection_failure_cause=lane_result.get("inspection_failure_cause"),
+        )
+
+    def with_inspection_failure_cause(self, inspection_failure_cause: str | None) -> "LaneResult":
+        return LaneResult(
+            lane_id=self.lane_id,
+            lane_type=self.lane_type,
+            authoritative=self.authoritative,
+            passed=self.passed,
+            inspection_cfg=deepcopy(self.inspection_cfg),
+            measurement_result=deepcopy(self.measurement_result),
+            threshold_summary=deepcopy(self.threshold_summary),
+            feature_measurements=deepcopy(self.feature_measurements),
+            feature_position_summary=deepcopy(self.feature_position_summary),
+            edge_measurement_frame=self.edge_measurement_frame,
+            section_measurement_frame=self.section_measurement_frame,
+            inspection_failure_cause=inspection_failure_cause,
+        )
+
+    def to_legacy_dict(self) -> dict:
+        return {
+            "lane_id": self.lane_id,
+            "lane_type": self.lane_type,
+            "authoritative": self.authoritative,
+            "passed": self.passed,
+            "inspection_cfg": deepcopy(self.inspection_cfg),
+            "measurement_result": deepcopy(self.measurement_result),
+            "threshold_summary": deepcopy(self.threshold_summary),
+            "feature_measurements": deepcopy(self.feature_measurements),
+            "feature_position_summary": deepcopy(self.feature_position_summary),
+            "edge_measurement_frame": self.edge_measurement_frame,
+            "section_measurement_frame": self.section_measurement_frame,
+            "inspection_failure_cause": self.inspection_failure_cause,
+        }
+
+
+@dataclass(frozen=True)
 class InspectionOutcome:
+    outcome_kind: str
     passed: bool
     registration: RegistrationAssessment
     measurements: MeasurementBundle
@@ -174,6 +273,7 @@ class InspectionOutcome:
         details: dict,
     ) -> "InspectionOutcome":
         return cls(
+            outcome_kind=infer_outcome_kind(passed=passed, details=details),
             passed=bool(passed),
             registration=registration,
             measurements=measurements,
@@ -183,6 +283,7 @@ class InspectionOutcome:
 
     def to_legacy_details(self) -> dict:
         legacy = deepcopy(self.details)
+        legacy["outcome_kind"] = self.outcome_kind
         legacy["registration"] = self.registration.to_legacy_dict()
         legacy["feature_measurements"] = deepcopy(self.measurements.feature_measurements)
         legacy["feature_position_summary"] = deepcopy(self.measurements.feature_position_summary)

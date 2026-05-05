@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import replay_inspection
-from inspection_system.app.result_status import PASS, REGISTRATION_FAILED
+from inspection_system.app.result_status import CONFIG_ERROR, INVALID_CAPTURE, PASS, REGISTRATION_FAILED
 
 
 class FakeCv2:
@@ -62,6 +62,31 @@ def test_classify_invalid_capture_reports_missing_reference(monkeypatch, tmp_pat
     reason = replay_inspection.classify_invalid_capture({"inspection": {"roi": {}}}, image_path)
 
     assert "Reference mask is missing" in reason
+
+
+def test_shared_classify_invalid_capture_accepts_preloaded_reference_candidates(monkeypatch, tmp_path: Path) -> None:
+    from inspection_system.app.image_quality import classify_invalid_capture
+
+    fake_image = SimpleNamespace(shape=(100, 200, 3))
+    fake_cv2 = FakeCv2(image=fake_image)
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+
+    image_path = tmp_path / "sample.jpg"
+    image_path.write_text("placeholder", encoding="utf-8")
+
+    reason = classify_invalid_capture(
+        {"inspection": {"roi": {}}},
+        image_path,
+        reference_candidates=[{"reference_id": "golden"}],
+    )
+
+    assert reason is None
+
+
+def test_resolve_result_status_uses_outcome_kind() -> None:
+    assert replay_inspection._resolve_result_status(False, {"outcome_kind": "registration_failure"}) == REGISTRATION_FAILED
+    assert replay_inspection._resolve_result_status(False, {"outcome_kind": "invalid_capture"}) == INVALID_CAPTURE
+    assert replay_inspection._resolve_result_status(False, {"outcome_kind": "config_error"}) == CONFIG_ERROR
 
 
 def test_inspect_file_uses_runtime_reference_paths_and_anomaly_detector(monkeypatch, tmp_path: Path) -> None:
@@ -161,6 +186,7 @@ def test_inspect_file_uses_runtime_reference_paths_and_anomaly_detector(monkeypa
     result = replay_inspection.inspect_file({"inspection": {}}, image_path, active_paths=active_paths)
 
     assert result["status"] == PASS
+    assert result["outcome_kind"] == "pass"
     assert captured["sample_image_path"] == image_path
     assert captured["reference_mask_path"] == active_paths["reference_mask"]
     assert captured["reference_image_path"] == active_paths["reference_image"]
@@ -254,6 +280,7 @@ def test_inspect_file_returns_registration_failed_when_registration_is_rejected(
     result = replay_inspection.inspect_file({"inspection": {}}, image_path, active_paths=active_paths)
 
     assert result["status"] == REGISTRATION_FAILED
+    assert result["outcome_kind"] == "registration_failure"
     assert result["registration_rejected"] is True
     assert result["registration_rejection_reason"] == "Registration confidence 0.500 was below required minimum 0.900."
     assert result["failure_stage"] == "registration"

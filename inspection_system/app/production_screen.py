@@ -18,12 +18,14 @@ from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.camera_interface import get_active_runtime_paths, import_cv2_and_numpy
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
+from inspection_system.app.image_quality import classify_invalid_capture
 from inspection_system.app.inspection_runtime_context import build_inspection_runtime_context
 from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
 from inspection_system.app.reference_region_utils import build_reference_regions
 from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
+from inspection_system.app.runtime_inspection_result import RuntimeInspectionResult
 from inspection_system.app.result_interpreter import (
     GOOD,
     REASON_EXTRA_PRINT,
@@ -462,16 +464,28 @@ class ProductionDisplay:
 def _perform_inspection(
     config: dict,
     runtime_context,
-) -> tuple[Optional[ProductionOutcome], dict, Optional[Path], Optional[str]]:
+) -> tuple[Optional[RuntimeInspectionResult], Optional[str]]:
     result_code, image_path, stderr_text = capture_to_temp(config)
     if result_code != 0:
         cleanup_temp_image()
-        return None, {}, None, stderr_text or "Capture failed."
+        return None, stderr_text or "Capture failed."
 
     try:
         reference_candidates = runtime_context.reference_candidates
         if not reference_candidates:
-            return None, {}, None, "No active runtime references are available. Capture a golden reference first."
+            return RuntimeInspectionResult.from_config_error(
+                image_path,
+                "No active runtime references are available. Capture a golden reference first.",
+            ), None
+        invalid_reason = classify_invalid_capture(
+            config,
+            image_path,
+            active_paths=get_active_runtime_paths(),
+            reference_candidates=reference_candidates,
+        )
+        if invalid_reason is not None:
+            cleanup_temp_image()
+            return RuntimeInspectionResult.from_invalid_capture(image_path, invalid_reason), None
         passed, details = inspect_against_references(
             config,
             image_path,
@@ -488,10 +502,10 @@ def _perform_inspection(
             erode_mask,
             anomaly_detector=runtime_context.anomaly_detector,
         )
-        return determine_operator_outcome(passed, details), details, image_path, None
+        return RuntimeInspectionResult.from_inspection(image_path, passed, details), None
     except Exception as exc:
         cleanup_temp_image()
-        return None, {}, None, str(exc)
+        return RuntimeInspectionResult.from_config_error(image_path, str(exc)), None
 
 
 def _pilot_gate_enforced(config: dict) -> bool:
@@ -578,17 +592,26 @@ def run_production_mode(config: dict, indicator) -> int:
 
         display.show_message("INSPECTING...", display.YELLOW)
         _t0 = time.perf_counter()
-        outcome, details, image_path, error_message = _perform_inspection(config, runtime_context)
+        runtime_result, error_message = _perform_inspection(config, runtime_context)
         latency.record((time.perf_counter() - _t0) * 1000.0)
-        if error_message is not None:
+        if error_message is not None or runtime_result is None:
             source_surface = None
             processed_surface = None
-            status_message = f"Inspection error: {error_message}"
+            status_message = f"Inspection error: {error_message or 'unknown error'}"
             display.render(session, source_surface, processed_surface, status_message, mode_lines)
             return
 
-        assert outcome is not None
-        assert image_path is not None
+        if not runtime_result.evidence:
+            source_surface = None
+            processed_surface = None
+            prefix = "Invalid capture" if runtime_result.status == "INVALID_CAPTURE" else "Inspection error"
+            status_message = f"{prefix}: {runtime_result.reason or 'unknown error'}"
+            display.render(session, source_surface, processed_surface, status_message, mode_lines)
+            return
+
+        outcome = runtime_result.to_operator_outcome()
+        details = runtime_result.evidence
+        image_path = Path(runtime_result.image_path)
         source_surface = display.load_surface_from_image(image_path)
         processed_surface = None
         if session.display_mode in {"processed", "split"}:

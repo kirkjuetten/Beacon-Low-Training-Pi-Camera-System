@@ -179,6 +179,74 @@ DEFAULT_CONFIG = {
         "fail_gpio": 24,
         "pulse_ms": 750,
     },
+    "io": {
+        "mode": "none",
+        "indicator_target": "relay",
+        "pulse_ms": 3000,
+        "pass_pulse_ms": 3000,
+        "fail_pulse_ms": 3000,
+        "modbus": {
+            "enabled": False,
+            "port": "/dev/ttyUSB0",
+            "baud": 9600,
+            "parity": "N",
+            "stopbits": 1,
+            "bytesize": 8,
+            "slave_id": 1,
+            "pass_channel": 0,
+            "fail_channel": 1,
+            "timeout_s": 1.0,
+        },
+        "relay": {
+            "slave_id": 2,
+            "pass_channel": 0,
+            "fail_channel": 1,
+        },
+        "trigger": {
+            "enabled": False,
+            "slave_id": 1,
+            "register": 0,
+            "channel": 0,
+            "count": 8,
+            "debounce_ms": 30,
+            "timeout_s": 0.3,
+        },
+        "inputs": {
+            "trigger_capture": {
+                "enabled": False,
+                "channel": 0,
+                "active_high": True,
+                "debounce_ms": 30,
+            },
+            "part_in_nest": {
+                "enabled": False,
+                "channel": 1,
+                "active_high": True,
+            },
+        },
+        "outputs": {
+            "inspection_pass": {
+                "enabled": True,
+                "channel": 0,
+                "pulse_ms": 3000,
+            },
+            "inspection_fail": {
+                "enabled": True,
+                "channel": 1,
+                "pulse_ms": 3000,
+            },
+            "review_needed": {
+                "enabled": False,
+                "channel": None,
+                "pulse_ms": 3000,
+            },
+            "system_ready": {
+                "enabled": False,
+                "channel": None,
+                "pulse_ms": 3000,
+            },
+        },
+    },
 }
 
 

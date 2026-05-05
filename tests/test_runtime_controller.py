@@ -1,5 +1,7 @@
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from inspection_system.app.runtime_controller import (
@@ -10,6 +12,7 @@ from inspection_system.app.runtime_controller import (
     get_commissioning_status,
     get_inspection_runtime_warnings,
     print_inspection_result,
+    run_capture_and_inspect,
 )
 
 
@@ -63,6 +66,16 @@ def _write_training_records(active_paths: dict, records: list[dict]) -> None:
     training_file.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
 
 
+class _FakeCv2:
+    IMREAD_COLOR = 1
+
+    def __init__(self, image):
+        self._image = image
+
+    def imread(self, _path: str, _mode: int):
+        return self._image
+
+
 def test_ml_mode_warns_when_model_and_threshold_are_missing() -> None:
     warnings = get_inspection_runtime_warnings(
         {"inspection": {"inspection_mode": "mask_and_ml"}},
@@ -72,6 +85,77 @@ def test_ml_mode_warns_when_model_and_threshold_are_missing() -> None:
     assert len(warnings) == 2
     assert "no trained anomaly model" in warnings[0].lower()
     assert "min anomaly score" in warnings[1].lower()
+
+
+def test_run_capture_and_inspect_rejects_invalid_capture_before_inspection(monkeypatch, tmp_path) -> None:
+    image_path = tmp_path / "sample.jpg"
+    image_path.write_text("placeholder", encoding="utf-8")
+
+    fake_cv2 = _FakeCv2(SimpleNamespace(shape=(100, 200, 3)))
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr(
+        "inspection_system.app.runtime_controller.capture_to_temp",
+        lambda config: (0, image_path, ""),
+    )
+    monkeypatch.setattr("inspection_system.app.runtime_controller.cleanup_temp_image", lambda: None)
+    monkeypatch.setattr(
+        "inspection_system.app.runtime_controller.build_inspection_runtime_context",
+        lambda *args, **kwargs: SimpleNamespace(
+            reference_candidates=[{"reference_id": "golden"}],
+            anomaly_detector=None,
+            active_paths={"reference_mask": tmp_path / "reference_mask.png"},
+        ),
+    )
+    monkeypatch.setattr("inspection_system.app.runtime_controller.get_inspection_runtime_warnings", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "inspection_system.app.runtime_controller.inspect_against_references",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("inspection should not run for invalid capture")),
+    )
+
+    indicator = mock.Mock()
+    result = run_capture_and_inspect(
+        {
+            "inspection": {
+                "roi": {"x": 180, "y": 10, "width": 40, "height": 20}
+            }
+        },
+        indicator,
+    )
+
+    assert result == 1
+    indicator.pulse_fail.assert_called_once()
+
+
+def test_run_capture_and_inspect_reports_config_error_without_crashing(monkeypatch, tmp_path, capsys) -> None:
+    image_path = tmp_path / "sample.jpg"
+    image_path.write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "inspection_system.app.runtime_controller.capture_to_temp",
+        lambda config: (0, image_path, ""),
+    )
+    monkeypatch.setattr("inspection_system.app.runtime_controller.cleanup_temp_image", lambda: None)
+    monkeypatch.setattr(
+        "inspection_system.app.runtime_controller.build_inspection_runtime_context",
+        lambda *args, **kwargs: SimpleNamespace(
+            reference_candidates=[{"reference_id": "golden"}],
+            anomaly_detector=None,
+            active_paths={"reference_mask": tmp_path / "reference_mask.png"},
+        ),
+    )
+    monkeypatch.setattr("inspection_system.app.runtime_controller.get_inspection_runtime_warnings", lambda *args, **kwargs: [])
+    monkeypatch.setattr("inspection_system.app.runtime_controller.classify_invalid_capture", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "inspection_system.app.runtime_controller.inspect_against_references",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("Reference mask not found")),
+    )
+
+    indicator = mock.Mock()
+    result = run_capture_and_inspect({"inspection": {}}, indicator)
+
+    assert result == 1
+    assert "Reference mask not found" in capsys.readouterr().out
+    indicator.pulse_fail.assert_called_once()
 
 
 def test_full_mode_warns_only_for_missing_threshold_when_model_exists() -> None:

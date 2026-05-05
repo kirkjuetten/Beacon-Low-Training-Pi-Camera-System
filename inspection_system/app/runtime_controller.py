@@ -6,6 +6,7 @@ from typing import Optional
 from inspection_system.app.anomaly_detection_utils import AnomalyDetector
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.frame_acquisition import capture_to_temp, cleanup_temp_image
+from inspection_system.app.image_quality import classify_invalid_capture
 from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
@@ -24,8 +25,10 @@ from inspection_system.app.reference_service import list_runtime_reference_candi
 from inspection_system.app.scoring_utils import evaluate_metrics, normalize_inspection_mode, score_sample
 from inspection_system.app.section_mask_utils import compute_section_masks
 from inspection_system.app.inspection_runtime_context import build_inspection_runtime_context
+from inspection_system.app.runtime_inspection_result import RuntimeInspectionResult
 from inspection_system.app.training_labels import resolve_learning_class
 from inspection_system.app.camera_interface import import_cv2_and_numpy, get_active_runtime_paths
+from inspection_system.app.result_status import INVALID_CAPTURE
 
 
 COMMISSIONING_DEFAULTS = {
@@ -748,6 +751,19 @@ def print_inspection_result(passed: bool, details: dict) -> None:
             print(f"Debug {key}: {path}")
 
 
+def _print_runtime_inspection_result(result: RuntimeInspectionResult) -> None:
+    if result.evidence:
+        print_inspection_result(result.passed, result.evidence)
+        return
+
+    if result.status == INVALID_CAPTURE and result.reason:
+        print(f"Invalid capture: {result.reason}")
+        return
+
+    if result.reason:
+        print(result.reason)
+
+
 def run_capture_only(config: dict) -> int:
     result_code, image_path, stderr_text = capture_to_temp(config)
     if result_code != 0:
@@ -782,31 +798,55 @@ def run_capture_and_inspect(config: dict, indicator) -> int:
         for warning in get_inspection_runtime_warnings(config, runtime_context.anomaly_detector, runtime_context.active_paths):
             print(f"Warning: {warning}")
         if not runtime_context.reference_candidates:
-            print("No active runtime references are available. Capture a golden reference first.")
+            runtime_result = RuntimeInspectionResult.from_config_error(
+                image_path,
+                "No active runtime references are available. Capture a golden reference first.",
+            )
+            _print_runtime_inspection_result(runtime_result)
             indicator.pulse_fail()
-            return 1
-        passed, details = inspect_against_references(
+            return runtime_result.exit_code
+        invalid_reason = classify_invalid_capture(
             config,
             image_path,
-            runtime_context.reference_candidates,
-            make_binary_mask,
-            align_sample_mask,
-            build_reference_regions,
-            compute_section_masks,
-            score_sample,
-            evaluate_metrics,
-            save_debug_outputs,
-            import_cv2_and_numpy,
-            dilate_mask,
-            erode_mask,
-            anomaly_detector=runtime_context.anomaly_detector,
+            active_paths=runtime_context.active_paths,
+            reference_candidates=runtime_context.reference_candidates,
         )
-        print_inspection_result(passed, details)
-        if passed:
+        if invalid_reason is not None:
+            runtime_result = RuntimeInspectionResult.from_invalid_capture(image_path, invalid_reason)
+            _print_runtime_inspection_result(runtime_result)
+            indicator.pulse_fail()
+            return runtime_result.exit_code
+        try:
+            passed, details = inspect_against_references(
+                config,
+                image_path,
+                runtime_context.reference_candidates,
+                make_binary_mask,
+                align_sample_mask,
+                build_reference_regions,
+                compute_section_masks,
+                score_sample,
+                evaluate_metrics,
+                save_debug_outputs,
+                import_cv2_and_numpy,
+                dilate_mask,
+                erode_mask,
+                anomaly_detector=runtime_context.anomaly_detector,
+            )
+            runtime_result = RuntimeInspectionResult.from_inspection(image_path, passed, details)
+        except FileNotFoundError as exc:
+            runtime_result = RuntimeInspectionResult.from_config_error(image_path, str(exc))
+        except ValueError as exc:
+            runtime_result = RuntimeInspectionResult.from_invalid_capture(image_path, str(exc))
+        except Exception as exc:
+            runtime_result = RuntimeInspectionResult.from_config_error(image_path, str(exc))
+
+        _print_runtime_inspection_result(runtime_result)
+        if runtime_result.exit_code == 0:
             indicator.pulse_pass()
-            return 0
+            return runtime_result.exit_code
 
         indicator.pulse_fail()
-        return 1
+        return runtime_result.exit_code
     finally:
         cleanup_temp_image()

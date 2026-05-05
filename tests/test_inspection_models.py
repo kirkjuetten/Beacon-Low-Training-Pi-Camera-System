@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from inspection_system.app.inspection_models import GateDecision, InspectionOutcome, MeasurementBundle, RegistrationAssessment
+from inspection_system.app.inspection_models import (
+    OUTCOME_KIND_CONFIG_ERROR,
+    OUTCOME_KIND_INVALID_CAPTURE,
+    OUTCOME_KIND_REGISTRATION_FAILURE,
+    GateDecision,
+    InspectionOutcome,
+    LaneResult,
+    MeasurementBundle,
+    RegistrationAssessment,
+    infer_outcome_kind,
+)
 
 
 class _RegistrationStub:
@@ -69,7 +79,55 @@ def test_inspection_outcome_round_trips_legacy_details() -> None:
 
     legacy = outcome.to_legacy_details()
 
+    assert outcome.outcome_kind == "pass"
+    assert legacy["outcome_kind"] == "pass"
     assert legacy["registration"]["runtime_mode"] == "anchor_pair"
     assert legacy["registration"]["scoring_guard_reason"] == "guard"
     assert legacy["feature_measurements"][0]["feature_key"] == "f1"
     assert legacy["feature_position_summary"]["feature_key"] == "f1"
+
+
+def test_infer_outcome_kind_recognizes_failure_stages() -> None:
+    assert infer_outcome_kind(passed=False, details={"failure_stage": "registration"}) == OUTCOME_KIND_REGISTRATION_FAILURE
+    assert infer_outcome_kind(passed=False, details={"failure_stage": "invalid_capture"}) == OUTCOME_KIND_INVALID_CAPTURE
+    assert infer_outcome_kind(passed=False, details={"failure_stage": "config"}) == OUTCOME_KIND_CONFIG_ERROR
+    assert infer_outcome_kind(passed=False, details={"failure_stage": "inspection"}) == "inspection_failure"
+
+
+def test_lane_result_round_trips_legacy_dict() -> None:
+    lane_result = LaneResult.from_legacy(
+        {
+            "lane_id": "geometry",
+            "lane_type": "measurement",
+            "authoritative": True,
+            "passed": False,
+            "inspection_cfg": {"lane_tag": "geometry"},
+            "measurement_result": {"mean_edge_distance_px": 0.4},
+            "threshold_summary": {"required_coverage": 0.9},
+            "feature_measurements": [{"feature_key": "f1"}],
+            "feature_position_summary": {"feature_key": "f1"},
+            "edge_measurement_frame": "datum",
+            "section_measurement_frame": "datum",
+            "inspection_failure_cause": "feature_position",
+        }
+    )
+
+    assert lane_result.lane_id == "geometry"
+    assert lane_result.feature_position_summary == {"feature_key": "f1"}
+    assert lane_result.to_legacy_dict()["inspection_failure_cause"] == "feature_position"
+
+
+def test_lane_result_with_failure_cause_returns_updated_copy() -> None:
+    lane_result = LaneResult.from_legacy(
+        {
+            "lane_id": "print",
+            "lane_type": "measurement",
+            "authoritative": False,
+            "passed": True,
+        }
+    )
+
+    updated = lane_result.with_inspection_failure_cause("coverage")
+
+    assert lane_result.inspection_failure_cause is None
+    assert updated.inspection_failure_cause == "coverage"

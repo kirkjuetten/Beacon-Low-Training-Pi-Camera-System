@@ -290,6 +290,22 @@ def test_modbus_bus_cleanup_skips_coil_writes_in_relay_mode(monkeypatch):
     assert instances[0].write_coil.call_count == 0
 
 
+def test_modbus_bus_io_module_target_noops_when_pass_channel_unassigned(monkeypatch):
+    instances = _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
+    bus = ModbusIndicatorBus(
+        port="/dev/ttyUSB0",
+        indicator_target="io_module",
+        pass_channel=None,
+        fail_channel=1,
+    )
+
+    with mock.patch("inspection_system.app.io.indicator_bus.time.sleep") as sleep_mock:
+        bus.pulse_pass()
+
+    assert instances[0].write_coil.call_count == 0
+    sleep_mock.assert_not_called()
+
+
 def test_build_indicator_bus_reads_relay_routing_and_per_pulse_durations(monkeypatch):
     _install_fake_pymodbus(monkeypatch, write_coil_impl=lambda *a, **kw: _ok_response())
     config = {

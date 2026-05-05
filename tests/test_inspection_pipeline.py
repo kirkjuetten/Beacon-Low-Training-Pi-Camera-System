@@ -118,6 +118,7 @@ def test_inspect_against_reference_returns_expected_details() -> None:
             )
 
     assert passed is True
+    assert details["outcome_kind"] == "pass"
     assert details["roi"] == {"x": 1, "y": 2, "width": 3, "height": 4}
     assert details["best_angle_deg"] == 1.25
     assert details["best_shift_x"] == 2
@@ -1277,6 +1278,7 @@ def test_inspect_against_reference_rejects_when_registration_quality_gate_fails(
         )
 
     assert passed is False
+    assert details['outcome_kind'] == 'registration_failure'
     assert details['registration']['status'] == 'quality_gate_failed'
     assert details['registration']['rejection_reason'] is not None
     assert details['registration']['quality_gate_failures'][0]['gate_key'] == 'min_confidence'

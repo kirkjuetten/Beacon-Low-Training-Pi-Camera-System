@@ -15,6 +15,7 @@ from inspection_system.app.gates.feature_gates import evaluate_feature_gates
 from inspection_system.app.inspection_models import (
     GateDecision,
     InspectionOutcome,
+    LaneResult,
     MeasurementBundle,
     RegistrationAssessment,
 )
@@ -53,10 +54,10 @@ class _ReferenceAssets:
 
 @dataclass
 class _LaneProgramResult:
-    lane_results: list[dict]
+    lane_results: list[LaneResult]
     lane_aggregation: dict
-    primary_lane_result: dict
-    active_lane_result: dict
+    primary_lane_result: LaneResult
+    active_lane_result: LaneResult
     measurement_result: dict
 
 
@@ -305,27 +306,27 @@ def _build_reference_candidate_summary(details: dict, passed: bool, rank: tuple[
     }
 
 
-def _find_lane_result(lane_results: list[dict], lane_id: str | None) -> dict:
+def _find_lane_result(lane_results: list[LaneResult], lane_id: str | None) -> LaneResult:
     if lane_id is not None:
         for lane_result in lane_results:
-            if str(lane_result.get("lane_id")) == str(lane_id):
+            if str(lane_result.lane_id) == str(lane_id):
                 return lane_result
     return lane_results[0]
 
 
-def _serialize_lane_result(lane_result: dict) -> dict:
-    measurement_result = lane_result.get("measurement_result", {})
+def _serialize_lane_result(lane_result: LaneResult) -> dict:
+    measurement_result = lane_result.measurement_result
     return {
-        "lane_id": lane_result.get("lane_id"),
-        "lane_type": lane_result.get("lane_type"),
-        "authoritative": bool(lane_result.get("authoritative", False)),
-        "passed": bool(lane_result.get("passed", False)),
-        "inspection_failure_cause": lane_result.get("inspection_failure_cause"),
-        "threshold_summary": deepcopy(lane_result.get("threshold_summary", {})),
-        "feature_measurements": deepcopy(lane_result.get("feature_measurements", [])),
-        "feature_position_summary": deepcopy(lane_result.get("feature_position_summary")),
-        "edge_measurement_frame": lane_result.get("edge_measurement_frame"),
-        "section_measurement_frame": lane_result.get("section_measurement_frame"),
+        "lane_id": lane_result.lane_id,
+        "lane_type": lane_result.lane_type,
+        "authoritative": lane_result.authoritative,
+        "passed": lane_result.passed,
+        "inspection_failure_cause": lane_result.inspection_failure_cause,
+        "threshold_summary": deepcopy(lane_result.threshold_summary),
+        "feature_measurements": deepcopy(lane_result.feature_measurements),
+        "feature_position_summary": deepcopy(lane_result.feature_position_summary),
+        "edge_measurement_frame": lane_result.edge_measurement_frame,
+        "section_measurement_frame": lane_result.section_measurement_frame,
         "mean_edge_distance_px": measurement_result.get("mean_edge_distance_px"),
         "worst_section_edge_distance_px": measurement_result.get("worst_section_edge_distance_px"),
         "worst_section_width_delta_ratio": measurement_result.get("worst_section_width_delta_ratio"),
@@ -804,7 +805,7 @@ def _execute_measurement_program(
         np,
     )
 
-    lane_results: list[dict] = []
+    lane_results: list[LaneResult] = []
     for lane in inspection_program.lanes:
         lane_result = execute_inspection_lane(
             lane,
@@ -826,10 +827,12 @@ def _execute_measurement_program(
                 baseline_measurements=baseline_measurements,
             ),
         )
-        lane_result["inspection_failure_cause"] = _resolve_inspection_failure_cause(
-            False,
-            lane_result["threshold_summary"],
-            lane_result["feature_position_summary"],
+        lane_result = lane_result.with_inspection_failure_cause(
+            _resolve_inspection_failure_cause(
+                False,
+                lane_result.threshold_summary,
+                lane_result.feature_position_summary,
+            )
         )
         lane_results.append(lane_result)
 
@@ -841,7 +844,7 @@ def _execute_measurement_program(
         lane_aggregation=lane_aggregation,
         primary_lane_result=primary_lane_result,
         active_lane_result=active_lane_result,
-        measurement_result=active_lane_result["measurement_result"],
+        measurement_result=active_lane_result.measurement_result,
     )
 
 
@@ -1027,7 +1030,7 @@ def inspect_against_reference(
             coarse_primary_lane_result = coarse_lane_program_result.primary_lane_result
             coarse_measurement_result = coarse_lane_program_result.measurement_result
             if _should_prefer_coarse_moments_measurement(
-                primary_lane_result["measurement_result"],
+                primary_lane_result.measurement_result,
                 coarse_measurement_result,
                 registration_result.transform,
                 coarse_transform_summary,

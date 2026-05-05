@@ -146,8 +146,8 @@ class ModbusIndicatorBus:
     stopbits: int = 1
     bytesize: int = 8
     slave_id: int = 1
-    pass_channel: int = 0
-    fail_channel: int = 1
+    pass_channel: Optional[int] = 0
+    fail_channel: Optional[int] = 1
     pulse_ms: int = 750
     pass_pulse_ms: Optional[int] = None
     fail_pulse_ms: Optional[int] = None
@@ -195,8 +195,9 @@ class ModbusIndicatorBus:
             # Only the IO-module path sets coils that need explicit clearing.
             # Relay flash-on auto-clears, so nothing to do for that path.
             if self.indicator_target == "io_module":
-                self._write_coil(self.pass_channel, False)
-                self._write_coil(self.fail_channel, False)
+                for channel in {self.pass_channel, self.fail_channel}:
+                    if channel is not None:
+                        self._write_coil(channel, False)
         finally:
             close = getattr(self._client, "close", None)
             if callable(close):
@@ -235,9 +236,12 @@ class ModbusIndicatorBus:
             self._pulse_io_module(channel=channel, ms=ms)
 
     def _pulse_io_module(self, *, channel: int, ms: int) -> None:
+        if channel is None:
+            return
         # Clear both indicator channels first so we always end up in a known state.
-        self._write_coil(self.pass_channel, False)
-        self._write_coil(self.fail_channel, False)
+        for existing_channel in {self.pass_channel, self.fail_channel}:
+            if existing_channel is not None:
+                self._write_coil(existing_channel, False)
         if not self._write_coil(channel, True):
             return
         time.sleep(ms / 1000.0)
@@ -324,12 +328,20 @@ def build_indicator_bus(config: dict) -> IndicatorBus:
     if mode == "modbus":
         modbus_cfg = io_cfg.get("modbus") or {}
         relay_cfg = io_cfg.get("relay") or {}
+
+        def _optional_channel(value, default=None):
+            if value is None:
+                return default
+            if isinstance(value, str) and value.strip().lower() in {"", "off", "none"}:
+                return None
+            return int(value)
+
         relay = None
         if relay_cfg:
             relay = _ModbusRelayMap(
                 slave_id=int(relay_cfg.get("slave_id", 2)),
-                pass_channel=relay_cfg.get("pass_channel"),
-                fail_channel=relay_cfg.get("fail_channel"),
+                pass_channel=_optional_channel(relay_cfg.get("pass_channel")),
+                fail_channel=_optional_channel(relay_cfg.get("fail_channel")),
             )
         # Per-pulse durations. None means "fall back to io.pulse_ms".
         pass_pulse_ms_raw = io_cfg.get("pass_pulse_ms")
@@ -341,8 +353,8 @@ def build_indicator_bus(config: dict) -> IndicatorBus:
             stopbits=int(modbus_cfg.get("stopbits", 1)),
             bytesize=int(modbus_cfg.get("bytesize", 8)),
             slave_id=int(modbus_cfg.get("slave_id", 1)),
-            pass_channel=int(modbus_cfg.get("pass_channel", 0)),
-            fail_channel=int(modbus_cfg.get("fail_channel", 1)),
+            pass_channel=_optional_channel(modbus_cfg.get("pass_channel"), 0),
+            fail_channel=_optional_channel(modbus_cfg.get("fail_channel"), 1),
             pulse_ms=int(io_cfg.get("pulse_ms", 750)),
             pass_pulse_ms=int(pass_pulse_ms_raw) if pass_pulse_ms_raw is not None else None,
             fail_pulse_ms=int(fail_pulse_ms_raw) if fail_pulse_ms_raw is not None else None,

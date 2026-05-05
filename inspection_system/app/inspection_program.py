@@ -4,6 +4,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 
+def _lane_value(lane_result, key: str, default=None):
+    if isinstance(lane_result, dict):
+        return lane_result.get(key, default)
+    return getattr(lane_result, key, default)
+
+
 @dataclass(frozen=True)
 class InspectionLaneDefinition:
     lane_id: str
@@ -111,26 +117,28 @@ def aggregate_lane_results(program: InspectionProgramDefinition, lane_results: l
 
     primary_lane = get_primary_lane(program)
     primary_lane_id = primary_lane.lane_id
-    primary_result = next((result for result in lane_results if result.get("lane_id") == primary_lane_id), lane_results[0])
+    primary_result = next((result for result in lane_results if _lane_value(result, "lane_id") == primary_lane_id), lane_results[0])
 
-    authoritative_results = [result for result in lane_results if bool(result.get("authoritative", False))]
+    authoritative_results = [result for result in lane_results if bool(_lane_value(result, "authoritative", False))]
     if not authoritative_results:
         authoritative_results = list(lane_results)
 
-    failed_authoritative_results = [result for result in authoritative_results if not bool(result.get("passed", False))]
+    failed_authoritative_results = [result for result in authoritative_results if not bool(_lane_value(result, "passed", False))]
     failed_advisory_results = [
-        result for result in lane_results if not bool(result.get("authoritative", False)) and not bool(result.get("passed", False))
+        result
+        for result in lane_results
+        if not bool(_lane_value(result, "authoritative", False)) and not bool(_lane_value(result, "passed", False))
     ]
 
     active_result = failed_authoritative_results[0] if failed_authoritative_results else primary_result
-    failed_lane_ids = [str(result.get("lane_id")) for result in lane_results if not bool(result.get("passed", False))]
-    failed_authoritative_lane_ids = [str(result.get("lane_id")) for result in failed_authoritative_results]
-    failed_advisory_lane_ids = [str(result.get("lane_id")) for result in failed_advisory_results]
+    failed_lane_ids = [str(_lane_value(result, "lane_id")) for result in lane_results if not bool(_lane_value(result, "passed", False))]
+    failed_authoritative_lane_ids = [str(_lane_value(result, "lane_id")) for result in failed_authoritative_results]
+    failed_advisory_lane_ids = [str(_lane_value(result, "lane_id")) for result in failed_advisory_results]
 
     return {
         "passed": len(failed_authoritative_results) == 0,
         "primary_lane_id": primary_lane_id,
-        "active_lane_id": str(active_result.get("lane_id")),
+        "active_lane_id": str(_lane_value(active_result, "lane_id")),
         "failed_lane_ids": failed_lane_ids,
         "failed_authoritative_lane_ids": failed_authoritative_lane_ids,
         "failed_advisory_lane_ids": failed_advisory_lane_ids,

@@ -15,9 +15,12 @@ from inspection_system.app.camera_interface import (
     load_config,
     import_cv2_and_numpy,
 )
+from inspection_system.app.image_quality import classify_invalid_capture as classify_invalid_capture_reason
+from inspection_system.app.inspection_models import infer_outcome_kind
 from inspection_system.app.inspection_pipeline import inspect_against_references
 from inspection_system.app.reference_service import list_runtime_reference_candidates, save_debug_outputs
 from inspection_system.app.runtime_controller import load_anomaly_detector
+from inspection_system.app.runtime_inspection_result import RuntimeInspectionResult, resolve_runtime_status
 from inspection_system.app.alignment_utils import align_sample_mask
 from inspection_system.app.morphology_utils import dilate_mask, erode_mask
 from inspection_system.app.preprocessing_utils import make_binary_mask
@@ -169,12 +172,7 @@ def _serialize_lane_results(lane_results: list[dict] | None) -> list[dict]:
 
 
 def _resolve_result_status(passed: bool, details: dict) -> str:
-    registration = details.get("registration", {}) if isinstance(details.get("registration"), dict) else {}
-    if passed:
-        return PASS
-    if registration.get("rejection_reason"):
-        return REGISTRATION_FAILED
-    return FAIL
+    return resolve_runtime_status(infer_outcome_kind(passed=passed, details=details), passed=passed)
 
 
 def _resolve_replay_failure_cause(passed: bool, details: dict) -> str | None:
@@ -195,45 +193,95 @@ def _resolve_replay_failure_cause(passed: bool, details: dict) -> str | None:
     return None
 
 
+def _serialize_replay_result(runtime_result: RuntimeInspectionResult) -> dict:
+    if not runtime_result.evidence:
+        return runtime_result.to_legacy_dict()
+
+    details = runtime_result.evidence
+    return runtime_result.to_legacy_dict(
+        evidence_serializer=lambda _: {
+            "inspection_program": _serialize_inspection_program(details.get("inspection_program")),
+            "lane_results": _serialize_lane_results(details.get("lane_results")),
+            "failed_lane_ids": list(details.get("failed_lane_ids", [])),
+            "failed_authoritative_lane_ids": list(details.get("failed_authoritative_lane_ids", [])),
+            "failed_advisory_lane_ids": list(details.get("failed_advisory_lane_ids", [])),
+            "reference_id": details.get("reference_id"),
+            "reference_label": details.get("reference_label"),
+            "reference_role": details.get("reference_role"),
+            "reference_strategy": details.get("reference_strategy"),
+            "reference_candidate_count": int(details.get("reference_candidate_count", 0)),
+            "evaluated_reference_ids": list(details.get("evaluated_reference_ids", [])),
+            "reference_candidate_errors": list(details.get("reference_candidate_errors", [])),
+            "reference_candidate_summaries": _serialize_reference_candidate_summaries(
+                details.get("reference_candidate_summaries")
+            ),
+            "required_coverage": round(float(details.get("required_coverage", 0.0)), 6),
+            "outside_allowed_ratio": round(float(details.get("outside_allowed_ratio", 0.0)), 6),
+            "min_section_coverage": round(float(details.get("min_section_coverage", 0.0)), 6),
+            "min_required_coverage": _round_optional_float(details.get("min_required_coverage")),
+            "max_outside_allowed_ratio": _round_optional_float(details.get("max_outside_allowed_ratio")),
+            "min_section_coverage_limit": _round_optional_float(details.get("min_section_coverage_limit")),
+            "effective_min_required_coverage": _round_optional_float(details.get("effective_min_required_coverage")),
+            "effective_max_outside_allowed_ratio": _round_optional_float(details.get("effective_max_outside_allowed_ratio")),
+            "effective_min_section_coverage": _round_optional_float(details.get("effective_min_section_coverage")),
+            "sample_white_pixels": int(details.get("sample_white_pixels", 0)),
+            "best_angle_deg": round(float(details.get("best_angle_deg", 0.0)), 6),
+            "best_shift_x": int(details.get("best_shift_x", 0)),
+            "best_shift_y": int(details.get("best_shift_y", 0)),
+            "registration_status": details.get("registration", {}).get("status"),
+            "registration_runtime_mode": details.get("registration", {}).get("runtime_mode"),
+            "registration_applied_strategy": details.get("registration", {}).get("applied_strategy"),
+            "registration_datum_frame": details.get("registration", {}).get("datum_frame"),
+            "registration_rejected": bool(details.get("registration", {}).get("rejection_reason")),
+            "registration_rejection_reason": details.get("registration", {}).get("rejection_reason"),
+            "registration_quality_gate_failures": list(details.get("registration", {}).get("quality_gate_failures", [])),
+            "failure_stage": details.get("failure_stage"),
+            "inspection_failure_cause": _resolve_replay_failure_cause(runtime_result.passed, details),
+            "edge_measurement_frame": details.get("edge_measurement_frame"),
+            "section_measurement_frame": details.get("section_measurement_frame"),
+            "feature_position_summary": _serialize_feature_position_summary(details.get("feature_position_summary")),
+            "mean_edge_distance_px": _round_optional_float(details.get("mean_edge_distance_px")),
+            "max_mean_edge_distance_px": _round_optional_float(details.get("max_mean_edge_distance_px")),
+            "effective_max_mean_edge_distance_px": _round_optional_float(details.get("effective_max_mean_edge_distance_px")),
+            "worst_section_edge_distance_px": _round_optional_float(details.get("worst_section_edge_distance_px")),
+            "max_section_edge_distance_px": _round_optional_float(details.get("max_section_edge_distance_px")),
+            "effective_max_section_edge_distance_px": _round_optional_float(details.get("effective_max_section_edge_distance_px")),
+            "worst_section_width_delta_ratio": _round_optional_float(details.get("worst_section_width_delta_ratio")),
+            "max_section_width_delta_ratio": _round_optional_float(details.get("max_section_width_delta_ratio")),
+            "effective_max_section_width_delta_ratio": _round_optional_float(details.get("effective_max_section_width_delta_ratio")),
+            "worst_section_center_offset_px": _round_optional_float(details.get("worst_section_center_offset_px")),
+            "max_section_center_offset_px": _round_optional_float(details.get("max_section_center_offset_px")),
+            "effective_max_section_center_offset_px": _round_optional_float(details.get("effective_max_section_center_offset_px")),
+            "ssim": _round_optional_float(details.get("ssim")),
+            "min_ssim": _round_optional_float(details.get("min_ssim")),
+            "effective_min_ssim": _round_optional_float(details.get("effective_min_ssim")),
+            "mse": _round_optional_float(details.get("mse")),
+            "max_mse": _round_optional_float(details.get("max_mse")),
+            "effective_max_mse": _round_optional_float(details.get("effective_max_mse")),
+            "anomaly_score": _round_optional_float(details.get("anomaly_score")),
+            "min_anomaly_score": _round_optional_float(details.get("min_anomaly_score")),
+            "effective_min_anomaly_score": _round_optional_float(details.get("effective_min_anomaly_score")),
+            "histogram_similarity": _round_optional_float(details.get("histogram_similarity")),
+            "inspection_mode": details.get("inspection_mode", "mask_only"),
+            "edge_distance_gate_active": bool(details.get("edge_distance_gate_active", False)),
+            "section_edge_gate_active": bool(details.get("section_edge_gate_active", False)),
+            "section_width_gate_active": bool(details.get("section_width_gate_active", False)),
+            "section_center_gate_active": bool(details.get("section_center_gate_active", False)),
+            "ssim_gate_active": bool(details.get("ssim_gate_active", False)),
+            "mse_gate_active": bool(details.get("mse_gate_active", False)),
+            "anomaly_gate_active": bool(details.get("anomaly_gate_active", False)),
+        }
+    )
+
+
 def classify_invalid_capture(config: dict, image_path: Path, active_paths: dict | None = None) -> str | None:
-    try:
-        import cv2  # type: ignore
-    except ImportError:
-        return "OpenCV is not installed."
-
-    if not image_path.exists():
-        return f"Image does not exist: {image_path}"
-
-    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if image is None:
-        return f"Image could not be read: {image_path}"
-
-    roi_cfg = config.get("inspection", {}).get("roi", {})
-    x = int(roi_cfg.get("x", 0))
-    y = int(roi_cfg.get("y", 0))
-    w = int(roi_cfg.get("width", 0))
-    h = int(roi_cfg.get("height", 0))
-
-    if w > 0 and h > 0:
-        if x < 0 or y < 0 or x + w > image.shape[1] or y + h > image.shape[0]:
-            return "Configured ROI is outside image bounds."
-
-    runtime_paths = active_paths or get_active_runtime_paths()
-    if not list_runtime_reference_candidates(config, runtime_paths):
-        reference_mask = _get_reference_mask_path()
-        return f"Reference mask is missing: {reference_mask}"
-
-    return None
+    return classify_invalid_capture_reason(config, image_path, active_paths=active_paths)
 
 
 def inspect_file(config: dict, image_path: Path, active_paths: dict | None = None) -> dict:
     invalid_reason = classify_invalid_capture(config, image_path, active_paths=active_paths)
     if invalid_reason is not None:
-        return {
-            "image": str(image_path),
-            "status": INVALID_CAPTURE,
-            "reason": invalid_reason,
-        }
+        return _serialize_replay_result(RuntimeInspectionResult.from_invalid_capture(image_path, invalid_reason))
 
     runtime_paths = active_paths or get_active_runtime_paths()
     reference_candidates = list_runtime_reference_candidates(config, runtime_paths)
@@ -257,98 +305,13 @@ def inspect_file(config: dict, image_path: Path, active_paths: dict | None = Non
             anomaly_detector=anomaly_detector,
         )
     except FileNotFoundError as exc:
-        return {
-            "image": str(image_path),
-            "status": CONFIG_ERROR,
-            "reason": str(exc),
-        }
+        return _serialize_replay_result(RuntimeInspectionResult.from_config_error(image_path, str(exc)))
     except ValueError as exc:
-        return {
-            "image": str(image_path),
-            "status": INVALID_CAPTURE,
-            "reason": str(exc),
-        }
+        return _serialize_replay_result(RuntimeInspectionResult.from_invalid_capture(image_path, str(exc)))
     except Exception as exc:
-        return {
-            "image": str(image_path),
-            "status": CONFIG_ERROR,
-            "reason": str(exc),
-        }
+        return _serialize_replay_result(RuntimeInspectionResult.from_config_error(image_path, str(exc)))
 
-    return {
-        "image": str(image_path),
-        "status": _resolve_result_status(passed, details),
-        "inspection_program": _serialize_inspection_program(details.get("inspection_program")),
-        "lane_results": _serialize_lane_results(details.get("lane_results")),
-        "failed_lane_ids": list(details.get("failed_lane_ids", [])),
-        "failed_authoritative_lane_ids": list(details.get("failed_authoritative_lane_ids", [])),
-        "failed_advisory_lane_ids": list(details.get("failed_advisory_lane_ids", [])),
-        "reference_id": details.get("reference_id"),
-        "reference_label": details.get("reference_label"),
-        "reference_role": details.get("reference_role"),
-        "reference_strategy": details.get("reference_strategy"),
-        "reference_candidate_count": int(details.get("reference_candidate_count", 0)),
-        "evaluated_reference_ids": list(details.get("evaluated_reference_ids", [])),
-        "reference_candidate_errors": list(details.get("reference_candidate_errors", [])),
-        "reference_candidate_summaries": _serialize_reference_candidate_summaries(
-            details.get("reference_candidate_summaries")
-        ),
-        "required_coverage": round(float(details.get("required_coverage", 0.0)), 6),
-        "outside_allowed_ratio": round(float(details.get("outside_allowed_ratio", 0.0)), 6),
-        "min_section_coverage": round(float(details.get("min_section_coverage", 0.0)), 6),
-        "min_required_coverage": _round_optional_float(details.get("min_required_coverage")),
-        "max_outside_allowed_ratio": _round_optional_float(details.get("max_outside_allowed_ratio")),
-        "min_section_coverage_limit": _round_optional_float(details.get("min_section_coverage_limit")),
-        "effective_min_required_coverage": _round_optional_float(details.get("effective_min_required_coverage")),
-        "effective_max_outside_allowed_ratio": _round_optional_float(details.get("effective_max_outside_allowed_ratio")),
-        "effective_min_section_coverage": _round_optional_float(details.get("effective_min_section_coverage")),
-        "sample_white_pixels": int(details.get("sample_white_pixels", 0)),
-        "best_angle_deg": round(float(details.get("best_angle_deg", 0.0)), 6),
-        "best_shift_x": int(details.get("best_shift_x", 0)),
-        "best_shift_y": int(details.get("best_shift_y", 0)),
-        "registration_status": details.get("registration", {}).get("status"),
-        "registration_runtime_mode": details.get("registration", {}).get("runtime_mode"),
-        "registration_applied_strategy": details.get("registration", {}).get("applied_strategy"),
-        "registration_datum_frame": details.get("registration", {}).get("datum_frame"),
-        "registration_rejected": bool(details.get("registration", {}).get("rejection_reason")),
-        "registration_rejection_reason": details.get("registration", {}).get("rejection_reason"),
-        "registration_quality_gate_failures": list(details.get("registration", {}).get("quality_gate_failures", [])),
-        "failure_stage": details.get("failure_stage"),
-        "inspection_failure_cause": _resolve_replay_failure_cause(passed, details),
-        "edge_measurement_frame": details.get("edge_measurement_frame"),
-        "section_measurement_frame": details.get("section_measurement_frame"),
-        "feature_position_summary": _serialize_feature_position_summary(details.get("feature_position_summary")),
-        "mean_edge_distance_px": _round_optional_float(details.get("mean_edge_distance_px")),
-        "max_mean_edge_distance_px": _round_optional_float(details.get("max_mean_edge_distance_px")),
-        "effective_max_mean_edge_distance_px": _round_optional_float(details.get("effective_max_mean_edge_distance_px")),
-        "worst_section_edge_distance_px": _round_optional_float(details.get("worst_section_edge_distance_px")),
-        "max_section_edge_distance_px": _round_optional_float(details.get("max_section_edge_distance_px")),
-        "effective_max_section_edge_distance_px": _round_optional_float(details.get("effective_max_section_edge_distance_px")),
-        "worst_section_width_delta_ratio": _round_optional_float(details.get("worst_section_width_delta_ratio")),
-        "max_section_width_delta_ratio": _round_optional_float(details.get("max_section_width_delta_ratio")),
-        "effective_max_section_width_delta_ratio": _round_optional_float(details.get("effective_max_section_width_delta_ratio")),
-        "worst_section_center_offset_px": _round_optional_float(details.get("worst_section_center_offset_px")),
-        "max_section_center_offset_px": _round_optional_float(details.get("max_section_center_offset_px")),
-        "effective_max_section_center_offset_px": _round_optional_float(details.get("effective_max_section_center_offset_px")),
-        "ssim": _round_optional_float(details.get("ssim")),
-        "min_ssim": _round_optional_float(details.get("min_ssim")),
-        "effective_min_ssim": _round_optional_float(details.get("effective_min_ssim")),
-        "mse": _round_optional_float(details.get("mse")),
-        "max_mse": _round_optional_float(details.get("max_mse")),
-        "effective_max_mse": _round_optional_float(details.get("effective_max_mse")),
-        "anomaly_score": _round_optional_float(details.get("anomaly_score")),
-        "min_anomaly_score": _round_optional_float(details.get("min_anomaly_score")),
-        "effective_min_anomaly_score": _round_optional_float(details.get("effective_min_anomaly_score")),
-        "histogram_similarity": _round_optional_float(details.get("histogram_similarity")),
-        "inspection_mode": details.get("inspection_mode", config.get("inspection", {}).get("inspection_mode", "mask_only")),
-        "edge_distance_gate_active": bool(details.get("edge_distance_gate_active", False)),
-        "section_edge_gate_active": bool(details.get("section_edge_gate_active", False)),
-        "section_width_gate_active": bool(details.get("section_width_gate_active", False)),
-        "section_center_gate_active": bool(details.get("section_center_gate_active", False)),
-        "ssim_gate_active": bool(details.get("ssim_gate_active", False)),
-        "mse_gate_active": bool(details.get("mse_gate_active", False)),
-        "anomaly_gate_active": bool(details.get("anomaly_gate_active", False)),
-    }
+    return _serialize_replay_result(RuntimeInspectionResult.from_inspection(image_path, passed, details))
 
 
 def inspect_folder(config: dict, folder: Path) -> int:

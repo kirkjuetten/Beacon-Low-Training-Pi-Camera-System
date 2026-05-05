@@ -1,8 +1,24 @@
 # Functional Architecture Roadmap
 
-This document combines the near-term pilot-functional work with the longer-term architecture needed to support a broad family of molding and manufacturing inspections without repeatedly redesigning the system.
+This document defines the current architectural intent and the ongoing maturity work needed to support a broad family of molding and manufacturing inspections without repeatedly redesigning the system.
 
 It is intentionally centered on runtime function, not operator permissions or UI policy.
+
+For the high-level execution sequence that sits above the technical module plan in this document, see `docs/SYSTEM_MATURITY_ROADMAP.md`.
+
+## System intent
+
+This project is intended to be one reusable inspection system that supports multiple mold-specific or part-specific inspection programs inside a shared runtime, commissioning flow, and operator workflow.
+
+That is not a future-state marketing claim. It is the current direction of the system, with an inspection core that is still maturing away from the first-use implementation shape.
+
+The intended runtime philosophy is **low-training, recipe-driven visual exception detection**:
+
+- model acceptable appearance and known-good variation first
+- validate image quality and registration before judging the part
+- evaluate defect families through peer lanes rather than one universal score
+- use anomaly evidence as one signal, not the entire architecture
+- preserve `PASS`, `FAIL`, `REVIEW`, and `INVALID_CAPTURE` as meaningfully different states
 
 ## Scope
 
@@ -11,7 +27,7 @@ Current first-use situations:
 - light-pipe geometry
 - white pad print on black part
 
-Expected future scope:
+Current intended scope as maturity continues:
 
 - additional molded-feature geometry checks
 - print checks with different defect classes
@@ -42,7 +58,7 @@ The architectural work below is therefore aimed at:
 
 The current runtime is still shaped like one inspection path with more options being attached to it.
 
-That is enough for the immediate pilot, but it is not the right shape for a future where one part may need several focused inspections with different segmentation, measurements, and gates.
+That has been enough to support the immediate pilot and first-use deployments, but it is not the right shape for the intended system direction where one part may need several focused inspections with different segmentation, measurements, and gates.
 
 The architecture therefore needs to shift from:
 
@@ -57,18 +73,21 @@ to:
 
 ## Architectural Principles
 
-1. Shared acquisition and registration happen once per part.
+1. Shared acquisition, lighting application, image-quality validation, and registration happen before part-level judgment.
 2. Each inspection lane evaluates one focused concern.
 3. Segmentation, measurement, and gating are lane-specific.
 4. The orchestration layer coordinates; it does not own every rule.
 5. Results move between stages as typed contracts, not expanding dict blobs.
 6. New inspection scope should usually mean adding a lane or strategy, not rewriting the pipeline.
+7. The system should be useful with limited bad-part examples; good-family modeling and conservative review are first-class behaviors.
 
 ## Target Runtime Model
 
 ### Shared stages
 
 - acquisition
+- lighting / capture plan execution
+- image quality validation
 - common image prep
 - registration
 - shared frame bundle generation
@@ -87,6 +106,7 @@ Each lane receives the shared registered part context and runs:
 The system combines lane results into:
 
 - part pass/fail/review
+- invalid-capture or configuration-state rejection where appropriate
 - failed lane list
 - lane-level evidence for replay and debugging
 
@@ -133,6 +153,7 @@ The system should add an inspection-program configuration layer above loose conf
 
 An inspection program defines:
 
+- acquisition and lighting behavior
 - shared registration settings
 - enabled lanes
 - lane execution order
